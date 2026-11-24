@@ -2,7 +2,12 @@ import { Badge, Button, Input, Select, Spinner, Textarea } from '@tuffcode/ui';
 import { useMemo } from 'react';
 import { FormField } from './form-field';
 import { InlineAlert } from './inline-alert';
-import type { ProviderDraft, ProviderFieldErrors } from './provider-form';
+import {
+  updateModelLimit,
+  validateModelLimits,
+  type ProviderDraft,
+  type ProviderFieldErrors,
+} from './provider-form';
 import type { ProviderAuthMode, ProviderPreset } from './provider-presets';
 import type { Detection } from './provider-subscription';
 
@@ -48,6 +53,8 @@ export function ProviderDetailFields({
     }
     return options;
   }, [draft.model, draft.models]);
+
+  const modelLimitErrors = useMemo(() => validateModelLimits(draft.models), [draft.models]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -204,7 +211,101 @@ export function ProviderDetailFields({
             </div>
           </FormField>
 
-          {isFullForm && auth !== 'local' ? (
+          {draft.models.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-medium text-foreground">Model limits</span>
+                <span className="text-2xs text-muted-foreground">
+                  Context window and max output tokens.
+                </span>
+              </div>
+              <ul className="divide-y divide-border rounded-md border border-border">
+                {draft.models.map((model) => {
+                  const limitError = modelLimitErrors[model.id];
+                  return (
+                    <li
+                      key={model.id}
+                      className="grid gap-2 px-2.5 py-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_6.5rem] sm:items-start"
+                    >
+                      <span
+                        className="min-w-0 truncate font-mono text-2xs leading-6 text-muted-foreground"
+                        title={model.id}
+                      >
+                        {model.id}
+                      </span>
+                      <label className="flex min-w-0 flex-col gap-0.5">
+                        <span className="text-2xs text-muted-foreground">Context</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          step={1000}
+                          className="h-7 text-xs tabular-nums"
+                          value={model.contextWindow ?? ''}
+                          aria-label={`${model.id} context window`}
+                          aria-invalid={Boolean(limitError?.contextWindow)}
+                          onChange={(event) =>
+                            onUpdate(
+                              'models',
+                              updateModelLimit(
+                                draft.models,
+                                model.id,
+                                'contextWindow',
+                                event.target.value.trim() === ''
+                                  ? null
+                                  : Number(event.target.value),
+                              ),
+                            )
+                          }
+                        />
+                        {limitError?.contextWindow ? (
+                          <span role="alert" className="text-2xs text-error">
+                            {limitError.contextWindow}
+                          </span>
+                        ) : null}
+                      </label>
+                      <label className="flex min-w-0 flex-col gap-0.5">
+                        <span className="text-2xs text-muted-foreground">Max output</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          step={256}
+                          className="h-7 text-xs tabular-nums"
+                          value={model.maxOutputTokens ?? ''}
+                          aria-label={`${model.id} max output tokens`}
+                          aria-invalid={Boolean(limitError?.maxOutputTokens)}
+                          onChange={(event) =>
+                            onUpdate(
+                              'models',
+                              updateModelLimit(
+                                draft.models,
+                                model.id,
+                                'maxOutputTokens',
+                                event.target.value.trim() === ''
+                                  ? null
+                                  : Number(event.target.value),
+                              ),
+                            )
+                          }
+                        />
+                        {limitError?.maxOutputTokens ? (
+                          <span role="alert" className="text-2xs text-error">
+                            {limitError.maxOutputTokens}
+                          </span>
+                        ) : null}
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              {errors.models ? (
+                <p role="alert" className="text-xs leading-5 text-error">
+                  {errors.models}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {(isFullForm || draft.headers.trim() !== '') && auth !== 'local' ? (
             <FormField
               label="Headers"
               htmlFor="provider-headers"

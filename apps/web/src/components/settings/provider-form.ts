@@ -139,7 +139,12 @@ export function providerDraftFromPreset(preset: ProviderPreset): ProviderDraft {
     label: preset.label,
     baseUrl: preset.baseUrl ?? '',
     model: preset.defaultModel ?? preset.models[0]?.id ?? '',
-    models: [...preset.models],
+    models: preset.models.map((model) => ({
+      ...model,
+      contextWindow: model.contextWindow ?? preset.contextWindow ?? null,
+      maxOutputTokens: model.maxOutputTokens ?? preset.maxOutputTokens ?? null,
+    })),
+    headers: preset.headers ? headersToText(preset.headers) : '',
   };
 }
 
@@ -195,6 +200,56 @@ export function validateBaseUrl(value: string): string | undefined {
   return undefined;
 }
 
+export interface ModelLimitErrors {
+  contextWindow?: string;
+  maxOutputTokens?: string;
+}
+
+/**
+ * Validates the per-model token overrides the form edits. Empty values are
+ * cleared limits, not errors; a max output larger than the context window is.
+ */
+export function validateModelLimits(
+  models: readonly PresetModel[],
+): Record<string, ModelLimitErrors> {
+  const errors: Record<string, ModelLimitErrors> = {};
+
+  for (const model of models) {
+    const entry: ModelLimitErrors = {};
+    const window = model.contextWindow;
+    const output = model.maxOutputTokens;
+
+    if (window !== undefined && window !== null && (!Number.isInteger(window) || window <= 0)) {
+      entry.contextWindow = 'Context window must be a positive whole number.';
+    }
+    if (output !== undefined && output !== null && (!Number.isInteger(output) || output <= 0)) {
+      entry.maxOutputTokens = 'Max output must be a positive whole number.';
+    } else if (
+      output !== undefined &&
+      output !== null &&
+      typeof window === 'number' &&
+      window > 0 &&
+      output > window
+    ) {
+      entry.maxOutputTokens = 'Max output cannot exceed the context window.';
+    }
+
+    if (Object.keys(entry).length > 0) errors[model.id] = entry;
+  }
+
+  return errors;
+}
+
+/** Replaces one limit on one model row; `null` clears the override. */
+export function updateModelLimit(
+  models: readonly PresetModel[],
+  modelId: string,
+  key: 'contextWindow' | 'maxOutputTokens',
+  value: number | null,
+): PresetModel[] {
+  return models.map((model) => (model.id === modelId ? { ...model, [key]: value } : model));
+}
+
 export function validateProviderDraft(
   draft: ProviderDraft,
   options: ProviderValidationOptions = {},
@@ -243,21 +298,36 @@ export function validateProviderDraft(
     if (parsedHeaders.error) errors.headers = parsedHeaders.error;
   }
 
+  const firstModelError = Object.values(validateModelLimits(draft.models))[0];
+  if (firstModelError) {
+    errors.models = firstModelError.contextWindow ?? firstModelError.maxOutputTokens;
+  }
+
   return errors;
 }
 
-function modelSeeds(draft: ProviderDraft): Record<string, unknown>[] {
+function modelSeeds(draft: ProviderDraft, preset?: ProviderPreset): Record<string, unknown>[] {
   const entries = [...draft.models];
   const model = draft.model.trim();
   if (model && !entries.some((entry) => entry.id === model)) {
     entries.push({ id: model, label: model });
   }
-  return entries.map((entry) => ({
-    id: entry.id,
-    label: entry.label || entry.id,
-    contextWindow: null,
-    isDefault: entry.id === model,
-  }));
+  return entries.map((entry) => {
+    // An explicit null clears the limit; undefined falls back to the preset seed.
+    const contextWindow =
+      entry.contextWindow === null ? null : (entry.contextWindow ?? preset?.contextWindow ?? null);
+    const maxOutputTokens =
+      entry.maxOutputTokens === null
+        ? null
+        : (entry.maxOutputTokens ?? preset?.maxOutputTokens ?? null);
+    return {
+      id: entry.id,
+      label: entry.label || entry.id,
+      contextWindow,
+      ...(typeof maxOutputTokens === 'number' ? { maxOutputTokens } : {}),
+      isDefault: entry.id === model,
+    };
+  });
 }
 
 /**
@@ -288,7 +358,7 @@ export function buildProviderPayload(
     if (model) config.model = model;
     if (configDir) config.configDir = configDir;
     // Seed the preset list so the composer can offer models without extra fields.
-    const seeds = modelSeeds({ ...draft, model: model || preset?.defaultModel || '' });
+    const seeds = modelSeeds({ ...draft, model: model || preset?.defaultModel || '' }, preset);
     if (seeds.length > 0) config.models = seeds;
   } else if (auth === 'api-key' || auth === 'local') {
     config.baseUrl = baseUrl;
@@ -306,10 +376,10 @@ export function buildProviderPayload(
   }
 
   if (auth !== 'subscription' && auth !== 'cli') {
-    const seeds = modelSeeds(draft);
+    const seeds = modelSeeds(draft, preset);
     if (seeds.length > 0) config.models = seeds;
   } else if (auth === 'cli' && model) {
-    config.models = modelSeeds(draft);
+    config.models = modelSeeds(draft, preset);
   }
 
   const payload: ProviderPayload = {

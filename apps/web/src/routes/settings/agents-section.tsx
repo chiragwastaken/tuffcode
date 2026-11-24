@@ -2,6 +2,12 @@ import type { ProviderView, SubagentModelChoice } from '@tuffcode/contracts';
 import { Card, CardDescription, CardHeader, CardTitle, Input, Select } from '@tuffcode/ui';
 import type { FormEvent } from 'react';
 import {
+  CONTEXT_SETTING_KEYS,
+  MAX_OUTPUT_TOKENS_MAX,
+  MAX_OUTPUT_TOKENS_MIN,
+  maxOutputTokensError,
+} from '../../components/settings/context-limits';
+import {
   INHERIT_MODEL_VALUE,
   PARENT_PROVIDER_VALUE,
   SUBAGENT_CONCURRENCY_MAX,
@@ -35,6 +41,7 @@ const KEYS = [
   'shell',
   'subagentModels',
   'subagentConcurrency',
+  ...CONTEXT_SETTING_KEYS,
 ] as const;
 
 interface SubagentModelRowProps {
@@ -116,7 +123,8 @@ export function AgentsSection() {
   const enabledTools = draft?.enabledTools ?? [];
   const shellMessage = draft ? shellFieldError(draft.shell ?? '') : undefined;
   const toolsMessage = enabledTools.length === 0 ? 'Enable at least one tool.' : undefined;
-  const invalid = Boolean(shellMessage ?? toolsMessage);
+  const outputTokensMessage = maxOutputTokensError(draft?.maxOutputTokens ?? 8192);
+  const invalid = Boolean(shellMessage ?? toolsMessage ?? outputTokensMessage);
   const subagentModels = draft?.subagentModels;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -263,6 +271,97 @@ export function AgentsSection() {
               ))
             : null}
         </ul>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Context</CardTitle>
+          <CardDescription>
+            How much of the model's window the harness may fill before it warns or compacts.
+            Per-model overrides live on each provider in Providers.
+          </CardDescription>
+        </CardHeader>
+
+        <div className="divide-y divide-border border-t border-border">
+          <SettingsRow
+            label="Max output tokens"
+            htmlFor="agents-max-output-tokens"
+            description="Answer budget the harness sends when the model has no override of its own. 8192 is the default."
+            error={outputTokensMessage}
+          >
+            <Input
+              id="agents-max-output-tokens"
+              data-testid="settings-max-output-tokens"
+              type="number"
+              min={MAX_OUTPUT_TOKENS_MIN}
+              max={MAX_OUTPUT_TOKENS_MAX}
+              step={256}
+              className="w-32 tabular-nums"
+              value={draft?.maxOutputTokens ?? 8192}
+              onChange={(event) => update({ maxOutputTokens: Number(event.target.value) })}
+              aria-invalid={Boolean(outputTokensMessage)}
+              aria-describedby={outputTokensMessage ? 'agents-max-output-tokens-error' : undefined}
+            />
+          </SettingsRow>
+
+          <SettingsRow
+            label="Warning threshold"
+            htmlFor="agents-context-warning"
+            description="The composer meter turns amber at this share of the context window."
+          >
+            <SettingsSlider
+              id="agents-context-warning"
+              value={Math.round((draft?.contextWarningThreshold ?? 0.8) * 100)}
+              min={50}
+              max={95}
+              step={5}
+              unit="%"
+              onChange={(percent) => update({ contextWarningThreshold: percent / 100 })}
+            />
+          </SettingsRow>
+
+          <SettingsRow
+            label="Auto-compact"
+            htmlFor="agents-auto-compact"
+            description="Before a turn that would pass the threshold, summarize older harness history into one message. Persisted messages stay intact."
+          >
+            <label
+              htmlFor="agents-auto-compact"
+              className="flex h-9 items-center gap-2 text-sm text-foreground"
+            >
+              <input
+                id="agents-auto-compact"
+                data-testid="settings-auto-compact"
+                type="checkbox"
+                className="size-4 rounded-sm border border-input accent-primary"
+                checked={draft?.autoCompact ?? true}
+                onChange={(event) => update({ autoCompact: event.target.checked })}
+              />
+              <span>Compact automatically</span>
+            </label>
+          </SettingsRow>
+
+          <SettingsRow
+            label="Context meter"
+            htmlFor="agents-show-context-meter"
+            description="Show the percent-used chip beside the model picker in the composer."
+          >
+            <label
+              htmlFor="agents-show-context-meter"
+              className="flex h-9 items-center gap-2 text-sm text-foreground"
+            >
+              <input
+                id="agents-show-context-meter"
+                data-testid="settings-show-context-meter"
+                type="checkbox"
+                className="size-4 rounded-sm border border-input accent-primary"
+                checked={draft?.showContextMeter ?? true}
+                onChange={(event) => update({ showContextMeter: event.target.checked })}
+              />
+              <span>Show the meter</span>
+            </label>
+          </SettingsRow>
+        </div>
       </Card>
 
       <SaveBar dirty={dirty} saving={saving} invalid={invalid} error={error} onReset={reset} />

@@ -25,6 +25,10 @@ export type ProviderIconKey =
 export interface PresetModel {
   id: string;
   label: string;
+  /** Tokens the model can hold; seeded by the preset, overridable per model. */
+  contextWindow?: number | null;
+  /** Tokens the model may answer with; seeded by the preset, overridable per model. */
+  maxOutputTokens?: number | null;
 }
 
 export interface ProviderPreset {
@@ -47,6 +51,11 @@ export interface ProviderPreset {
   custom?: boolean;
   /** Council family for OpenAI-compatible providers. */
   family?: string;
+  /** Default token limits seeded into every model of this preset. */
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  /** Headers the endpoint requires, prefilled into the form's header field. */
+  headers?: Readonly<Record<string, string>>;
 }
 
 export interface ProviderGroupMeta {
@@ -94,6 +103,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'),
     defaultModel: 'claude-opus-4-5',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
+    contextWindow: 200_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'chatgpt',
@@ -106,6 +117,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('gpt-5-codex', 'gpt-5.1', 'gpt-5'),
     defaultModel: 'gpt-5-codex',
     docsUrl: 'https://developers.openai.com/codex/cli/',
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
   },
   {
     id: 'anthropic-api',
@@ -121,6 +134,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://docs.anthropic.com/en/api/getting-started',
     requiresSecret: true,
     family: 'anthropic',
+    contextWindow: 200_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'openai',
@@ -136,6 +151,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://platform.openai.com/docs/api-reference',
     requiresSecret: true,
     family: 'openai',
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
   },
   {
     id: 'openrouter',
@@ -156,6 +173,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://openrouter.ai/docs',
     requiresSecret: true,
     family: 'openrouter',
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'deepseek',
@@ -171,6 +190,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://api-docs.deepseek.com',
     requiresSecret: true,
     family: 'deepseek',
+    contextWindow: 64_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'kimi',
@@ -186,6 +207,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://platform.moonshot.ai/docs',
     requiresSecret: true,
     family: 'moonshot',
+    contextWindow: 256_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'groq',
@@ -201,6 +224,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://console.groq.com/docs/openai',
     requiresSecret: true,
     family: 'groq',
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'mistral',
@@ -216,6 +241,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://docs.mistral.ai/api',
     requiresSecret: true,
     family: 'mistral',
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'xai',
@@ -231,6 +258,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://docs.x.ai/docs/api-reference',
     requiresSecret: true,
     family: 'xai',
+    contextWindow: 256_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'together',
@@ -250,6 +279,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://docs.together.ai/docs/openai-api-compatibility',
     requiresSecret: true,
     family: 'together',
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
   },
   {
     id: 'gemini',
@@ -265,6 +296,48 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://ai.google.dev/gemini-api/docs/openai',
     requiresSecret: true,
     family: 'google',
+    contextWindow: 1_000_000,
+    maxOutputTokens: 8_192,
+  },
+  {
+    id: 'copilot',
+    group: 'api',
+    kind: 'openai-compatible',
+    label: 'GitHub Copilot',
+    description: 'Copilot chat models with a GitHub token and the editor headers.',
+    auth: 'api-key',
+    icon: 'key',
+    baseUrl: 'https://api.githubcopilot.com',
+    models: models('gpt-4o', 'claude-sonnet-4', 'o3-mini'),
+    defaultModel: 'gpt-4o',
+    docsUrl: 'https://docs.github.com/en/copilot',
+    requiresSecret: true,
+    family: 'github-copilot',
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
+    headers: {
+      'Editor-Version': 'vscode/1.99.0',
+      'Copilot-Integration-Id': 'vscode-chat',
+    },
+  },
+  {
+    id: 'azure-openai',
+    group: 'api',
+    kind: 'openai-compatible',
+    label: 'Azure OpenAI',
+    description: 'Your Azure deployment: replace the resource and deployment in the URL.',
+    auth: 'api-key',
+    icon: 'cloud',
+    baseUrl: 'https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT',
+    models: models('gpt-4o', 'gpt-4.1', 'o3-mini'),
+    defaultModel: 'gpt-4o',
+    docsUrl: 'https://learn.microsoft.com/azure/ai-services/openai/reference',
+    requiresSecret: true,
+    custom: true,
+    family: 'azure-openai',
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
+    headers: { 'api-version': '2024-10-21' },
   },
   {
     id: 'ollama',
@@ -279,6 +352,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     defaultModel: 'qwen3-coder',
     docsUrl: 'https://docs.ollama.com/api/openai-compatibility',
     family: 'local',
+    contextWindow: 32_000,
+    maxOutputTokens: 4_096,
   },
   {
     id: 'lmstudio',
@@ -293,6 +368,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     defaultModel: 'qwen3-coder',
     docsUrl: 'https://lmstudio.ai/docs/app/api/endpoints/openai',
     family: 'local',
+    contextWindow: 32_000,
+    maxOutputTokens: 4_096,
   },
   {
     id: 'vllm',
@@ -306,6 +383,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: [],
     docsUrl: 'https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html',
     family: 'local',
+    contextWindow: 32_000,
+    maxOutputTokens: 4_096,
   },
   {
     id: 'opencode',
@@ -471,7 +550,24 @@ export function providerModels(provider: ProviderView): PresetModel[] {
       const id = typeof record.id === 'string' ? record.id : '';
       if (!id) continue;
       const label = typeof record.label === 'string' && record.label ? record.label : id;
-      entries.push({ id, label });
+      const contextWindow =
+        typeof record.contextWindow === 'number' &&
+        Number.isInteger(record.contextWindow) &&
+        record.contextWindow > 0
+          ? record.contextWindow
+          : undefined;
+      const maxOutputTokens =
+        typeof record.maxOutputTokens === 'number' &&
+        Number.isInteger(record.maxOutputTokens) &&
+        record.maxOutputTokens > 0
+          ? record.maxOutputTokens
+          : undefined;
+      entries.push({
+        id,
+        label,
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      });
     }
     if (entries.length > 0) return entries;
   }
