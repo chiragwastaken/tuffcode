@@ -1,7 +1,7 @@
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import type { Project } from '@tuffcode/contracts';
 import { Button, EmptyState, IconButton, Input, Kbd } from '@tuffcode/ui';
-import { FolderOpen, FolderPlus, Search, SearchX, X } from 'lucide-react';
+import { FolderPlus, Search, SearchX, X } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -212,19 +212,7 @@ export function Sidebar() {
       </div>
 
       {projects.length === 0 ? (
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-          <EmptyState
-            icon={FolderOpen}
-            title="No projects yet"
-            action={
-              <Button size="sm" onClick={addProject} disabled={adding}>
-                <FolderPlus strokeWidth={1.75} />
-                Add project
-              </Button>
-            }
-            className="mt-2 min-h-0 px-3 py-6"
-          />
-        </div>
+        <div className="min-h-0 flex-1" />
       ) : filteredGroups.length === 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
           <EmptyState

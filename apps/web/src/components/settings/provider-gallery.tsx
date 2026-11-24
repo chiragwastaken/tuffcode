@@ -71,7 +71,7 @@ function SubscriptionStatus({ check }: { check: SubscriptionCheck | undefined })
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-2">
+    <span className="flex min-w-0 items-start gap-2">
       {check.signedIn === true ? (
         <Badge variant="success">Signed in</Badge>
       ) : check.signedIn === false ? (
@@ -80,7 +80,7 @@ function SubscriptionStatus({ check }: { check: SubscriptionCheck | undefined })
         <Badge>Status unknown</Badge>
       )}
       <span
-        className="truncate text-xs text-muted-foreground"
+        className="min-w-0 flex-1 break-words text-xs leading-5 text-muted-foreground"
         title={check.cliPath ?? check.detail}
       >
         {check.cliPath ?? check.detail ?? 'CLI status unavailable'}

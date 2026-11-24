@@ -9,7 +9,10 @@ export interface ThreadRowProps {
   onSelect: (threadId: string) => void;
 }
 
-/** One 34px thread row: title, then a single tinted status chip. */
+/**
+ * One 44px thread row. The title owns the full width on its own line and the
+ * status chip sits beneath it, so a wide chip never squeezes the title.
+ */
 export function ThreadRow({ thread, selected, onSelect }: ThreadRowProps) {
   const title = thread.title.trim() === '' ? 'Untitled thread' : thread.title;
 
@@ -23,15 +26,15 @@ export function ThreadRow({ thread, selected, onSelect }: ThreadRowProps) {
       aria-current={selected ? 'page' : undefined}
       title={title}
       className={cn(
-        'flex h-[34px] items-center gap-2 rounded-md px-2.5 text-xs',
+        'flex h-11 flex-col justify-center gap-0.5 rounded-md px-2.5 py-1',
         'transition-colors duration-150',
         selected
           ? 'bg-sidebar-row-active text-sidebar-foreground shadow-[inset_2px_0_0_0_var(--color-primary)]'
           : 'text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground',
       )}
     >
-      <span className="min-w-0 flex-1 truncate">{title}</span>
-      <StatusChip status={thread.status} />
+      <span className="min-w-0 truncate text-xs">{title}</span>
+      <StatusChip status={thread.status} className="self-start" />
     </Link>
   );
 }

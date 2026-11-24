@@ -9,7 +9,7 @@ import {
   cn,
 } from '@tuffcode/ui';
 import { ArrowLeft, PanelLeft, PanelRight, Settings } from 'lucide-react';
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
 import { InspectorPanel } from './inspector/InspectorPanel';
@@ -26,29 +26,38 @@ const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> 
 /** The inspector is a column at this width and an overlay sheet below it. */
 const WIDE_LAYOUT_QUERY = '(min-width: 1280px)';
 
+/** Everything the sheet's focus trap cycles through. */
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function isWideLayout(): boolean {
+  return typeof window === 'undefined' ? true : window.matchMedia(WIDE_LAYOUT_QUERY).matches;
+}
+
 export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(() =>
-    typeof window === 'undefined' ? true : window.matchMedia(WIDE_LAYOUT_QUERY).matches,
-  );
+  const [wide, setWide] = useState(isWideLayout);
+  const [inspectorOpen, setInspectorOpen] = useState(isWideLayout);
+  const sheetRef = useRef<HTMLElement>(null);
   const connection = useAppStore((state) => state.connection);
   const bootstrap = useAppStore((state) => state.bootstrap);
-  const projects = useAppStore((state) => state.projects);
-  const threads = useAppStore((state) => state.threads);
   const meta = CONNECTION_META[connection];
   const matchRoute = useMatchRoute();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const visibility = shellVisibility(pathname);
   const threadMatch = matchRoute({ to: '/project/$projectId/thread/$threadId' });
   const inspectorThreadId = threadMatch === false ? null : threadMatch.threadId;
-  const thread = inspectorThreadId === null ? undefined : threads[inspectorThreadId];
-  const projectName =
-    thread === undefined
-      ? undefined
-      : projects.find((project) => project.id === thread.projectId)?.name;
   const hasThread = inspectorThreadId !== null;
   const showInspectorToggle = visibility.inspector && hasThread;
   const inspectorVisible = showInspectorToggle && inspectorOpen;
+  /** Below xl the inspector is an overlay sheet, which behaves as a modal dialog. */
+  const sheetOpen = inspectorVisible && !wide;
 
   useLayoutEffect(() => {
     const element = document.documentElement;
@@ -78,6 +87,7 @@ export function AppShell() {
   useEffect(() => {
     const query = window.matchMedia(WIDE_LAYOUT_QUERY);
     const handleChange = (event: MediaQueryListEvent): void => {
+      setWide(event.matches);
       // Wide shows the column, narrow closes the sheet so it never covers the
       // thread uninvited.
       setInspectorOpen(event.matches);
@@ -86,12 +96,64 @@ export function AppShell() {
     return () => query.removeEventListener('change', handleChange);
   }, []);
 
+  // The narrow sheet is a modal: it traps Tab, closes on Escape, and returns focus
+  // to whatever opened it. The page behind it is inert while it is open.
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!sheetOpen || sheet === null) return;
+
+    const previouslyFocused = document.activeElement;
+    const focusable = (): HTMLElement[] =>
+      [...sheet.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
+        (element) => element.offsetParent !== null,
+      );
+
+    (focusable()[0] ?? sheet).focus();
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.defaultPrevented || (event.key !== 'Escape' && event.key !== 'Tab')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setInspectorOpen(false);
+        return;
+      }
+
+      const elements = focusable();
+      if (elements.length === 0) {
+        event.preventDefault();
+        sheet?.focus();
+        return;
+      }
+
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (first === undefined || last === undefined) return;
+      const active = document.activeElement;
+      const outside = active === null || !sheet?.contains(active);
+
+      if (event.shiftKey && (active === first || outside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || outside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
+  }, [sheetOpen]);
+
   return (
     <div
       data-testid="app-shell"
       className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
     >
       <header
+        inert={sheetOpen}
         className="drag-region flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
         style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1.5rem)' }}
       >
@@ -123,25 +185,6 @@ export function AppShell() {
 
           {visibility.backToWorkspace ? (
             <span className="min-w-0 truncate text-xs text-muted-foreground">Settings</span>
-          ) : thread !== undefined ? (
-            <nav
-              aria-label="Breadcrumb"
-              data-testid="header-breadcrumb"
-              className="no-drag flex min-w-0 items-center gap-1.5 text-xs"
-            >
-              <span
-                className="min-w-0 max-w-40 truncate text-muted-foreground"
-                title={projectName ?? thread.projectId}
-              >
-                {projectName ?? thread.projectId}
-              </span>
-              <span aria-hidden="true" className="shrink-0 text-muted-foreground/60">
-                /
-              </span>
-              <span className="min-w-0 truncate text-foreground" title={thread.title}>
-                {thread.title}
-              </span>
-            </nav>
           ) : null}
         </div>
 
@@ -228,13 +271,14 @@ export function AppShell() {
         {visibility.sidebar && sidebarOpen ? (
           <aside
             aria-label="Projects and threads"
+            inert={sheetOpen}
             className="flex w-[var(--sidebar-width)] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
           >
             <Sidebar />
           </aside>
         ) : null}
 
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main inert={sheetOpen} className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <Outlet />
         </main>
 
@@ -245,17 +289,24 @@ export function AppShell() {
                 type="button"
                 aria-label="Close inspector"
                 data-testid="inspector-backdrop"
-                className="fixed inset-x-0 bottom-0 top-[var(--topbar-height)] z-30 bg-black/40 xl:hidden"
+                className="fixed inset-0 z-30 bg-black/40 xl:hidden"
                 onClick={() => setInspectorOpen(false)}
               />
             ) : null}
             <aside
+              ref={sheetRef}
               aria-label="Inspector"
+              role={sheetOpen ? 'dialog' : undefined}
+              aria-modal={sheetOpen ? true : undefined}
+              tabIndex={-1}
               data-panel=""
               data-slot="right-panel"
               data-state={inspectorVisible ? 'open' : 'closed'}
               className={cn(
-                'z-40 min-h-0 flex-col border-border bg-background',
+                'z-40 min-h-0 flex-col border-border bg-background outline-none',
+                // Below the topbar: its top-right corner is reserved for the native
+                // caption buttons, so the sheet's own header and collapse control
+                // must stay under it. The backdrop still covers the whole window.
                 'max-xl:fixed max-xl:top-[var(--topbar-height)] max-xl:right-0 max-xl:bottom-0',
                 'max-xl:w-[min(26rem,92vw)] max-xl:border-l max-xl:shadow-2xl',
                 'xl:static xl:w-[var(--right-panel-width)] xl:max-w-[var(--right-panel-max-width)] xl:shrink-0 xl:border-l',
