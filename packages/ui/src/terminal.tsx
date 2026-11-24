@@ -11,6 +11,10 @@ export interface TerminalHandle {
   /** Recompute rows and columns from the container size. */
   fit(): void;
   focus(): void;
+  /** The current selection, or an empty string. */
+  getSelection(): string;
+  /** Clears the viewport; scrollback stays. */
+  clear(): void;
 }
 
 export interface TerminalProps {
@@ -67,6 +71,8 @@ export function Terminal({
       write: (data) => termRef.current?.write(data),
       fit: () => fitRef.current?.fit(),
       focus: () => termRef.current?.focus(),
+      getSelection: () => termRef.current?.getSelection() ?? '',
+      clear: () => termRef.current?.clear(),
     }),
     [],
   );

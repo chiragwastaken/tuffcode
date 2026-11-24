@@ -32,7 +32,7 @@ function renderBlock(
 ): ReactNode {
   switch (block.kind) {
     case 'user':
-      return <UserBubble item={block.item} onRetry={onRetryUserMessage} />;
+      return <UserBubble item={block.item} threadId={threadId} onRetry={onRetryUserMessage} />;
     case 'reasoning':
       return <ReasoningRow block={block} />;
     case 'prose':
@@ -44,6 +44,7 @@ function renderBlock(
         <FinalAnswer
           block={block}
           theme={theme}
+          threadId={threadId}
           onRetry={onRetryUserMessage}
           onEdit={onEditUserMessage}
         />

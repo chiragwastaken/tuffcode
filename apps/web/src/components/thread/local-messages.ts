@@ -58,6 +58,17 @@ export function addLocalUserMessage(message: LocalUserMessage): void {
   emit();
 }
 
+/** Drops an echo, for a message the user deleted before it reached the log. */
+export function removeLocalUserMessage(messageId: string): void {
+  for (const [threadId, list] of messagesByThread) {
+    const next = list.filter((message) => message.id !== messageId);
+    if (next.length === list.length) continue;
+    messagesByThread.set(threadId, next);
+    emit();
+    return;
+  }
+}
+
 /** The server accepted the send: the echo now carries the turn it started. */
 export function resolveLocalUserMessage(messageId: string, turnId: string): void {
   updateMessage(messageId, (message) => ({ ...message, turnId, status: 'sent' }));

@@ -1,10 +1,16 @@
 import { Button, EmptyState, IconButton, Spinner, cn, focusRing } from '@tuffcode/ui';
 import { Plus, X } from 'lucide-react';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { TerminalError, terminalErrorMessage } from './TerminalError';
 import { TerminalView } from './TerminalView';
 import { TERMINAL_FONT_SIZE, measureTerminalSize } from './terminal-size';
+import {
+  subscribeTerminalRequests,
+  takeTerminalRequest,
+  terminalCdCommand,
+} from './terminal-requests';
 import { initialTerminalTabs, terminalTabsReducer } from './terminal-tabs';
 
 export interface TerminalPanelProps {
@@ -28,6 +34,8 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
   const ownedRef = useRef<Set<string>>(new Set<string>());
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
+  const spawningRef = useRef(false);
+  const pendingCdRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -36,10 +44,22 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
     };
   }, []);
 
+  const sendCd = useCallback(
+    (terminalId: string, path: string): void => {
+      void rpc
+        .request('terminal.input', { terminalId, data: terminalCdCommand(path) })
+        .catch((cause: unknown) => toast.error(terminalErrorMessage(cause)));
+    },
+    [rpc],
+  );
+
   const spawn = useCallback(async (): Promise<void> => {
+    if (spawningRef.current) return;
+    spawningRef.current = true;
     const generation = generationRef.current;
     setOpenState({ status: 'opening' });
     const size = measureTerminalSize(bodyRef.current, TERMINAL_FONT_SIZE);
+    let openedId: string | null = null;
 
     try {
       const { terminalId } = await rpc.request('terminal.open', {
@@ -47,6 +67,8 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
         cols: size.cols,
         rows: size.rows,
       });
+      const cdPath = pendingCdRef.current;
+      pendingCdRef.current = null;
 
       // A newer spawn (or unmount) owns the panel now; never leak the pty.
       if (!mountedRef.current || generation !== generationRef.current) {
@@ -55,13 +77,45 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
       }
 
       ownedRef.current.add(terminalId);
+      openedId = terminalId;
       dispatch({ type: 'open', terminalId });
       setOpenState(IDLE);
+      if (cdPath !== null) sendCd(terminalId, cdPath);
     } catch (cause) {
       if (!mountedRef.current || generation !== generationRef.current) return;
       setOpenState({ status: 'error', error: terminalErrorMessage(cause) });
+    } finally {
+      spawningRef.current = false;
+      const pending = pendingCdRef.current;
+      if (pending !== null && openedId !== null) {
+        pendingCdRef.current = null;
+        sendCd(openedId, pending);
+      }
     }
-  }, [rpc, threadId]);
+  }, [rpc, sendCd, threadId]);
+
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = tabs.activeId;
+
+  // A diff file asked for a terminal at its directory: reuse the open pty or
+  // open one, then cd before the user types anything.
+  useEffect(() => {
+    function handleRequest(): void {
+      const path = takeTerminalRequest();
+      if (path === null) return;
+      const activeId = activeIdRef.current;
+      if (activeId !== null) {
+        sendCd(activeId, path);
+        return;
+      }
+      pendingCdRef.current = path;
+      void spawn();
+    }
+
+    const unsubscribe = subscribeTerminalRequests(handleRequest);
+    handleRequest();
+    return unsubscribe;
+  }, [sendCd, spawn]);
 
   // One terminal per thread: reset the strip and close every pty on change or unmount.
   useEffect(() => {
