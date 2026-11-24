@@ -3,7 +3,8 @@ import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
-import { setApprovalDecision } from './local-messages';
+import { persistedTurnIds } from './grouping';
+import { pruneResolvedLocalUserMessages, setApprovalDecision } from './local-messages';
 import { createStreamBatcher } from './stream-batcher';
 
 type ThreadEventFrame = Extract<ServerEvent, { type: 'thread.event' }>;
@@ -43,11 +44,19 @@ export function useThreadStream(threadId: string): void {
       const token = messagesToken;
       void rpc.request('messages.list', { threadId }).then(
         (rows) => {
-          if (!disposed && token === messagesToken) setMessages(threadId, rows);
+          if (disposed || token !== messagesToken) return;
+          setMessages(threadId, rows);
+          pruneResolvedLocalUserMessages(threadId, persistedTurnIds(rows));
         },
         (error: unknown) => {
-          if (disposed || !notify) return;
-          toast.error(error instanceof Error ? error.message : 'Could not load thread messages.');
+          if (disposed || token !== messagesToken) return;
+          if (notify) {
+            toast.error(error instanceof Error ? error.message : 'Could not load thread messages.');
+            return;
+          }
+          // A superseded load may have been discarded; recover when nothing landed.
+          const loaded = useAppStore.getState().messages[threadId]?.length ?? 0;
+          if (loaded === 0) loadMessages(true);
         },
       );
     }

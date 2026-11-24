@@ -355,7 +355,7 @@ describe('persisted messages', () => {
     expect(items[0]?.kind).toBe('user');
   });
 
-  it('keeps a failed echo even when a persisted row has the same text', () => {
+  it('claims the persisted row for a failed send that already persisted', () => {
     const items = groupTimeline({
       events: [],
       messages: [persisted('msg_turn-1_user', 'user', 'Do the thing', '2026-01-01T00:00:01.000Z')],
@@ -365,17 +365,45 @@ describe('persisted messages', () => {
           turnId: null,
           text: 'Do the thing',
           status: 'failed',
+          createdAt: '2026-01-01T00:00:01.100Z',
+        }),
+      ],
+      approvals: {},
+    });
+
+    expect(items).toHaveLength(1);
+    const [row] = items;
+    if (row?.kind !== 'user') throw new Error('Expected a user row.');
+    expect(row.status).toBe('sent');
+  });
+
+  it('does not let a failed echo steal the row of a later retry', () => {
+    const items = groupTimeline({
+      events: [],
+      messages: [persisted('msg_turn-2_user', 'user', 'Retry me', '2026-01-01T00:00:05.000Z')],
+      userMessages: [
+        message({
+          id: 'echo-failed',
+          turnId: null,
+          text: 'Retry me',
+          status: 'failed',
+          createdAt: '2026-01-01T00:00:01.000Z',
+        }),
+        message({
+          id: 'echo-retry',
+          turnId: 'turn-2',
+          text: 'Retry me',
+          status: 'sent',
           createdAt: '2026-01-01T00:00:05.000Z',
         }),
       ],
       approvals: {},
     });
 
-    expect(items).toHaveLength(2);
-    const failed = items[1];
-    if (failed?.kind !== 'user') throw new Error('Expected a user row.');
-    expect(failed.status).toBe('failed');
-    expect(failed.messageId).toBe('echo-1');
+    const users = items.filter((item) => item.kind === 'user');
+    expect(users).toHaveLength(2);
+    expect(users[0]?.status).toBe('sent');
+    expect(users[1]?.status).toBe('failed');
   });
 
   it('carries pending and failed send states into the user row', () => {

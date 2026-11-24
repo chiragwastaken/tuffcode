@@ -4,6 +4,7 @@ import {
   addLocalUserMessage,
   failLocalUserMessage,
   localUserMessages,
+  pruneResolvedLocalUserMessages,
   resolveLocalUserMessage,
   retryLocalUserMessage,
 } from './local-messages';
@@ -55,6 +56,19 @@ describe('local message status', () => {
     retryLocalUserMessage(message.id);
     const [retried] = localUserMessages(message.threadId);
     expect(retried?.status).toBe('pending');
+  });
+
+  it('prunes echoes once their turn has a persisted row', () => {
+    const threadId = 'thread-prune';
+    const resolved = echo({ threadId, turnId: 'turn-1', status: 'sent' });
+    const pending = echo({ threadId, status: 'pending' });
+    addLocalUserMessage(resolved);
+    addLocalUserMessage(pending);
+
+    pruneResolvedLocalUserMessages(threadId, new Set(['turn-1']));
+
+    const remaining = localUserMessages(threadId);
+    expect(remaining.map((message) => message.id)).toEqual([pending.id]);
   });
 
   it('does not touch messages in another thread', () => {

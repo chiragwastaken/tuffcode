@@ -62,6 +62,23 @@ export function retryLocalUserMessage(messageId: string): void {
   updateMessage(messageId, (message) => ({ ...message, status: 'pending' }));
 }
 
+/**
+ * Drops echoes whose turn now has a persisted row. Pending echoes are kept
+ * because a new send can share text with an older row.
+ */
+export function pruneResolvedLocalUserMessages(
+  threadId: string,
+  turnIds: ReadonlySet<string>,
+): void {
+  if (turnIds.size === 0) return;
+  const list = messagesByThread.get(threadId);
+  if (list === undefined) return;
+  const kept = list.filter((message) => message.turnId === null || !turnIds.has(message.turnId));
+  if (kept.length === list.length) return;
+  messagesByThread.set(threadId, kept);
+  emit();
+}
+
 export function localUserMessages(threadId: string): readonly LocalUserMessage[] {
   return messagesByThread.get(threadId) ?? EMPTY_MESSAGES;
 }

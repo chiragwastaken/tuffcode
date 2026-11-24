@@ -111,15 +111,24 @@ function turnIdForMessage(message: Message): string | null {
   return match[1] ?? null;
 }
 
+/** Turn ids that already have a persisted row, used to prune resolved echoes. */
+export function persistedTurnIds(messages: readonly Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== 'user') continue;
+    const turnId = turnIdForMessage(message);
+    if (turnId !== null) ids.add(turnId);
+  }
+  return ids;
+}
+
 /**
  * The echo and its persisted row are written during one request, so they land
  * within seconds. A tight window keeps two identical sends from merging.
  */
 const ECHO_MATCH_WINDOW_MS = 5_000;
 
-function sameEcho(echo: LocalUserMessage, row: LocalUserMessage): boolean {
-  if (echo.turnId !== null) return echo.turnId === row.turnId;
-  if (echo.status === 'failed') return false;
+function sameEchoText(echo: LocalUserMessage, row: LocalUserMessage): boolean {
   if (echo.text.trim() !== row.text.trim()) return false;
   const echoTime = Date.parse(echo.createdAt);
   const rowTime = Date.parse(row.createdAt);
@@ -142,6 +151,7 @@ function persistedUserMessage(message: Message): LocalUserMessage {
 /**
  * A persisted row is the canonical copy of a sent message; the session-local echo
  * only survives while no row exists, and it keeps its attachments either way.
+ * Turn ids claim their row first so a text match cannot steal it.
  */
 function mergeUserMessages(
   persisted: LocalUserMessage[],
@@ -149,8 +159,14 @@ function mergeUserMessages(
 ): LocalUserMessage[] {
   const merged = persisted.slice();
   const claimed = new Set<string>();
+  const loose: LocalUserMessage[] = [];
+
   for (const echo of echoes) {
-    const match = merged.find((row) => !claimed.has(row.id) && sameEcho(echo, row));
+    if (echo.turnId === null) {
+      loose.push(echo);
+      continue;
+    }
+    const match = merged.find((row) => !claimed.has(row.id) && row.turnId === echo.turnId);
     if (match === undefined) {
       merged.push(echo);
       continue;
@@ -158,6 +174,17 @@ function mergeUserMessages(
     claimed.add(match.id);
     if (echo.attachments.length > 0) match.attachments = echo.attachments;
   }
+
+  for (const echo of loose) {
+    const match = merged.find((row) => !claimed.has(row.id) && sameEchoText(echo, row));
+    if (match === undefined) {
+      merged.push(echo);
+      continue;
+    }
+    claimed.add(match.id);
+    if (echo.attachments.length > 0) match.attachments = echo.attachments;
+  }
+
   return merged;
 }
 
