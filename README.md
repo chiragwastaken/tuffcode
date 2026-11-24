@@ -2,28 +2,87 @@
 
 Local-first desktop app for agentic coding on Windows. One window, many agents, your machine.
 
+Tuffcode runs coding agents against your real repositories in isolated git worktrees. It uses
+the provider CLIs already installed on your machine or any OpenAI-compatible endpoint, and
+keeps projects, threads, diffs, memory, and terminals in one Electron window.
+
+## Features
+
+- **Projects and threads.** Add any git repository, then run several threads per project side
+  by side.
+- **Git worktrees.** Every thread gets its own worktree on a `tuffcode/<threadId>` branch, so
+  agents never collide with your checkout or with each other.
+- **Providers.** Claude Agent SDK, Codex app-server, ACP agents (including opencode), and
+  OpenAI-compatible chat completions. API keys stay in the desktop process and are sealed with
+  Electron `safeStorage`.
+- **Modes.** Plan, Work, and Council execution modes, plus read-only, ask, accept-edits, and
+  full-auto permission modes.
+- **Council.** A planner splits a goal into tasks, workers run in parallel child threads, and a
+  reviewer from another model family checks each change before a pull request opens.
+- **Brain.** Typed memory entries (identity, preference, rule, project, memory, working note)
+  selected per turn, with a live preview of the slice the next message will inject.
+- **Diff review.** Changed files grouped by directory, inline review comments, and checkpoint
+  comparison, rendered with the design system diff viewer.
+- **Terminal.** ConPTY terminals through `node-pty`, with tabs and `pwsh.exe`,
+  `powershell.exe`, or `cmd.exe` as the shell.
+- **Approvals and checkpoints.** Tool calls that need consent render as approval cards, and
+  thread checkpoints snapshot the worktree.
+- **Settings.** Providers, models, general preferences, keybindings, and diagnostics export.
+- **Installer.** A per-user NSIS installer for Windows x64, with optional auto-update.
+
 ## Requirements
 
-- Windows 10 1809 or newer
+- Windows 10 1809 or newer (x64)
 - Node.js 24 or newer
 - pnpm 11 (`corepack enable` then `pnpm install`)
 
-## Development
+Node and pnpm are needed to build from source. The installer is self-contained.
+
+## Install
+
+Download `Tuffcode-Setup-<version>.exe` from the
+[latest release](https://github.com/tuffcode-net/tuffcode/releases/latest) and run it. The
+installer is per-user and does not require elevation. Unsigned builds can trigger SmartScreen;
+see [docs/install.md](./docs/install.md) for silent install, code signing, and troubleshooting.
+
+## Build from source
 
 ```powershell
 pnpm install
-pnpm dev          # Electron app with hot reload
-pnpm check        # typecheck, lint, emdash scan
-pnpm test         # unit and integration tests
-pnpm build:server # bundle the Node server to packages/server/dist/server.js
-pnpm build        # production bundles
-pnpm build:win    # NSIS installer
+pnpm build:server   # bundle the server to packages/server/dist/server.js
+pnpm build:win      # Electron bundles and the NSIS installer
 ```
 
-The desktop app starts the server from `packages/server/dist/server.js`, so run
-`pnpm build:server` before launching a packaged build or `pnpm build:win`. `pnpm dev` uses
-the TypeScript sources directly and does not need it.
+`pnpm build:win` does not rebuild the server bundle, so run `pnpm build:server` first. The
+installer lands in `apps/desktop/dist/Tuffcode-Setup-<version>.exe`. For development,
+`pnpm dev` runs the Electron app with hot reload and uses the TypeScript sources directly.
 
-The renderer never talks to Node directly: it sends JSON-RPC over a loopback WebSocket to a
-server running in an Electron utility process. See [AGENTS.md](./AGENTS.md) for the
-architecture, package map, and contribution rules. MIT licensed.
+## Test
+
+```powershell
+pnpm test       # Vitest unit and integration tests
+pnpm test:e2e   # Playwright Electron suite, builds both artifacts first
+pnpm check      # typecheck, lint, and emdash scan
+```
+
+## Architecture
+
+- `apps/desktop`: Electron main and preload. Starts the server in `utilityProcess.fork()`,
+  seals secrets with `safeStorage`, and exposes a narrow IPC bridge.
+- `packages/server`: all Node-side logic: WebSocket server, SQLite, runner, git, PTY, brain,
+  council, providers, commands, and skills.
+- `apps/web`: React renderer. It has no Node builtins and reaches the server only over one
+  loopback WebSocket carrying a typed JSON envelope: requests are `{ id, method, params }`,
+  responses are `{ id, ok, result }` or `{ id, ok: false, error }`, and server pushes are
+  `{ kind: 'event', type, ... }` frames. Zod validates every frame.
+- `packages/contracts` (Zod schemas and wire types), `packages/adapters` (Claude, Codex, ACP,
+  OpenAI-compatible), `packages/prompt` (system prompt, tools, council prompts), `packages/ui`
+  (design system), `packages/shared` (paths, ids, logger, Windows helpers).
+
+The server listens on `127.0.0.1` with an OS-assigned port and writes the port plus a bearer
+token to `~/.tuffcode/server.json`. Data lives in `%LOCALAPPDATA%\Tuffcode` (`tuffcode.db`,
+logs, worktrees). See [AGENTS.md](./AGENTS.md) for contribution rules.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
