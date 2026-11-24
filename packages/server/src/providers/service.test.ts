@@ -1,11 +1,17 @@
 import type { ProviderView } from '@tuffcode/contracts';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEventBus, type EventBus } from '../events.js';
 import { RpcError } from '../errors.js';
 import { createSecretBridge, type Secrets } from '../secrets/bridge.js';
 import { createTestContext, type TestContext } from '../test-support.js';
 import type { CommandResult, RunCommand } from './command.js';
-import { createProvidersService, providerSecretKey, type ProvidersService } from './service.js';
+import { createProviderHandlers } from './rpc.js';
+import {
+  createProvidersService,
+  providerSecretKey,
+  type ProviderDiscoveryOverrides,
+  type ProvidersService,
+} from './service.js';
 
 function statusCommand(result: CommandResult): RunCommand {
   return async () => result;
@@ -46,19 +52,26 @@ describe('providers service', () => {
   let service: ProvidersService;
   let events: string[];
 
-  function build(overrides: {
-    secrets?: Secrets;
-    commands?: Record<string, string | null>;
-    fetchFn?: typeof fetch;
-    runCommand?: RunCommand;
-  } = {}): ProvidersService {
+  function build(
+    overrides: {
+      secrets?: Secrets;
+      commands?: Record<string, string | null>;
+      fetchFn?: typeof fetch;
+      runCommand?: RunCommand;
+      discovery?: ProviderDiscoveryOverrides;
+    } = {},
+  ): ProvidersService {
     return createProvidersService({
       repos: ctx.repos,
       bus,
       secrets: overrides.secrets ?? secrets,
       resolveCommand: async (name) => overrides.commands?.[name] ?? null,
-      ...(overrides.fetchFn === undefined ? {} : { fetchFn: overrides.fetchFn }),
+      fetchFn: overrides.fetchFn ?? fakeFetch(async () => new Response('{}', { status: 404 })),
       ...(overrides.runCommand === undefined ? {} : { runCommand: overrides.runCommand }),
+      discovery: overrides.discovery ?? {
+        queryFn: () => ({ supportedModels: async () => [] }),
+        listCodexModels: async () => null,
+      },
     });
   }
 
@@ -149,7 +162,10 @@ describe('providers service', () => {
       },
     });
     expect(service.listModels(view.id).map((model) => model.modelId)).toEqual(['opus', 'sonnet']);
-    expect(service.listModels(view.id)[0]).toMatchObject({ isDefault: true, contextWindow: 200_000 });
+    expect(service.listModels(view.id)[0]).toMatchObject({
+      isDefault: true,
+      contextWindow: 200_000,
+    });
 
     await service.upsert({
       id: 'prv_a',
@@ -448,5 +464,86 @@ describe('providers service', () => {
       }),
     ).rejects.toMatchObject({ code: 'bad-request' });
     expect(ctx.repos.providers.get('prv_anthropic')?.secretRef).toBe('provider:prv_anthropic');
+  });
+
+  it('discovers models after a save without delaying the save', async () => {
+    const queried: string[] = [];
+    const discovered = build({
+      commands: { claude: 'C:/tools/claude.exe' },
+      discovery: {
+        queryFn: (params) => {
+          queried.push(params.options.pathToClaudeCodeExecutable);
+          return {
+            supportedModels: async () => [{ value: 'sonnet', displayName: 'Sonnet' }],
+          };
+        },
+      },
+    });
+
+    const view = await discovered.upsert({
+      id: 'prv_claude',
+      kind: 'claude',
+      label: 'Claude',
+      config: {},
+    });
+    expect(queried).toEqual([]);
+
+    await vi.waitFor(() => {
+      expect(ctx.repos.providers.listModels(view.id).map((model) => model.modelId)).toEqual([
+        'sonnet',
+      ]);
+    });
+    expect(queried).toEqual(['C:/tools/claude.exe']);
+  });
+
+  it('reports a failed background discovery as a server warning', async () => {
+    const warnings: string[] = [];
+    bus.subscribe((event) => {
+      if (event.type === 'server.warning') warnings.push(event.payload.message);
+    });
+    const broken = build({
+      commands: { claude: 'C:/tools/claude.exe' },
+      discovery: {
+        queryFn: () => ({
+          supportedModels: async () => {
+            throw new Error('not signed in');
+          },
+        }),
+      },
+    });
+
+    const view = await broken.upsert({
+      id: 'prv_claude',
+      kind: 'claude',
+      label: 'Claude',
+      config: {},
+    });
+    await vi.waitFor(() => expect(warnings).toHaveLength(1));
+    expect(warnings[0]).toContain('Claude');
+    expect(warnings[0]).toContain('not signed in');
+    expect(ctx.repos.providers.get(view.id)).toBeDefined();
+  });
+
+  it('answers providers.models through the rpc handler and honours refresh', async () => {
+    const handlers = createProviderHandlers({ providers: service });
+    const handler = handlers.get('providers.models');
+    expect(handler).toBeDefined();
+
+    await service.upsert({
+      id: 'prv_acp',
+      kind: 'acp',
+      label: 'ACP',
+      config: { models: [{ id: 'agent', label: 'Agent' }] },
+    });
+
+    const result = await service.models('prv_acp', true);
+    expect(result.source).toBe('manual');
+    expect(result.models.map((model) => model.modelId)).toEqual(['agent']);
+    await expect(handler?.({ providerId: 'prv_acp', refresh: true })).resolves.toMatchObject({
+      source: 'manual',
+    });
+    await expect(handler?.({ providerId: 'prv_missing' })).rejects.toMatchObject({
+      code: 'not-found',
+    });
   });
 });

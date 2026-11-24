@@ -41,6 +41,7 @@ const IMPLEMENTED = [
   'providers.list',
   'providers.login',
   'providers.loginCancel',
+  'providers.models',
   'providers.remove',
   'providers.test',
   'providers.upsert',
