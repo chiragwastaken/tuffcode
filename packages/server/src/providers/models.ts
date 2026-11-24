@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { listClaudeModels, type ClaudeModelQueryFn } from '@tuffcode/adapters';
 import type { Model } from '@tuffcode/contracts';
 import { z } from 'zod';
 import type { ProviderRecord, ReplaceModelInput, Repos } from '../db/repos/index.js';
@@ -22,35 +22,6 @@ export const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 export const DISCOVERY_TIMEOUT_MS = 5_000;
 
 const ANTHROPIC_VERSION = '2023-06-01';
-
-/** The subset of the Agent SDK model row this module reads. */
-export interface ClaudeModelInfo {
-  /** Model identifier to pass back in API calls. */
-  value?: string;
-  /** Older SDK builds named the same field `id`. */
-  id?: string;
-  displayName?: string;
-}
-
-/** The subset of an Agent SDK `Query` discovery needs. */
-export interface ClaudeModelQuery {
-  supportedModels(): Promise<ClaudeModelInfo[]>;
-  interrupt?(): Promise<unknown>;
-}
-
-export interface ClaudeModelQueryParams {
-  prompt: string;
-  options: {
-    cwd: string;
-    pathToClaudeCodeExecutable: string;
-    abortController: AbortController;
-    permissionMode: 'default';
-    persistSession: false;
-  };
-}
-
-/** Test seam: inject a fake Agent SDK query instead of spawning the CLI. */
-export type ClaudeModelQueryFn = (params: ClaudeModelQueryParams) => ClaudeModelQuery;
 
 /** Test seam: inject the Codex app-server exchange. `null` means it reported nothing. */
 export type CodexModelListFn = (
@@ -81,8 +52,6 @@ export interface ProviderModelsResult {
   source: ModelSource;
   error?: string;
 }
-
-const defaultQueryFn: ClaudeModelQueryFn = ({ prompt, options }) => query({ prompt, options });
 
 const RECORD_SCHEMA = z.record(z.string(), z.unknown());
 
@@ -211,23 +180,6 @@ export function configuredModelInputs(config: Record<string, unknown>): ReplaceM
   return Array.isArray(config['models']) ? configModelRows(config) : null;
 }
 
-function claudeModels(infos: readonly ClaudeModelInfo[]): DiscoveredModel[] {
-  const models: DiscoveredModel[] = [];
-  const seen = new Set<string>();
-  for (const info of infos) {
-    const id = (info.value ?? info.id ?? '').trim();
-    if (id.length === 0 || seen.has(id)) continue;
-    seen.add(id);
-    const label = info.displayName?.trim();
-    models.push({
-      id,
-      label: label !== undefined && label.length > 0 ? label : id,
-      contextWindow: null,
-    });
-  }
-  return models;
-}
-
 async function discoverClaude(
   provider: ProviderRecord,
   deps: ModelDiscoveryDeps,
@@ -244,33 +196,21 @@ async function discoverClaude(
       : { models: [], source: 'sdk', error: 'claude CLI not found' };
   }
 
-  const queryFn = deps.queryFn ?? defaultQueryFn;
-  const timeoutMs = deps.timeoutMs ?? DISCOVERY_TIMEOUT_MS;
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), timeoutMs);
-  let handle: ClaudeModelQuery | null = null;
-  try {
-    handle = queryFn({
-      prompt: '',
-      options: {
-        cwd: process.cwd(),
-        pathToClaudeCodeExecutable: cliPath,
-        abortController: abort,
-        permissionMode: 'default',
-        persistSession: false,
-      },
-    });
-    const models = claudeModels(await handle.supportedModels());
-    if (models.length > 0) return { models, source: 'sdk' };
-    const fallback = configuredModels(provider.config);
-    return fallback.length > 0
-      ? { models: fallback, source: 'manual' }
-      : { models: [], source: 'sdk', error: 'claude reported no models' };
-  } finally {
-    clearTimeout(timer);
-    await handle?.interrupt?.().catch(() => undefined);
-    abort.abort();
+  const rows = await listClaudeModels({
+    pathToClaudeCodeExecutable: cliPath,
+    ...(deps.queryFn === undefined ? {} : { queryFn: deps.queryFn }),
+    ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
+  });
+  if (rows.length > 0) {
+    return {
+      models: rows.map((row) => ({ id: row.id, label: row.label, contextWindow: null })),
+      source: 'sdk',
+    };
   }
+  const fallback = configuredModels(provider.config);
+  return fallback.length > 0
+    ? { models: fallback, source: 'manual' }
+    : { models: [], source: 'sdk', error: 'claude reported no models' };
 }
 
 /** One app-server exchange: initialize, then `model/list`. `null` on any failure. */
