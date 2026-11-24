@@ -7,8 +7,8 @@ Tuffcode is an open-source, Windows-first Electron desktop app for agentic codin
 - `apps/desktop` owns Electron main and preload. It starts the server in `utilityProcess.fork()`,
   holds secrets via `safeStorage`, and exposes a narrow IPC bridge.
 - `packages/server` runs all Node-side logic: WebSocket server, SQLite, PTY, worktrees, runner,
-  brain, council, and adapters. It listens on `127.0.0.1` with an OS-assigned port and writes
-  the port plus a bearer token to `~/.tuffcode/server.json`.
+  subagents, brain, council, model catalog, and adapters. It listens on `127.0.0.1` with an
+  OS-assigned port and writes the port plus a bearer token to `~/.tuffcode/server.json`.
 - `apps/web` is the React renderer; it talks to the server only over one WebSocket, with no Node builtins.
 
 The wire is a typed JSON envelope, not JSON-RPC. `PROTOCOL_VERSION` is 1: requests are
@@ -30,6 +30,10 @@ endings. Renderer imports `contracts` and `ui`; server imports the rest.
 - Never disable auth, validation, or permission checks to make a test pass.
 - Prefer updating existing files over adding new ones. One convention per problem.
 - Every SQL query is parameterized. No string concatenation into SQL.
+- Every change ships with an audit at `.tuffcode-ops/audits/<batch>-<agent>.md`: files touched,
+  exact commands and output tails, deviations, and what was not verified. No audit, no merge.
+- Only the maintainer edits markdown documents (`README`, `AGENTS`, `CHANGELOG`, `docs/`).
+  Contributors report doc changes in the PR body instead of editing them.
 
 ## Commands
 

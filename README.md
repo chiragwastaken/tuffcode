@@ -12,23 +12,37 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
   by side.
 - **Git worktrees.** Every thread gets its own worktree on a `tuffcode/<threadId>` branch, so
   agents never collide with your checkout or with each other.
-- **Providers.** Claude Agent SDK, Codex app-server, ACP agents (including opencode), and
-  OpenAI-compatible chat completions. API keys stay in the desktop process and are sealed with
-  Electron `safeStorage`.
-- **Modes.** Plan, Work, and Council execution modes, plus read-only, ask, accept-edits, and
-  full-auto permission modes.
+- **Providers.** Claude subscription through the installed CLI, ChatGPT subscription through
+  Codex, Anthropic API keys, OpenAI-compatible endpoints (OpenRouter, DeepSeek, Kimi, Groq,
+  Mistral, xAI, Together, Gemini), local models (Ollama, LM Studio, vLLM), and ACP agents.
+  Keys stay in the desktop process and are sealed with Electron `safeStorage`.
+- **Model discovery.** Every provider lists its real models. Pick one from the composer popup or
+  settings; refresh on demand; type a model id when a gateway returns nothing.
+- **Modes.** Work, Plan, and Council, plus read-only, ask, accept-edits, and full-auto
+  permissions. Work and Council switch from the thread topbar.
+- **Subagents.** Explorer, reviewer, notetaker, worker, and planner types, each with its own
+  prompt, model, and fallback model. Children stream into a side pane; workers get isolated
+  worktrees.
 - **Council.** A planner splits a goal into tasks, workers run in parallel child threads, and a
   reviewer from another model family checks each change before a pull request opens.
-- **Brain.** Typed memory entries (identity, preference, rule, project, memory, working note)
-  selected per turn, with a live preview of the slice the next message will inject.
-- **Diff review.** Changed files grouped by directory, inline review comments, and checkpoint
-  comparison, rendered with the design system diff viewer.
+- **Brain.** Typed memory entries selected per turn, a live prompt preview, an interactive node
+  graph, and a memory search tool for the agent.
+- **Diff review.** Changed files grouped by directory, real file line numbers, inline review
+  comments, checkpoint comparison, and a collapsible file tree.
+- **Timeline.** Reasoning, prose, grouped tool calls with results and diffs, and a final answer,
+  with copy, retry, edit, and right-click actions.
+- **Panes.** Two or three resizable panes per thread for the conversation, subagents, diff,
+  terminal, or brain.
 - **Terminal.** ConPTY terminals through `node-pty`, with tabs and `pwsh.exe`,
   `powershell.exe`, or `cmd.exe` as the shell.
 - **Approvals and checkpoints.** Tool calls that need consent render as approval cards, and
   thread checkpoints snapshot the worktree.
-- **Settings.** Providers, models, general preferences, keybindings, and diagnostics export.
+- **Settings.** Providers, models, subagent models, custom instructions, appearance, agents and
+  tools, permissions, terminal, brain, updates, diagnostics, capabilities, keybindings.
 - **Installer.** A per-user NSIS installer for Windows x64, with optional auto-update.
+
+Model discovery, subagents, split panes and the brain graph land in v0.1.2. v0.1.1 ships the
+provider gallery, settings, persisted turns and the diff and timeline rework.
 
 ## Requirements
 

@@ -3,6 +3,31 @@
 All notable changes to Tuffcode are documented here. The format follows Keep a Changelog, and
 the project uses semantic versioning.
 
+## [Unreleased]
+
+### Models and providers
+- Model discovery for every provider kind: Claude subscription through the Agent SDK, Codex
+  through app-server, Anthropic and OpenAI-compatible through their models endpoints, ACP
+  through session config options.
+- Searchable model popup in the composer and settings, with refresh and manual entry.
+
+### Subagents and council
+- Subagent types: explorer, reviewer, notetaker, worker, planner, each with its own prompt.
+- Per-type model and fallback model in settings, concurrency cap, isolated worktrees for workers.
+- Work and Council switch in the thread topbar; Council starts from one goal box.
+
+### Composer and timeline
+- Composer controls split left (mode, model) and right (attach, permission, send).
+- Timeline renders reasoning, prose, grouped tool calls and the final answer, with copy, retry,
+  edit and right-click actions.
+- Split panes with draggable splitters and persisted layout.
+
+### Memory and settings
+- Custom instructions injected per turn within budget, with a prompt preview.
+- Interactive brain graph and a memory search tool.
+- Light mode caption buttons and window chrome follow the theme.
+- Sidebar lists projects and threads only.
+
 ## [0.1.1] - 2026-11-24
 
 ### Shell and settings
