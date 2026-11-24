@@ -111,7 +111,7 @@ export function ContextPanel({ threadId }: ContextPanelProps) {
                   <span className="font-mono text-2xs text-foreground">{section.name}</span>
                   <span className="text-2xs text-muted-foreground">{section.tokens} tokens</span>
                 </div>
-                <pre className="max-h-40 overflow-auto px-2.5 py-2 font-mono text-2xs leading-5 whitespace-pre-wrap text-muted-foreground">
+                <pre className="max-h-40 overflow-auto px-2.5 py-2 font-mono text-2xs leading-5 whitespace-pre-wrap break-words text-muted-foreground">
                   {section.text}
                 </pre>
               </li>
