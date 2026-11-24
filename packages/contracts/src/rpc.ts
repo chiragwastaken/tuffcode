@@ -282,7 +282,21 @@ export const methods = {
   },
   'providers.test': {
     params: idParam,
-    result: z.object({ ok: z.boolean(), detail: z.string() }),
+    result: z.object({
+      ok: z.boolean(),
+      detail: z.string(),
+      signedIn: z.boolean().optional(),
+      cliPath: z.string().optional(),
+      models: z.string().array().optional(),
+    }),
+  },
+  'providers.login': {
+    params: idParam,
+    result: z.object({ loginId: IdSchema }),
+  },
+  'providers.loginCancel': {
+    params: z.object({ loginId: IdSchema }),
+    result: EmptyObjectSchema,
   },
   'models.list': {
     params: z.object({ providerId: IdSchema }),
