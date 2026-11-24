@@ -41,7 +41,6 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   const ports = useActionPorts();
   const events = useAppStore((state) => state.events[threadId]);
   const messages = useAppStore((state) => state.messages[threadId]);
-  const upsertThread = useAppStore((state) => state.upsertThread);
   const userMessages = useLocalUserMessages(threadId);
   const approvals = useApprovalDecisions();
   const supersededTurns = useSupersededTurns(threadId);
@@ -91,7 +90,9 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
     if (!thread || thread.executionMode === mode) return;
     setSwitchingMode(true);
     try {
-      upsertThread(await rpc.request('threads.update', { id: thread.id, executionMode: mode }));
+      ports.store.upsertThread(
+        await ports.rpc.request('threads.update', { id: thread.id, executionMode: mode }),
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not switch the thread mode.');
     } finally {
