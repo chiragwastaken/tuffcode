@@ -72,7 +72,7 @@ describe('skills', () => {
     const skills = discoverSkills(project);
     const deploy = skills.find((skill) => skill.name === 'deploy');
     expect(deploy).toBeDefined();
-    expect(deploy === undefined ? '' : 'body' in deploy).toBe(false);
+    expect(deploy).not.toHaveProperty('body');
     expect(JSON.stringify(skills)).not.toContain('first body');
 
     writeFileSync(filePath, '---\nname: deploy\ndescription: Deploy the app\n---\nsecond body\n');

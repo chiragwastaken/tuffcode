@@ -105,7 +105,7 @@ export function readSkillBody(filePath: string, roots: readonly string[]): strin
     return isInside(realRoot, real);
   });
   if (!contained) throw badRequest('skill path escapes skills directory');
-  const parsed = parseFrontmatter(readFileSync(filePath, 'utf8'));
+  const parsed = parseFrontmatter(readFileSync(real, 'utf8'));
   if (parsed === null) throw badRequest('skill file has no frontmatter');
   return parsed.body;
 }
