@@ -43,6 +43,8 @@ import { requestInspectorTab } from '../inspector/panel-requests';
 import { ModelPicker } from '../models/ModelPicker';
 import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './attachments';
 import { dispatchCommandResult } from './command-run';
+import { DEFAULT_CONTEXT_WARNING_THRESHOLD } from './context-meter';
+import { ContextMeter } from './ContextMeter';
 import {
   addLocalUserMessage,
   clearLocalUserMessages,
@@ -118,6 +120,7 @@ export function Composer({ thread }: ComposerProps) {
   const navigate = useNavigate();
   const connection = useAppStore((state) => state.connection);
   const providers = useAppStore((state) => state.providers);
+  const settings = useAppStore((state) => state.settings);
   const upsertThread = useAppStore((state) => state.upsertThread);
   const setMessages = useAppStore((state) => state.setMessages);
   const setEvents = useAppStore((state) => state.setEvents);
@@ -628,6 +631,15 @@ export function Composer({ thread }: ComposerProps) {
                     className="max-w-52 min-w-0"
                   />
                 </div>
+
+                {thread && (settings?.showContextMeter ?? true) ? (
+                  <ContextMeter
+                    threadId={thread.id}
+                    threshold={
+                      settings?.contextWarningThreshold ?? DEFAULT_CONTEXT_WARNING_THRESHOLD
+                    }
+                  />
+                ) : null}
 
                 <div className="ml-auto flex items-center gap-1.5">
                   <Tooltip>

@@ -78,17 +78,62 @@ describe('provider preset catalog', () => {
       'xai',
       'together',
       'gemini',
+      'copilot',
+      'azure-openai',
       'custom-openai',
     ]);
     for (const preset of api) {
       if (preset.custom) {
-        expect(preset.baseUrl).toBeUndefined();
+        // Custom cards start on the full form; a pattern may still prefill the URL.
+        if (preset.baseUrl !== undefined) expect(preset.baseUrl, preset.id).toMatch(/^https:\/\//);
         continue;
       }
       expect(preset.baseUrl, preset.id).toMatch(/^https:\/\//);
       expect(preset.docsUrl, preset.id).toMatch(/^https:\/\//);
       expect(preset.models.length, preset.id).toBeGreaterThan(0);
     }
+  });
+
+  it('seeds the documented context windows and output budgets', () => {
+    const limits = Object.fromEntries(
+      PROVIDER_PRESETS.map((preset) => [preset.id, [preset.contextWindow, preset.maxOutputTokens]]),
+    );
+    expect(limits['anthropic-api']).toEqual([200_000, 8_192]);
+    expect(limits['openai']).toEqual([128_000, 16_384]);
+    expect(limits['openrouter']).toEqual([128_000, 8_192]);
+    expect(limits['deepseek']).toEqual([64_000, 8_192]);
+    expect(limits['kimi']).toEqual([256_000, 8_192]);
+    expect(limits['groq']).toEqual([128_000, 8_192]);
+    expect(limits['gemini']).toEqual([1_000_000, 8_192]);
+    expect(limits['ollama']).toEqual([32_000, 4_096]);
+    expect(limits['lmstudio']).toEqual([32_000, 4_096]);
+    expect(limits['vllm']).toEqual([32_000, 4_096]);
+  });
+
+  it('describes the Copilot and Azure endpoints with their required headers', () => {
+    const copilot = presetById('copilot');
+    expect(copilot).toMatchObject({
+      kind: 'openai-compatible',
+      baseUrl: 'https://api.githubcopilot.com',
+      auth: 'api-key',
+      requiresSecret: true,
+      family: 'github-copilot',
+    });
+    expect(copilot?.headers).toEqual({
+      'Editor-Version': 'vscode/1.99.0',
+      'Copilot-Integration-Id': 'vscode-chat',
+    });
+
+    const azure = presetById('azure-openai');
+    expect(azure).toMatchObject({
+      kind: 'openai-compatible',
+      baseUrl: 'https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT',
+      auth: 'api-key',
+      requiresSecret: true,
+      custom: true,
+      family: 'azure-openai',
+    });
+    expect(azure?.headers).toEqual({ 'api-version': '2024-10-21' });
   });
 
   it('prefills the local endpoints from the spec', () => {
@@ -200,5 +245,25 @@ describe('provider display helpers', () => {
       { id: 'qwen', label: 'qwen' },
     ]);
     expect(providerModels(view({ config: {} }))).toEqual([]);
+  });
+
+  it('keeps per-model token overrides and drops invalid ones', () => {
+    expect(
+      providerModels(
+        view({
+          config: {
+            models: [
+              { id: 'a', label: 'A', contextWindow: 64_000, maxOutputTokens: 8_192 },
+              { id: 'b', label: 'B', contextWindow: 0, maxOutputTokens: -1 },
+              { id: 'c', label: 'C', contextWindow: 1.5 },
+            ],
+          },
+        }),
+      ),
+    ).toEqual([
+      { id: 'a', label: 'A', contextWindow: 64_000, maxOutputTokens: 8_192 },
+      { id: 'b', label: 'B' },
+      { id: 'c', label: 'C' },
+    ]);
   });
 });

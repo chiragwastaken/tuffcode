@@ -6,6 +6,8 @@ import {
   parseHeadersText,
   providerDraftFromPreset,
   providerDraftFromView,
+  updateModelLimit,
+  validateModelLimits,
   validateProviderDraft,
   type ProviderDraft,
 } from './provider-form';
@@ -233,11 +235,18 @@ describe('buildProviderPayload', () => {
     expect(payload.config.model).toBe('claude-sonnet-4-5');
     expect(payload.config.configDir).toBe('C:\\claude-config');
     expect(payload.config.models).toEqual([
-      { id: 'claude-opus-4-5', label: 'claude-opus-4-5', contextWindow: null, isDefault: false },
+      {
+        id: 'claude-opus-4-5',
+        label: 'claude-opus-4-5',
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+        isDefault: false,
+      },
       {
         id: 'claude-sonnet-4-5',
         label: 'claude-sonnet-4-5',
-        contextWindow: null,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
         isDefault: true,
       },
     ]);
@@ -387,5 +396,95 @@ describe('providerDraftFromPreset', () => {
     expect(result.baseUrl).toBe('');
     expect(result.secret).toBe('');
     expect(result.kind).toBe('claude');
+  });
+
+  it('seeds token limits on every model', () => {
+    const openrouter = providerDraftFromPreset(presetById('openrouter')!);
+    expect(openrouter.models.every((model) => model.contextWindow === 128_000)).toBe(true);
+    expect(openrouter.models.every((model) => model.maxOutputTokens === 8_192)).toBe(true);
+
+    const local = providerDraftFromPreset(presetById('ollama')!);
+    expect(local.models.every((model) => model.contextWindow === 32_000)).toBe(true);
+    expect(local.models.every((model) => model.maxOutputTokens === 4_096)).toBe(true);
+  });
+
+  it('prefills the headers Copilot and Azure require', () => {
+    const copilot = providerDraftFromPreset(presetById('copilot')!);
+    expect(copilot.baseUrl).toBe('https://api.githubcopilot.com');
+    expect(JSON.parse(copilot.headers)).toEqual({
+      'Editor-Version': 'vscode/1.99.0',
+      'Copilot-Integration-Id': 'vscode-chat',
+    });
+
+    const azure = providerDraftFromPreset(presetById('azure-openai')!);
+    expect(azure.baseUrl).toBe(
+      'https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT',
+    );
+    expect(JSON.parse(azure.headers)).toEqual({ 'api-version': '2024-10-21' });
+  });
+});
+
+describe('model limit overrides', () => {
+  it('accepts seeded limits and cleared rows', () => {
+    expect(
+      validateModelLimits([
+        { id: 'seeded', label: 'seeded', contextWindow: 128_000, maxOutputTokens: 16_384 },
+        { id: 'cleared', label: 'cleared', contextWindow: null, maxOutputTokens: null },
+      ]),
+    ).toEqual({});
+  });
+
+  it('rejects a context window that is not a positive whole number', () => {
+    const message = 'Context window must be a positive whole number.';
+    expect(validateModelLimits([{ id: 'a', label: 'a', contextWindow: 0 }])).toEqual({
+      a: { contextWindow: message },
+    });
+    expect(validateModelLimits([{ id: 'a', label: 'a', contextWindow: -1 }])).toEqual({
+      a: { contextWindow: message },
+    });
+    expect(validateModelLimits([{ id: 'a', label: 'a', contextWindow: 1.5 }])).toEqual({
+      a: { contextWindow: message },
+    });
+  });
+
+  it('rejects a max output larger than the context window', () => {
+    expect(
+      validateModelLimits([{ id: 'a', label: 'a', contextWindow: 8_000, maxOutputTokens: 9_000 }]),
+    ).toEqual({ a: { maxOutputTokens: 'Max output cannot exceed the context window.' } });
+    expect(
+      validateModelLimits([{ id: 'a', label: 'a', contextWindow: 8_000, maxOutputTokens: 0 }]),
+    ).toEqual({ a: { maxOutputTokens: 'Max output must be a positive whole number.' } });
+  });
+
+  it('blocks the provider save through validateProviderDraft', () => {
+    expect(
+      validateProviderDraft(
+        draft({ models: [{ id: 'gpt-5.1', label: 'gpt-5.1', contextWindow: 0 }] }),
+      ),
+    ).toEqual({ models: 'Context window must be a positive whole number.' });
+  });
+
+  it('writes an override into the seeded model list and lets null clear it', () => {
+    const withWindow = updateModelLimit(draft().models, 'gpt-5.1', 'contextWindow', 64_000);
+    const cleared = updateModelLimit(withWindow, 'gpt-5.1', 'maxOutputTokens', null);
+    const payload = buildProviderPayload(draft({ models: cleared }));
+    const seeds = payload.config.models as Record<string, unknown>[];
+    const row = seeds.find((model) => model.id === 'gpt-5.1');
+
+    expect(row).toMatchObject({ contextWindow: 64_000 });
+    expect(row).not.toHaveProperty('maxOutputTokens');
+    expect(methods['providers.upsert'].params.safeParse(payload).success).toBe(true);
+  });
+
+  it('seeds the preset limits on a typed custom model', () => {
+    const payload = buildProviderPayload(
+      draft({ model: 'my-model', models: [{ id: 'gpt-5.1', label: 'gpt-5.1' }] }),
+    );
+    const seeds = payload.config.models as Record<string, unknown>[];
+
+    expect(seeds.find((model) => model.id === 'my-model')).toMatchObject({
+      contextWindow: 128_000,
+      maxOutputTokens: 16_384,
+    });
   });
 });
