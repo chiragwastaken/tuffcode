@@ -1,8 +1,15 @@
-import { Navigate, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import {
+  Navigate,
+  createHashHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router';
 import { EmptyState } from '@tuffcode/ui';
 import { useEffect } from 'react';
 import { AppShell } from './components/AppShell';
 import { EmptyWorkspace } from './components/EmptyWorkspace';
+import { resolveRootView } from './components/shell-layout';
 import { ThreadView } from './components/thread/ThreadView';
 import { SettingsPage } from './routes/settings/settings-page';
 import { useAppStore } from './store/app-store';
@@ -11,32 +18,30 @@ function WorkspaceIndex() {
   const projects = useAppStore((state) => state.projects);
   const threads = useAppStore((state) => state.threads);
   const activeThreadId = useAppStore((state) => state.activeThreadId);
+  const view = resolveRootView({ projects, threads, activeThreadId });
 
-  if (projects.length === 0) return <EmptyWorkspace />;
-
-  const candidate =
-    (activeThreadId ? threads[activeThreadId] : undefined) ??
-    Object.values(threads).toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-
-  if (candidate) {
-    return (
-      <Navigate
-        to="/project/$projectId/thread/$threadId"
-        params={{ projectId: candidate.projectId, threadId: candidate.id }}
-        replace
-      />
-    );
+  switch (view.kind) {
+    case 'empty-workspace':
+      return <EmptyWorkspace />;
+    case 'redirect':
+      return (
+        <Navigate
+          to="/project/$projectId/thread/$threadId"
+          params={{ projectId: view.projectId, threadId: view.threadId }}
+          replace
+        />
+      );
+    case 'no-threads':
+      return (
+        <div className="flex h-full items-center justify-center p-6">
+          <EmptyState
+            title="No threads yet"
+            description="Create a thread from the sidebar to start a conversation."
+            className="w-full max-w-md"
+          />
+        </div>
+      );
   }
-
-  return (
-    <div className="flex h-full items-center justify-center p-6">
-      <EmptyState
-        title="No threads yet"
-        description="Create a thread from the sidebar to start a conversation."
-        className="w-full max-w-md"
-      />
-    </div>
-  );
 }
 
 function ThreadRoute() {
@@ -93,7 +98,19 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([indexRoute, threadRoute, settingsRoute]);
 
-export const router = createRouter({ routeTree });
+/**
+ * The packaged renderer loads `file:///.../index.html?port=…`, so the browser
+ * pathname is the HTML file, never `/`. Hash history keeps the route in the URL
+ * fragment and leaves the file path alone; dev builds over http keep real paths.
+ */
+function shellHistory() {
+  if (typeof window === 'undefined') return undefined;
+  return window.location.protocol === 'file:' ? createHashHistory() : undefined;
+}
+
+const history = shellHistory();
+
+export const router = createRouter({ routeTree, ...(history ? { history } : {}) });
 
 declare module '@tanstack/react-router' {
   interface Register {
