@@ -1,0 +1,46 @@
+name: Feature request
+description: A new capability or a meaningful change to an existing surface.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The user-facing problem, with the current behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What to build, and the simplest version that solves the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: In scope and explicitly out of scope.
+      placeholder: |
+        In: ...
+        Out: ...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkable statements, including tests or screenshots where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files and areas
+      description: Packages or directories likely to change.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches and why they were rejected.

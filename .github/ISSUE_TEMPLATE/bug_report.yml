@@ -1,0 +1,63 @@
+name: Bug report
+description: Something is broken or behaves differently from the docs.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A good bug report is reproducible and measurable. Fill every required field.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact clicks, commands, and inputs, starting from a fresh launch.
+      placeholder: |
+        1. Launch Tuffcode with a fresh TUFFCODE_HOME
+        2. Add project ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and evidence
+      description: Include the error text, log tail, screenshot path, or measured value.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and build
+      description: Release tag or commit, installer or dev, Windows build.
+      placeholder: v0.1.2, installed from GitHub release, Windows 11 26200
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Suspected area
+      description: Packages or files likely involved, if known.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How we will know it is fixed, as checkable statements.
+      placeholder: |
+        - A keyed provider save returns hasSecret true within 1s
+        - Shutdown completes without the 5s kill
+    validations:
+      required: true

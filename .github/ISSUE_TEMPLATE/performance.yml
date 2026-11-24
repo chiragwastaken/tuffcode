@@ -1,0 +1,57 @@
+name: Performance
+description: Startup, memory, bundle size, or rendering budget work.
+title: "perf: "
+labels: ["area:desktop", "priority:p1"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: The budget being missed, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Current measurements
+      description: A table of measured values, the budget, and the gap. State the machine and build.
+      placeholder: |
+        | Metric | Measured | Budget | Status |
+        | --- | --- | --- | --- |
+        | Idle RAM, 5-process tree | 510 MB | 350 MB | over |
+    validations:
+      required: true
+  - type: textarea
+    id: causes
+    attributes:
+      label: Likely causes
+      description: Hypotheses with the evidence that supports them.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: In scope and out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Numeric targets and the checks that prove them.
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: A checklist that can be worked top to bottom.
+      placeholder: |
+        - [ ] Add a benchmark script
+        - [ ] Lazy-load inspector panels
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification commands
+      description: The exact commands and install steps used to compare before and after.
