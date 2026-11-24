@@ -111,7 +111,7 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
     >
       <div className="flex h-[var(--row-height)] shrink-0 items-center gap-1 border-b border-border px-2">
         <div
-          role="tablist"
+          role="group"
           aria-label="Terminals"
           className="flex min-w-0 items-center gap-1 overflow-x-auto"
         >
@@ -130,11 +130,7 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
               >
                 <button
                   type="button"
-                  role="tab"
-                  id={`terminal-tab-${tab.terminalId}`}
-                  aria-selected={selected}
-                  aria-controls={`terminal-panel-${tab.terminalId}`}
-                  tabIndex={selected ? 0 : -1}
+                  aria-pressed={selected}
                   title={title}
                   className={cn(
                     'h-full max-w-40 truncate rounded-sm pl-2.5 pr-1 text-xs font-medium',
@@ -148,7 +144,6 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
                   icon={X}
                   label={`Close ${title}`}
                   size="sm"
-                  tabIndex={selected ? 0 : -1}
                   className="size-6 rounded-l-none [&_svg]:size-3"
                   onClick={() => closeTerminal(tab.terminalId)}
                 />

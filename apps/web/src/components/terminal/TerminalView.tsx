@@ -1,4 +1,4 @@
-import { Terminal, cn, type TerminalHandle } from '@tuffcode/ui';
+import { Terminal, type TerminalHandle } from '@tuffcode/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RpcClient } from '../../rpc/client';
 import { subscribeTerminalData } from './terminal-data';
@@ -6,7 +6,7 @@ import { TerminalError, terminalErrorMessage } from './TerminalError';
 import { TERMINAL_FONT_SIZE } from './terminal-size';
 
 /** Coalesce the resize storm a window drag produces into one RPC call. */
-export const RESIZE_DEBOUNCE_MS = 150;
+const RESIZE_DEBOUNCE_MS = 150;
 
 export interface TerminalViewProps {
   terminalId: string;
@@ -43,9 +43,10 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
 
   const sendInput = useCallback(
     (data: string) => {
-      void rpc.request('terminal.input', { terminalId, data }).catch((cause: unknown) => {
-        setError(terminalErrorMessage(cause));
-      });
+      void rpc.request('terminal.input', { terminalId, data }).then(
+        () => setError(null),
+        (cause: unknown) => setError(terminalErrorMessage(cause)),
+      );
     },
     [rpc, terminalId],
   );
@@ -55,11 +56,10 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
       clearTimeout(resizeTimerRef.current);
       resizeTimerRef.current = setTimeout(() => {
         resizeTimerRef.current = undefined;
-        void rpc
-          .request('terminal.resize', { terminalId, cols: size.cols, rows: size.rows })
-          .catch((cause: unknown) => {
-            setError(terminalErrorMessage(cause));
-          });
+        void rpc.request('terminal.resize', { terminalId, cols: size.cols, rows: size.rows }).then(
+          () => setError(null),
+          (cause: unknown) => setError(terminalErrorMessage(cause)),
+        );
       }, RESIZE_DEBOUNCE_MS);
     },
     [rpc, terminalId],
@@ -73,9 +73,6 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
   return (
     <div
       hidden={!active}
-      role="tabpanel"
-      id={`terminal-panel-${terminalId}`}
-      aria-labelledby={`terminal-tab-${terminalId}`}
       data-terminal-id={terminalId}
       className="absolute inset-0 focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset"
     >
@@ -85,7 +82,7 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
         fontSize={TERMINAL_FONT_SIZE}
         onData={sendInput}
         onResize={sendResize}
-        className={cn('p-1.5')}
+        className="p-1.5"
       />
       {error ? (
         <div className="absolute inset-x-3 top-3">

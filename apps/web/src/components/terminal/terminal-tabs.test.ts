@@ -41,13 +41,17 @@ describe('terminal tab reducer', () => {
     expect(next.activeId).toBe('term-3');
   });
 
-  it('closing the active tab falls back to the left neighbour, then the right', () => {
+  it('closing the active tab activates the tab that slides into its slot, else the last', () => {
     const three = open(initialTerminalTabs, 'term-1', 'term-2', 'term-3');
 
-    const middle = terminalTabsReducer(three, { type: 'close', terminalId: 'term-3' });
-    expect(middle.activeId).toBe('term-2');
+    const middleActive = terminalTabsReducer(three, { type: 'activate', terminalId: 'term-2' });
+    const closedMiddle = terminalTabsReducer(middleActive, { type: 'close', terminalId: 'term-2' });
+    expect(closedMiddle.activeId).toBe('term-3');
 
-    const first = terminalTabsReducer(middle, { type: 'close', terminalId: 'term-2' });
+    const closedLast = terminalTabsReducer(three, { type: 'close', terminalId: 'term-3' });
+    expect(closedLast.activeId).toBe('term-2');
+
+    const first = terminalTabsReducer(closedLast, { type: 'close', terminalId: 'term-2' });
     expect(first.activeId).toBe('term-1');
 
     const empty = terminalTabsReducer(first, { type: 'close', terminalId: 'term-1' });

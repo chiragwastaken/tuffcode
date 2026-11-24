@@ -2,9 +2,9 @@
 export const TERMINAL_FONT_SIZE = 13;
 
 /** Fallback when the panel has not been laid out yet (hidden route, first paint). */
-export const DEFAULT_TERMINAL_SIZE = { cols: 80, rows: 24 } as const;
+const DEFAULT_TERMINAL_SIZE = { cols: 80, rows: 24 } as const;
 
-export interface TerminalSize {
+interface TerminalSize {
   cols: number;
   rows: number;
 }

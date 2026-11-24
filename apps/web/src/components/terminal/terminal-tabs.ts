@@ -35,7 +35,8 @@ export function terminalTabsReducer(
       const tabs = state.tabs.filter((tab) => tab.terminalId !== action.terminalId);
       if (state.activeId !== action.terminalId) return { tabs, activeId: state.activeId };
 
-      // Closing the active tab falls back to the neighbour on the left, then the right.
+      // Closing the active tab activates the tab that slides into its slot, or the
+      // last tab when the closed one was the rightmost.
       const next = tabs[Math.min(index, tabs.length - 1)];
       return { tabs, activeId: next ? next.terminalId : null };
     }
