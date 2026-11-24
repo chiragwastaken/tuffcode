@@ -304,6 +304,15 @@ importers:
       '@base-ui/react':
         specifier: 'catalog:'
         version: 1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@pierre/diffs':
+        specifier: 'catalog:'
+        version: 1.7.1(@shikijs/themes@4.6.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@xterm/addon-fit':
+        specifier: 'catalog:'
+        version: 0.11.0
+      '@xterm/xterm':
+        specifier: 'catalog:'
+        version: 6.0.0
       class-variance-authority:
         specifier: 'catalog:'
         version: 0.7.1
@@ -316,6 +325,15 @@ importers:
       react:
         specifier: 'catalog:'
         version: 19.3.1
+      react-markdown:
+        specifier: 'catalog:'
+        version: 10.1.0(@types/react@19.3.0)(react@19.3.1)
+      remark-gfm:
+        specifier: 'catalog:'
+        version: 4.0.1
+      shiki:
+        specifier: 'catalog:'
+        version: 4.6.0
       tailwind-merge:
         specifier: 'catalog:'
         version: 3.7.1
