@@ -1,9 +1,10 @@
-import { Link, Outlet } from '@tanstack/react-router';
+import { Link, Outlet, useMatchRoute } from '@tanstack/react-router';
 import { IconButton, buttonVariants, cn } from '@tuffcode/ui';
-import { PanelLeft, Settings } from 'lucide-react';
+import { PanelLeft, PanelRight, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
+import { InspectorPanel } from './inspector/InspectorPanel';
 import { Sidebar } from './sidebar/Sidebar';
 
 const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> = {
@@ -15,9 +16,13 @@ const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> 
 
 export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const connection = useAppStore((state) => state.connection);
   const version = useAppStore((state) => state.bootstrap?.version);
   const meta = CONNECTION_META[connection];
+  const matchRoute = useMatchRoute();
+  const threadMatch = matchRoute({ to: '/project/$projectId/thread/$threadId' });
+  const inspectorThreadId = threadMatch === false ? null : threadMatch.threadId;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
@@ -38,6 +43,14 @@ export function AppShell() {
           ) : null}
         </div>
         <div className="no-drag ml-auto flex items-center gap-2">
+          <IconButton
+            icon={PanelRight}
+            label={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
+            size="sm"
+            aria-pressed={inspectorOpen}
+            className="hidden xl:inline-flex"
+            onClick={() => setInspectorOpen((open) => !open)}
+          />
           <span
             className="flex items-center gap-1.5 text-2xs text-muted-foreground"
             title={meta.label}
@@ -78,19 +91,13 @@ export function AppShell() {
         <aside
           aria-label="Inspector"
           data-slot="right-panel"
-          className="hidden w-[var(--right-panel-width)] max-w-[var(--right-panel-max-width)] shrink-0 border-l border-border xl:block"
+          className={cn(
+            'w-[var(--right-panel-width)] max-w-[var(--right-panel-max-width)] shrink-0 border-l border-border',
+            inspectorOpen ? 'hidden xl:flex' : 'hidden',
+          )}
         >
-          <div className="flex h-full flex-col">
-            <div className="flex h-[var(--row-height)] shrink-0 items-center border-b border-border px-3">
-              <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-                Inspector
-              </span>
-            </div>
-            <div className="flex flex-1 items-center justify-center p-4">
-              <p className="max-w-56 text-center text-xs leading-5 text-muted-foreground">
-                Diff, terminal, and brain panels arrive in later slices.
-              </p>
-            </div>
+          <div className="flex h-full min-w-0 flex-1 flex-col">
+            <InspectorPanel threadId={inspectorThreadId} open={inspectorOpen} />
           </div>
         </aside>
       </div>
