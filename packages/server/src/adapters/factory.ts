@@ -20,6 +20,49 @@ import { createResolveCommand, type ResolveCommand } from './resolveCommand.js';
 /** The fetch signature the OpenAI-compatible adapter accepts. */
 export type AdapterFetch = NonNullable<OpenAIChatAdapterOverrides['fetchFn']>;
 
+/** One model row reported by a vendor runtime instead of the provider config. */
+export interface DiscoveredModel {
+  id: string;
+  label: string;
+  contextWindow: number | null;
+}
+
+/**
+ * Model-list hook: how discovery reaches a runtime that only answers over its own
+ * transport (the Claude Agent SDK, the Codex app-server). The implementation lives in
+ * the provider discovery module; tests substitute either side. `null` means the runtime
+ * was not asked at all, so the caller reports an empty list.
+ */
+export type ModelListHook = (
+  provider: ProviderRecord,
+  secret: string | null,
+) => Promise<ModelListReport | null>;
+
+/** What one hook reports: the rows plus where they came from. */
+export interface ModelListReport {
+  models: DiscoveredModel[];
+  /** `sdk` when the vendor runtime answered; `manual` when config supplied the rows. */
+  source: 'sdk' | 'manual';
+  error?: string;
+}
+
+export interface ModelListHooks {
+  claude?: ModelListHook;
+  codex?: ModelListHook;
+}
+
+/** The hook for one provider kind; API kinds are listed over HTTP instead. */
+export function modelListHookFor(kind: ProviderKind, hooks: ModelListHooks): ModelListHook | null {
+  switch (kind) {
+    case 'claude':
+      return hooks.claude ?? null;
+    case 'codex':
+      return hooks.codex ?? null;
+    default:
+      return null;
+  }
+}
+
 export type AdapterFactory = (
   provider: ProviderConfig,
   deps: AdapterDeps,

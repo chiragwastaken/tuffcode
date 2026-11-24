@@ -287,6 +287,15 @@ CREATE INDEX idx_subagents_thread ON subagents(thread_id, created_at);
 CREATE INDEX idx_subagents_status ON subagents(status);
 `;
 
+/**
+ * Discovery results are cached per provider, so every model row carries the moment the
+ * set was refreshed. Rows seeded from provider config keep `NULL`, which reads as stale
+ * and lets the first `providers.models` call discover for real.
+ */
+const MODEL_REFRESH_SQL = `
+ALTER TABLE provider_models ADD COLUMN refreshed_at TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -312,5 +321,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 5,
     name: 'subagents',
     sql: SUBAGENTS_SQL,
+  },
+  {
+    version: 6,
+    name: 'provider-model-refresh',
+    sql: MODEL_REFRESH_SQL,
   },
 ];

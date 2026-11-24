@@ -24,6 +24,10 @@ export function createProviderHandlers(deps: ProviderHandlerDeps): RpcHandlers {
   handlers.set('models.list', (params) =>
     deps.providers.listModels((params as RpcParams<'models.list'>).providerId),
   );
+  handlers.set('providers.models', (params) => {
+    const { providerId, refresh } = params as RpcParams<'providers.models'>;
+    return deps.providers.models(providerId, refresh === true);
+  });
   handlers.set('providers.login', (params) =>
     deps.providers.login((params as RpcParams<'providers.login'>).id),
   );

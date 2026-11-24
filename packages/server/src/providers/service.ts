@@ -1,6 +1,6 @@
 import type { Model, ProviderKind, ProviderView } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
-import type { ReplaceModelInput, Repos } from '../db/repos/index.js';
+import type { Repos } from '../db/repos/index.js';
 import { badRequest, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
 import type { Secrets } from '../secrets/bridge.js';
@@ -9,6 +9,14 @@ import { configuredCommand, resolveCliPath, runCommand, type RunCommand } from '
 import { DEFAULT_ANTHROPIC_BASE_URL, validateProviderConfig } from './config.js';
 import { HINTS } from './hints.js';
 import { createProviderLogins, type KillLoginTree, type SpawnLoginPty } from './login.js';
+import {
+  configuredModelInputs,
+  providerModels,
+  type CodexModelListFn,
+  type ClaudeModelQueryFn,
+  type ModelDiscoveryDeps,
+  type ProviderModelsResult,
+} from './models.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './status.js';
 
 export interface ProvidersUpsertInput {
@@ -36,8 +44,18 @@ export interface ProvidersService {
   remove(id: string): Promise<void>;
   test(id: string): Promise<ProviderTestResult>;
   listModels(providerId: string): Model[];
+  /** Discovers the provider's models, using the 24h cache unless `refresh` is set. */
+  models(providerId: string, refresh?: boolean): Promise<ProviderModelsResult>;
   login(providerId: string): Promise<{ loginId: string }>;
   cancelLogin(loginId: string): Promise<void>;
+}
+
+/** Test seams for discovery; production uses the SDK, app-server, and `fetch`. */
+export interface ProviderDiscoveryOverrides {
+  queryFn?: ClaudeModelQueryFn;
+  listCodexModels?: CodexModelListFn;
+  now?: () => number;
+  timeoutMs?: number;
 }
 
 export interface ProvidersServiceDeps {
@@ -49,6 +67,7 @@ export interface ProvidersServiceDeps {
   runCommand?: RunCommand;
   spawnPty?: SpawnLoginPty;
   killTree?: KillLoginTree;
+  discovery?: ProviderDiscoveryOverrides;
 }
 
 const TEST_TIMEOUT_MS = 5_000;
@@ -57,20 +76,6 @@ const ANTHROPIC_VERSION = '2023-06-01';
 /** The bridge key for one provider. The database only ever stores this string. */
 export function providerSecretKey(providerId: string): string {
   return `provider:${providerId}`;
-}
-
-function modelSeeds(config: Record<string, unknown>): ReplaceModelInput[] | null {
-  const models = config['models'];
-  if (!Array.isArray(models)) return null;
-  return models.map((model) => {
-    const entry = model as Record<string, unknown>;
-    return {
-      modelId: String(entry['id']),
-      label: String(entry['label']),
-      contextWindow: typeof entry['contextWindow'] === 'number' ? entry['contextWindow'] : null,
-      isDefault: entry['isDefault'] === true,
-    };
-  });
 }
 
 function stringHeaders(value: unknown): Record<string, string> {
@@ -129,6 +134,45 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
     if (secretRef === null) return null;
     const secret = await deps.secrets.get(secretRef);
     return secret !== null && secret.length > 0 ? secret : null;
+  }
+
+  function discoveryFor(secret: string | null): ModelDiscoveryDeps {
+    return {
+      secret,
+      fetchFn,
+      resolveCommand: deps.resolveCommand,
+      ...deps.discovery,
+    };
+  }
+
+  async function discoverFor(providerId: string, refresh: boolean): Promise<ProviderModelsResult> {
+    const provider = deps.repos.providers.get(providerId);
+    if (provider === undefined) throw notFound('provider not found');
+    const secret = await secretFor(provider.secretRef);
+    return providerModels(deps.repos, provider, discoveryFor(secret), refresh);
+  }
+
+  /**
+   * Saving a provider refreshes its models without delaying the save. A failure is a
+   * `server.warning`, never a failed upsert: the row is already committed.
+   */
+  function refreshModelsAfterSave(providerId: string): void {
+    void (async () => {
+      const result = await discoverFor(providerId, true);
+      if (result.error !== undefined) {
+        const provider = deps.repos.providers.get(providerId);
+        deps.bus.emit({
+          kind: 'event',
+          type: 'server.warning',
+          payload: {
+            message: `model discovery failed for ${provider?.label ?? providerId}: ${result.error}`,
+            code: 'providers.models',
+          },
+        });
+        return;
+      }
+      emitUpdated();
+    })().catch(() => undefined);
   }
 
   async function testOpenAI(
@@ -264,9 +308,10 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
         config,
         ...(secretRef === undefined ? {} : { secretRef }),
       });
-      const seeds = modelSeeds(config);
+      const seeds = configuredModelInputs(config);
       if (seeds !== null) deps.repos.providers.replaceModels(view.id, seeds);
       emitUpdated();
+      refreshModelsAfterSave(view.id);
       return view;
     },
 
@@ -315,6 +360,8 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
       }
       return deps.repos.providers.listModels(providerId);
     },
+
+    models: (providerId, refresh = false) => discoverFor(providerId, refresh),
 
     login: (providerId) => logins.start(providerId),
     cancelLogin: (loginId) => logins.cancel(loginId),
