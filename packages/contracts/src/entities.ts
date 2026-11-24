@@ -27,6 +27,7 @@ export const ProviderKindSchema = z.enum([
   'acp',
   'opencode',
   'openai-compatible',
+  'anthropic',
 ]);
 export type ProviderKind = z.infer<typeof ProviderKindSchema>;
 

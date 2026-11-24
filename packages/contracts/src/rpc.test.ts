@@ -354,7 +354,21 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
   'providers.remove': { params: { id: 'prov-claude' }, result: {} },
   'providers.test': {
     params: { id: 'prov-claude' },
-    result: { ok: false, detail: 'claude not found on PATH' },
+    result: {
+      ok: true,
+      detail: 'signed in as user@example.com',
+      signedIn: true,
+      cliPath: 'C:/Users/Hp/AppData/Roaming/npm/claude.cmd',
+      models: ['claude-opus-4-5', 'claude-sonnet-4-5'],
+    },
+  },
+  'providers.login': {
+    params: { id: 'prov-claude' },
+    result: { loginId: 'login-1' },
+  },
+  'providers.loginCancel': {
+    params: { loginId: 'login-1' },
+    result: {},
   },
   'models.list': { params: { providerId: 'prov-claude' }, result: [model] },
   'settings.get': { params: {}, result: DEFAULT_SETTINGS },
@@ -428,6 +442,8 @@ const expectedMethods: RpcMethod[] = [
   'projects.refresh',
   'projects.remove',
   'providers.list',
+  'providers.login',
+  'providers.loginCancel',
   'providers.remove',
   'providers.test',
   'providers.upsert',
@@ -521,8 +537,8 @@ describe('protocol envelope', () => {
 });
 
 describe('rpc methods', () => {
-  it('exposes exactly 45 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(45);
+  it('exposes exactly 47 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(47);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -589,6 +605,10 @@ describe('rpc methods', () => {
       ],
       ['comments.resolve', 'params', { id: 'rc1' }],
       ['comments.list', 'result', [{ ...reviewComment, line: -1 }]],
+      ['providers.test', 'result', { ok: true, detail: 'x', signedIn: 'yes' }],
+      ['providers.test', 'result', { ok: true, detail: 'x', models: 'claude-opus-4-5' }],
+      ['providers.login', 'params', { id: '' }],
+      ['providers.loginCancel', 'params', { loginId: '' }],
     ];
 
     for (const [method, side, value] of cases) {
@@ -694,11 +714,21 @@ describe('server events', () => {
       { kind: 'event', type: 'terminal.data', payload: { terminalId: 'term1', data: 'ok' } },
       { kind: 'event', type: 'council.updated', payload: { goalId: 'g1', state: 'reviewing' } },
       { kind: 'event', type: 'providers.updated', payload: [provider] },
+      {
+        kind: 'event',
+        type: 'provider.login.output',
+        payload: { loginId: 'login-1', providerId: 'prov-claude', chunk: 'Visit the URL' },
+      },
+      {
+        kind: 'event',
+        type: 'provider.login.done',
+        payload: { loginId: 'login-1', providerId: 'prov-claude', ok: true, detail: 'signed in' },
+      },
       { kind: 'event', type: 'settings.updated', payload: DEFAULT_SETTINGS },
       { kind: 'event', type: 'server.warning', payload: { message: 'disk low', code: 'disk' } },
     ];
 
-    expect(frames).toHaveLength(8);
+    expect(frames).toHaveLength(10);
     for (const frame of frames) {
       expect(ServerEventSchema.safeParse(frame).success, frame.type).toBe(true);
     }
@@ -720,6 +750,20 @@ describe('server events', () => {
       ServerEventSchema.safeParse({ kind: 'response', type: 'thread.updated', payload: thread })
         .success,
     ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'provider.login.output',
+        payload: { loginId: 'login-1', providerId: 'prov-claude' },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'provider.login.done',
+        payload: { loginId: 'login-1', providerId: 'prov-claude', ok: 'yes', detail: 'signed in' },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -736,17 +780,55 @@ describe('settings', () => {
       brainEnabled: true,
       updateChannel: 'stable',
       keybindings: {},
+      interfaceSize: 'default',
+      fontSize: 14,
+      sidebarWidth: 256,
+      panelAnimation: false,
+      maxToolIterations: 40,
+      enabledTools: ['bash', 'read', 'edit', 'write', 'glob', 'grep'],
+      terminalScrollback: 5000,
+      terminalFontSize: 13,
+      cursorStyle: 'bar',
+      checkUpdatesOnStart: true,
     });
     expect(SettingsSchema.parse({})).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse({}).keybindings).not.toBe(DEFAULT_SETTINGS.keybindings);
+    expect(SettingsSchema.parse({}).enabledTools).not.toBe(DEFAULT_SETTINGS.enabledTools);
   });
 
   it('parses partial patches without filling defaults', () => {
     expect(SettingsPatchSchema.parse({})).toEqual({});
     expect(SettingsPatchSchema.parse({ theme: 'light' })).toEqual({ theme: 'light' });
+    expect(SettingsPatchSchema.parse({ fontSize: 16, cursorStyle: 'block' })).toEqual({
+      fontSize: 16,
+      cursorStyle: 'block',
+    });
+    expect(SettingsPatchSchema.parse({ enabledTools: ['read', 'grep'] })).toEqual({
+      enabledTools: ['read', 'grep'],
+    });
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme: 'blue' }).success).toBe(false);
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, logLevel: 'verbose' }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, fontSize: 30 }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, fontSize: 13.5 }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, sidebarWidth: 400 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, maxToolIterations: 0 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, terminalFontSize: 10 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, interfaceSize: 'huge' }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, cursorStyle: 'beam' }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, enabledTools: 'bash' }).success).toBe(
       false,
     );
   });
@@ -772,5 +854,12 @@ describe('entity schemas', () => {
     expect(BrainEntrySchema.safeParse({ ...brainEntry, kind: 'idea' }).success).toBe(false);
     expect(DiffFileSchema.safeParse({ ...diffFile, status: 'unknown' }).success).toBe(false);
     expect(ReviewCommentSchema.safeParse({ ...reviewComment, side: 'both' }).success).toBe(false);
+  });
+
+  it('accepts every provider kind including anthropic', () => {
+    const kinds = ['claude', 'codex', 'acp', 'opencode', 'openai-compatible', 'anthropic'];
+    for (const kind of kinds) {
+      expect(ProviderViewSchema.safeParse({ ...provider, kind }).success, kind).toBe(true);
+    }
   });
 });

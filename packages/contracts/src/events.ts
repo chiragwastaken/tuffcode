@@ -127,6 +127,23 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     }),
   ),
   serverEvent('providers.updated', ProviderViewSchema.array()),
+  serverEvent(
+    'provider.login.output',
+    z.object({
+      loginId: IdSchema,
+      providerId: IdSchema,
+      chunk: z.string(),
+    }),
+  ),
+  serverEvent(
+    'provider.login.done',
+    z.object({
+      loginId: IdSchema,
+      providerId: IdSchema,
+      ok: z.boolean(),
+      detail: z.string(),
+    }),
+  ),
   serverEvent('settings.updated', SettingsSchema),
   serverEvent(
     'server.warning',
