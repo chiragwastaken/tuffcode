@@ -11,5 +11,9 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tuffcode/contracts": "workspace:*",
+    "@tuffcode/shared": "workspace:*"
   }
 }

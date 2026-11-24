@@ -13,6 +13,9 @@
     "@agentclientprotocol/sdk": "catalog:",
     "@anthropic-ai/claude-agent-sdk": "catalog:",
     "@opencode-ai/sdk": "catalog:",
+    "@tuffcode/contracts": "workspace:*",
+    "@tuffcode/prompt": "workspace:*",
+    "@tuffcode/shared": "workspace:*",
     "zod": "catalog:"
   }
 }

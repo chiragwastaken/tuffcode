@@ -16,6 +16,8 @@
     "@pierre/diffs": "catalog:",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-virtual": "catalog:",
+    "@tuffcode/contracts": "workspace:*",
+    "@tuffcode/ui": "workspace:*",
     "@xterm/addon-fit": "catalog:",
     "@xterm/addon-search": "catalog:",
     "@xterm/addon-web-links": "catalog:",

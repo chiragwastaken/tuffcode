@@ -10,6 +10,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@tuffcode/adapters": "workspace:*",
+    "@tuffcode/contracts": "workspace:*",
+    "@tuffcode/prompt": "workspace:*",
+    "@tuffcode/shared": "workspace:*",
     "node-pty": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
