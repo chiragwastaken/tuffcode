@@ -1,8 +1,8 @@
-import type { GoalAutonomy, RpcResult, Review, Task, TaskState } from '@tuffcode/contracts';
-import { Badge, Button, ScrollArea, Select, Spinner, Textarea } from '@tuffcode/ui';
+import type { RpcResult, Review, Task, TaskState } from '@tuffcode/contracts';
+import { Badge, Button, ScrollArea, Spinner } from '@tuffcode/ui';
 import { useNavigate } from '@tanstack/react-router';
-import { RefreshCw, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { MessagesSquare, RefreshCw, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { CouncilBoard } from '../council/CouncilBoard';
@@ -19,7 +19,7 @@ import {
   isGoalTerminal,
   isPermanentCouncilFailure,
 } from './council-model';
-import { forgetCouncilGoal, rememberCouncilGoal, rememberedCouncilGoal } from './council-goals';
+import { forgetCouncilGoal, rememberedCouncilGoal } from './council-goals';
 
 export interface CouncilPanelProps {
   threadId: string;
@@ -29,23 +29,17 @@ type CouncilStatus = RpcResult<'council.status'>;
 
 const POLL_INTERVAL_MS = 3000;
 
-const AUTONOMY_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'auto', label: 'Auto' },
-];
-
-function isAutonomy(value: unknown): value is GoalAutonomy {
-  return value === 'manual' || value === 'auto';
-}
-
 /**
- * Council dashboard: start a goal for this thread, follow its task states while it
- * runs, cancel it, and read the reviewer verdicts.
+ * Council dashboard: follow this thread's goal state, cancel it, and read the
+ * reviewer verdicts. Goals are started from the thread composer, which owns the
+ * only goal input, so the panel never renders a second one.
  */
 export function CouncilPanel({ threadId }: CouncilPanelProps) {
   const rpc = useRpc();
   const navigate = useNavigate();
   const projectId = useAppStore((state) => state.threads[threadId]?.projectId);
+  const executionMode = useAppStore((state) => state.threads[threadId]?.executionMode ?? 'work');
+  const upsertThread = useAppStore((state) => state.upsertThread);
 
   const [goalId, setGoalId] = useState<string | null>(() => rememberedCouncilGoal(threadId));
   const [status, setStatus] = useState<CouncilStatus | null>(null);
@@ -55,10 +49,8 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   const [pollingStopped, setPollingStopped] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
-  const [goalText, setGoalText] = useState('');
-  const [autonomy, setAutonomy] = useState<GoalAutonomy>('manual');
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
+  const [switchingMode, setSwitchingMode] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
@@ -107,25 +99,29 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     return () => clearInterval(timer);
   }, [goalId, goalState, load, pollingStopped]);
 
-  async function handleStart(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const goal = goalText.trim();
-    if (goal.length === 0 || starting) return;
+  // A goal started from the composer is remembered for this thread; the panel
+  // adopts it so both views follow the same run.
+  useEffect(() => {
+    if (goalId !== null || executionMode !== 'council') return;
+    const timer = setInterval(() => {
+      const adopted = rememberedCouncilGoal(threadId);
+      if (adopted !== null) setGoalId(adopted);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [goalId, executionMode, threadId]);
 
-    setStarting(true);
-    setStartError(null);
+  async function switchToCouncil(): Promise<void> {
+    if (switchingMode) return;
+    setSwitchingMode(true);
+    setSwitchError(null);
     try {
-      const started = await rpc.request('council.start', { threadId, goal, autonomy });
-      rememberCouncilGoal(threadId, started.goalId);
-      setStatus(null);
-      setSelectedNode(null);
-      setError(null);
-      setGoalText('');
-      setGoalId(started.goalId);
+      upsertThread(
+        await rpc.request('threads.update', { id: threadId, executionMode: 'council' }),
+      );
     } catch (cause) {
-      setStartError(councilErrorMessage(cause));
+      setSwitchError(councilErrorMessage(cause));
     } finally {
-      setStarting(false);
+      setSwitchingMode(false);
     }
   }
 
@@ -151,7 +147,6 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     setError(null);
     setPollingStopped(false);
     setCancelError(null);
-    setStartError(null);
   }
 
   function retry(): void {
@@ -181,53 +176,29 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
         data-testid="council-panel"
         className="flex h-full min-h-0 flex-col bg-background text-foreground"
       >
-        <ScrollArea className="max-h-[55%] shrink-0">
-          <form onSubmit={(event) => void handleStart(event)} className="flex flex-col gap-2 p-3">
-            <label
-              htmlFor="council-goal"
-              className="text-2xs font-medium tracking-wide text-muted-foreground uppercase"
+        {executionMode === 'council' ? null : (
+          <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-3 py-2">
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="council-switch-mode"
+              disabled={switchingMode}
+              onClick={() => void switchToCouncil()}
             >
-              Goal
-            </label>
-            <Textarea
-              id="council-goal"
-              rows={4}
-              placeholder="What should the council ship?"
-              value={goalText}
-              onChange={(event) => setGoalText(event.target.value)}
-            />
-            <div className="flex items-center gap-2">
-              <div className="w-28 shrink-0">
-                <Select
-                  aria-label="Goal autonomy"
-                  className="h-8 text-xs"
-                  options={AUTONOMY_OPTIONS}
-                  value={autonomy}
-                  onValueChange={(value) => {
-                    if (isAutonomy(value)) setAutonomy(value);
-                  }}
-                />
-              </div>
-              <Button
-                type="submit"
-                size="sm"
-                variant="primary"
-                disabled={starting || goalText.trim().length === 0}
-              >
-                {starting ? <Spinner size="sm" label="Starting goal" /> : null}
-                Start goal
-              </Button>
-            </div>
-            <p className="text-2xs leading-5 text-muted-foreground">
-              Manual asks before each task starts. Auto plans, runs and reviews without stopping.
-            </p>
-            {startError ? (
+              {switchingMode ? (
+                <Spinner size="sm" label="Switching to council" />
+              ) : (
+                <MessagesSquare strokeWidth={1.75} />
+              )}
+              Switch thread to council
+            </Button>
+            {switchError === null ? null : (
               <p role="alert" className="text-2xs leading-5 text-error">
-                {startError}
+                {switchError}
               </p>
-            ) : null}
-          </form>
-        </ScrollArea>
+            )}
+          </div>
+        )}
 
         <CouncilBoard
           status={null}
@@ -237,7 +208,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
           onCancel={() => undefined}
           cancelling={false}
           canCancel={false}
-          className="min-h-56 flex-1 border-t border-border"
+          className="min-h-0 flex-1"
         />
       </section>
     );

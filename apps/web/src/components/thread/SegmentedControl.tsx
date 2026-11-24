@@ -74,8 +74,8 @@ export function SegmentedControl<T extends string>({
               if (!selected) onValueChange(option.value);
             }}
             className={cn(
-              'inline-flex h-full min-w-0 items-center gap-1 rounded-sm border px-2 whitespace-nowrap transition-colors duration-150',
-              size === 'md' ? 'text-xs' : 'text-2xs',
+              'inline-flex h-full min-w-0 items-center rounded-sm border whitespace-nowrap transition-colors duration-150',
+              size === 'md' ? 'gap-2 px-2.5 text-xs' : 'gap-1 px-2 text-2xs',
               selected
                 ? 'border-border bg-accent text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground',
