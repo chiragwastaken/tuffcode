@@ -13,6 +13,8 @@ import {
 } from '@tuffcode/contracts';
 import type { z } from 'zod';
 import { createBrainRpcHandlers, type BrainHandlerDeps } from './brain/handlers.js';
+import { createCouncilHandlers } from './council/rpc.js';
+import type { Council } from './council/types.js';
 import type { Repos } from './db/repos/index.js';
 import type { DiagnosticsInput } from './diagnostics.js';
 import { createDiagnosticsHandlers } from './diagnostics.js';
@@ -45,6 +47,8 @@ export interface RpcDeps {
   brain: BrainHandlerDeps;
   commands: RpcHandlers;
   diagnostics: DiagnosticsInput;
+  /** Present once the council slice is wired; absent leaves its methods unregistered. */
+  council?: Council;
   featureHandlers: readonly RpcHandlers[];
 }
 
@@ -173,6 +177,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   register(createBrainRpcHandlers(deps.brain));
   register(deps.commands);
   register(createDiagnosticsHandlers(deps.diagnostics));
+  if (deps.council !== undefined) register(createCouncilHandlers({ council: deps.council }));
   for (const feature of deps.featureHandlers) register(feature);
 
   return handlers;
