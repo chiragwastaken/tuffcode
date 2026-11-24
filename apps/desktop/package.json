@@ -20,6 +20,7 @@
     "@vitejs/plugin-react": "catalog:",
     "electron": "catalog:",
     "electron-vite": "catalog:",
+    "tailwindcss": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"
   }
