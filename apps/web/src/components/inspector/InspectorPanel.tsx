@@ -4,6 +4,7 @@ import { useEffect, useReducer, useState } from 'react';
 import { useAppStore } from '../../store/app-store';
 import { DiffPanel } from '../diff/DiffPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
+import { requestTerminalAt } from '../terminal/terminal-requests';
 import { BrainPanel } from './BrainPanel';
 import { CouncilPanel } from './CouncilPanel';
 import {
@@ -63,6 +64,7 @@ export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
         threadId={threadId}
         projectId={thread?.projectId ?? null}
         activeTab={activeTab}
+        onSelectTab={(tab) => dispatch({ type: 'select', threadId, tab })}
       />
     </TabsRoot>
   );
@@ -120,6 +122,7 @@ interface InspectorTabsProps {
   threadId: string;
   projectId: string | null;
   activeTab: InspectorTab;
+  onSelectTab: (tab: InspectorTab) => void;
 }
 
 /**
@@ -127,7 +130,7 @@ interface InspectorTabsProps {
  * terminal or drop an unsaved comment. A panel is not mounted until its tab is
  * first shown, so opening a thread never spawns a shell the user did not ask for.
  */
-function InspectorTabs({ threadId, projectId, activeTab }: InspectorTabsProps) {
+function InspectorTabs({ threadId, projectId, activeTab, onSelectTab }: InspectorTabsProps) {
   const [mountedTabs, setMountedTabs] = useState<readonly InspectorTab[]>([activeTab]);
 
   useEffect(() => {
@@ -139,7 +142,15 @@ function InspectorTabs({ threadId, projectId, activeTab }: InspectorTabsProps) {
   return (
     <>
       <TabsPanel value="diff" keepMounted className="min-h-0 flex-1">
-        {isMounted('diff') ? <DiffPanel threadId={threadId} /> : null}
+        {isMounted('diff') ? (
+          <DiffPanel
+            threadId={threadId}
+            onOpenInTerminal={(path) => {
+              onSelectTab('terminal');
+              requestTerminalAt(path);
+            }}
+          />
+        ) : null}
       </TabsPanel>
       <TabsPanel value="terminal" keepMounted className="min-h-0 flex-1">
         {isMounted('terminal') ? <TerminalPanel threadId={threadId} /> : null}

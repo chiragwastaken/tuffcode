@@ -1,4 +1,4 @@
-import type { Project } from '@tuffcode/contracts';
+import type { Project, Thread } from '@tuffcode/contracts';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRef } from 'react';
 import { ProjectGroupHeader } from './ProjectGroupHeader';
@@ -13,7 +13,11 @@ import {
 export interface SidebarItemActions {
   activeThreadId: string | null;
   creatingProjectId: string | null;
+  projectPathFor: (projectId: string) => string | undefined;
   onSelectThread: (threadId: string) => void;
+  onOpenThread: (thread: Thread) => void;
+  onRenameThread: (thread: Thread) => void;
+  onDeleteThread: (thread: Thread) => void;
   onToggleProject: (projectId: string) => void;
   onNewThread: (projectId: string) => void;
   onRemoveProject: (project: Project) => void;
@@ -97,7 +101,11 @@ function SidebarItemView({ item, actions }: { item: SidebarItem; actions: Sideba
         <ThreadRow
           thread={item.thread}
           selected={item.thread.id === actions.activeThreadId}
+          projectPath={actions.projectPathFor(item.thread.projectId)}
           onSelect={actions.onSelectThread}
+          onOpen={actions.onOpenThread}
+          onRename={actions.onRenameThread}
+          onDelete={actions.onDeleteThread}
         />
       );
     case 'empty':

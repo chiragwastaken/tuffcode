@@ -4,22 +4,12 @@ import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
 import { FolderOpen, GitBranch, MessagesSquare } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { runAction, type ActionContext } from '../actions';
+import { useActionPorts } from '../menu/action-context';
 import { Composer } from './Composer';
 import { groupTimeline, type UserItem } from './grouping';
-import {
-  addLocalUserMessage,
-  failLocalUserMessage,
-  nextLocalUserMessageId,
-  resolveLocalUserMessage,
-  retryLocalUserMessage,
-  supersedeTurn,
-  updateLocalUserMessageText,
-  useApprovalDecisions,
-  useLocalUserMessages,
-  useSupersededTurns,
-} from './local-messages';
+import { useApprovalDecisions, useLocalUserMessages, useSupersededTurns } from './local-messages';
 import { StatusChip } from './status-chip';
 import { Timeline } from './Timeline';
 import { useThreadStream } from './use-thread-stream';
@@ -39,7 +29,7 @@ export interface ThreadViewProps {
 export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   useThreadStream(threadId);
 
-  const rpc = useRpc();
+  const ports = useActionPorts();
   const events = useAppStore((state) => state.events[threadId]);
   const messages = useAppStore((state) => state.messages[threadId]);
   const userMessages = useLocalUserMessages(threadId);
@@ -59,68 +49,29 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
     [approvals, events, messages, supersededTurns, userMessages],
   );
 
-  const retryUserMessage = useCallback(
-    (item: UserItem) => {
-      retryLocalUserMessage(item.messageId);
-      void rpc
-        .request('threads.send', {
-          id: threadId,
-          text: item.text,
-          ...(item.attachments.length > 0 ? { attachments: item.attachments } : {}),
-        })
-        .then(
-          (result) => resolveLocalUserMessage(item.messageId, result.turnId),
-          (error: unknown) => {
-            failLocalUserMessage(item.messageId);
-            toast.error(error instanceof Error ? error.message : 'Could not send the message.');
-          },
-        );
+  const runMessageAction = useCallback(
+    (id: 'message.retry' | 'message.edit', item: UserItem, input?: { text: string }) => {
+      const context: ActionContext = {
+        ...ports,
+        threadId,
+        userMessage: item,
+        ...(input === undefined ? {} : { input }),
+      };
+      void Promise.resolve(runAction(id, context)).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : 'Could not send the message.');
+      });
     },
-    [rpc, threadId],
+    [ports, threadId],
   );
 
-  /**
-   * Rewrites the prompt a turn started with and sends it again. The replaced turn
-   * is hidden for this session; a persisted prompt becomes a fresh echo, while an
-   * unsent echo is edited in place.
-   */
+  const retryUserMessage = useCallback(
+    (item: UserItem) => runMessageAction('message.retry', item),
+    [runMessageAction],
+  );
+
   const editUserMessage = useCallback(
-    (item: UserItem, text: string) => {
-      const next = text.trim();
-      if (next.length === 0) return;
-
-      let messageId = item.messageId;
-      if (item.turnId === null && updateLocalUserMessageText(item.messageId, next)) {
-        retryLocalUserMessage(messageId);
-      } else {
-        if (item.turnId !== null) supersedeTurn(threadId, item.turnId);
-        messageId = nextLocalUserMessageId(threadId);
-        addLocalUserMessage({
-          id: messageId,
-          threadId,
-          turnId: null,
-          text: next,
-          attachments: item.attachments,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      void rpc
-        .request('threads.send', {
-          id: threadId,
-          text: next,
-          ...(item.attachments.length > 0 ? { attachments: item.attachments } : {}),
-        })
-        .then(
-          (result) => resolveLocalUserMessage(messageId, result.turnId),
-          (error: unknown) => {
-            failLocalUserMessage(messageId);
-            toast.error(error instanceof Error ? error.message : 'Could not send the message.');
-          },
-        );
-    },
-    [rpc, threadId],
+    (item: UserItem, text: string) => runMessageAction('message.edit', item, { text }),
+    [runMessageAction],
   );
 
   const title = thread?.title ?? threadId;

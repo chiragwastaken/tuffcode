@@ -72,5 +72,11 @@ export { Spinner, type SpinnerProps } from './spinner';
 export { EmptyState, type EmptyStateProps } from './empty-state';
 export { StatusDot, type StatusDotProps } from './status-dot';
 export { Markdown, type MarkdownProps, type MarkdownTheme } from './markdown';
-export { DiffViewer, type DiffFile, type DiffLineComment, type DiffViewerProps } from './diff';
+export {
+  DiffViewer,
+  type DiffFile,
+  type DiffLineComment,
+  type DiffLineContext,
+  type DiffViewerProps,
+} from './diff';
 export { Terminal, type TerminalHandle, type TerminalProps } from './terminal';
