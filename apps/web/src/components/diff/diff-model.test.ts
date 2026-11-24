@@ -9,11 +9,12 @@ import {
   checkpointValue,
   diffRequestKey,
   directoryOf,
-  fileLineForRenderedLine,
+  readFileTreeCollapsed,
   shouldApplyDiffResponse,
-  splitPatchSides,
   summarizeDiff,
   validateCommentDraft,
+  writeFileTreeCollapsed,
+  type PreferenceStore,
 } from './diff-model';
 
 function makeFile(overrides: Partial<DiffFile> & { path: string }): DiffFile {
@@ -28,45 +29,16 @@ function makeFile(overrides: Partial<DiffFile> & { path: string }): DiffFile {
   };
 }
 
-const MODIFIED_PATCH = [
-  'diff --git a/src/a.ts b/src/a.ts',
-  'index 1111111..2222222 100644',
-  '--- a/src/a.ts',
-  '+++ b/src/a.ts',
-  '@@ -3,3 +3,4 @@ export function a() {',
-  ' const one = 1;',
-  '-const two = 2;',
-  '+const two = 22;',
-  '+const three = 3;',
-  ' const four = 4;',
-  '@@ -10,2 +11,2 @@',
-  '-const ten = 10;',
-  '+const ten = 100;',
-  ' const eleven = 11;',
-  '',
-].join('\n');
-
-const UNTRACKED_PATCH = [
-  'diff --git a/notes.md b/notes.md',
-  'new file mode 100644',
-  '--- /dev/null',
-  '+++ b/notes.md',
-  '@@ -0,0 +1,2 @@',
-  '+hello',
-  '+world',
-  '',
-].join('\n');
-
-const DELETED_PATCH = [
-  'diff --git a/old.txt b/old.txt',
-  'deleted file mode 100644',
-  '--- a/old.txt',
-  '+++ /dev/null',
-  '@@ -1,2 +0,0 @@',
-  '-first',
-  '-second',
-  '',
-].join('\n');
+/** A `Storage` stand-in for the preference helpers. */
+function memoryStore(): PreferenceStore {
+  const entries = new Map<string, string>();
+  return {
+    getItem: (key) => entries.get(key) ?? null,
+    setItem: (key, value) => {
+      entries.set(key, value);
+    },
+  };
+}
 
 describe('buildDiffTree', () => {
   it('groups files by directory with the worktree root first', () => {
@@ -193,80 +165,34 @@ describe('validateCommentDraft', () => {
   });
 });
 
-describe('splitPatchSides', () => {
-  it('rebuilds both sides and keeps real file line numbers', () => {
-    const sides = splitPatchSides(MODIFIED_PATCH);
+describe('file tree preference', () => {
+  it('defaults to expanded and remembers a collapse', () => {
+    const storage = memoryStore();
 
-    expect(sides).not.toBeNull();
-    expect(sides?.oldText.split('\n')).toEqual([
-      'const one = 1;',
-      'const two = 2;',
-      'const four = 4;',
-      'const ten = 10;',
-      'const eleven = 11;',
-    ]);
-    expect(sides?.newText.split('\n')).toEqual([
-      'const one = 1;',
-      'const two = 22;',
-      'const three = 3;',
-      'const four = 4;',
-      'const ten = 100;',
-      'const eleven = 11;',
-    ]);
-    expect(sides?.oldLineNumbers).toEqual([3, 4, 5, 10, 11]);
-    expect(sides?.newLineNumbers).toEqual([3, 4, 5, 6, 11, 12]);
+    expect(readFileTreeCollapsed(storage)).toBe(false);
+    writeFileTreeCollapsed(storage, true);
+    expect(readFileTreeCollapsed(storage)).toBe(true);
+    writeFileTreeCollapsed(storage, false);
+    expect(readFileTreeCollapsed(storage)).toBe(false);
   });
 
-  it('maps rendered lines back to the file', () => {
-    const sides = splitPatchSides(MODIFIED_PATCH);
+  it('forgets the preference when storage is missing or throws', () => {
+    const broken: PreferenceStore = {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('blocked');
+      },
+    };
 
-    expect(fileLineForRenderedLine(sides, 'new', 4)).toBe(6);
-    expect(fileLineForRenderedLine(sides, 'new', 6)).toBe(12);
-    expect(fileLineForRenderedLine(sides, 'old', 2)).toBe(4);
-    expect(fileLineForRenderedLine(sides, 'old', 5)).toBe(11);
-  });
-
-  it('renders an untracked file as an empty old side', () => {
-    const sides = splitPatchSides(UNTRACKED_PATCH);
-
-    expect(sides?.oldText).toBe('');
-    expect(sides?.newText).toBe('hello\nworld');
-    expect(sides?.newLineNumbers).toEqual([1, 2]);
-  });
-
-  it('renders a deleted file as an empty new side', () => {
-    const sides = splitPatchSides(DELETED_PATCH);
-
-    expect(sides?.oldText).toBe('first\nsecond');
-    expect(sides?.newText).toBe('');
-    expect(sides?.oldLineNumbers).toEqual([1, 2]);
-  });
-
-  it('returns null when there is no patch to render', () => {
-    expect(splitPatchSides(null)).toBeNull();
-    expect(splitPatchSides(undefined)).toBeNull();
-    expect(splitPatchSides('')).toBeNull();
-    expect(splitPatchSides('diff --git a/x b/x\nBinary files a/x and b/x differ\n')).toBeNull();
-  });
-
-  it('skips the no-newline marker', () => {
-    const patch = [
-      '--- a/x.txt',
-      '+++ b/x.txt',
-      '@@ -1 +1 @@',
-      '-old',
-      '+new',
-      '\\ No newline at end of file',
-      '',
-    ].join('\n');
-    const sides = splitPatchSides(patch);
-
-    expect(sides?.oldText).toBe('old');
-    expect(sides?.newText).toBe('new');
-    expect(sides?.newLineNumbers).toEqual([1]);
-  });
-
-  it('falls back to the rendered line when there is no side to map', () => {
-    expect(fileLineForRenderedLine(null, 'new', 7)).toBe(7);
+    expect(readFileTreeCollapsed(null)).toBe(false);
+    expect(readFileTreeCollapsed(broken)).toBe(false);
+    expect(() => {
+      writeFileTreeCollapsed(broken, true);
+    }).not.toThrow();
+    expect(() => {
+      writeFileTreeCollapsed(null, true);
+    }).not.toThrow();
   });
 });
