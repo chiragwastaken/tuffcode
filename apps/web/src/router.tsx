@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { AppShell } from './components/AppShell';
 import { EmptyWorkspace } from './components/EmptyWorkspace';
 import { ThreadPlaceholder } from './components/thread/ThreadPlaceholder';
+import { SettingsPage } from './routes/settings/settings-page';
 import { useAppStore } from './store/app-store';
 
 function WorkspaceIndex() {
@@ -56,22 +57,7 @@ function ThreadView() {
 function SettingsView() {
   const { section } = settingsRoute.useParams();
 
-  return (
-    <div className="h-full overflow-auto p-6">
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
-        <div>
-          <h1 className="text-lg font-semibold">Settings</h1>
-          <p className="text-xs text-muted-foreground">
-            Section: <span className="tabular-nums">{section ?? 'general'}</span>
-          </p>
-        </div>
-        <EmptyState
-          title="Settings forms are not built yet"
-          description="Provider, model, permission, and appearance settings arrive in a later slice."
-        />
-      </div>
-    </div>
-  );
+  return <SettingsPage section={section} />;
 }
 
 function NotFound() {
