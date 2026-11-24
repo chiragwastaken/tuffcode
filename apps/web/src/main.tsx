@@ -1,35 +1,21 @@
 // oxlint-disable-next-line import/no-unassigned-import -- the renderer stylesheet is a global side effect
 import './styles/theme.css';
+// oxlint-disable-next-line import/no-unassigned-import -- appearance variables and panel motion
+import './styles/appearance.css';
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Toaster, toast } from 'sonner';
+import { applyAppearance, applyTheme } from './components/settings/appearance';
 import { createRpcClient, type RpcClient } from './rpc/client';
 import { RpcProvider } from './rpc/rpc-context';
 import { router } from './router';
 import { useAppStore } from './store/app-store';
 import type { BootstrapInfo } from './types';
 
-type Theme = 'dark' | 'light' | 'system';
-
 const container = document.getElementById('root');
 if (!container) throw new Error('Missing #root element.');
 const root = createRoot(container);
-
-function resolveTheme(theme: Theme): 'dark' | 'light' {
-  if (theme !== 'system') return theme;
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
-function applyTheme(theme: Theme): void {
-  const element = document.documentElement;
-  element.classList.add('no-transitions');
-  element.dataset.theme = resolveTheme(theme);
-  window.tuffcode.setTheme(theme);
-  requestAnimationFrame(() => {
-    element.classList.remove('no-transitions');
-  });
-}
 
 function wireClient(client: RpcClient): void {
   client.onStatus((status) => {
@@ -43,6 +29,7 @@ function wireClient(client: RpcClient): void {
     } else if (event.type === 'settings.updated') {
       state.setSettings(event.payload);
       applyTheme(event.payload.theme);
+      applyAppearance(event.payload);
     } else if (event.type === 'providers.updated') {
       useAppStore.setState({ providers: event.payload });
     }
@@ -77,7 +64,9 @@ async function boot(): Promise<void> {
     loadError = error;
   }
 
-  applyTheme(useAppStore.getState().settings?.theme ?? 'dark');
+  const storedSettings = useAppStore.getState().settings;
+  applyTheme(storedSettings?.theme ?? 'dark');
+  if (storedSettings) applyAppearance(storedSettings);
 
   root.render(
     <StrictMode>

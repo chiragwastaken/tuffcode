@@ -1,35 +1,78 @@
 import { EmptyState, ScrollArea, buttonVariants, cn } from '@tuffcode/ui';
-import { Link, useRouterState } from '@tanstack/react-router';
-import { Boxes, Info, Keyboard, Server, SlidersHorizontal } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
 import {
+  Activity,
+  Boxes,
+  Brain,
+  Info,
+  Keyboard,
+  Palette,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  SquareTerminal,
+  Table2,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
+import {
+  SETTINGS_SECTION_LABEL,
   SETTINGS_SECTIONS,
   parseSettingsSection,
   type SettingsSection,
 } from '../../components/settings/settings-section';
 import { AboutSection } from './about-section';
-import { GeneralSection } from './general-section';
+import { AgentsSection } from './agents-section';
+import { AppearanceSection } from './appearance-section';
+import { BrainSection } from './brain-section';
+import { CapabilitiesSection } from './capabilities-section';
+import { DiagnosticsSection } from './diagnostics-section';
 import { KeybindingsSection } from './keybindings-section';
 import { ModelsSection } from './models-section';
+import { PermissionsSection } from './permissions-section';
 import { ProvidersSection } from './providers-section';
+import { TerminalSection } from './terminal-section';
+import { UpdatesSection } from './updates-section';
 
-const SECTION_META = {
-  general: { label: 'General', icon: SlidersHorizontal },
-  providers: { label: 'Providers', icon: Server },
-  models: { label: 'Models', icon: Boxes },
-  keybindings: { label: 'Keybindings', icon: Keyboard },
-  about: { label: 'About', icon: Info },
-} satisfies Record<SettingsSection, { label: string; icon: typeof SlidersHorizontal }>;
+const SECTION_ICON: Record<SettingsSection, LucideIcon> = {
+  appearance: Palette,
+  providers: Server,
+  models: Boxes,
+  agents: Wrench,
+  permissions: ShieldCheck,
+  terminal: SquareTerminal,
+  brain: Brain,
+  updates: RefreshCw,
+  diagnostics: Activity,
+  keybindings: Keyboard,
+  capabilities: Table2,
+  about: Info,
+};
 
 function renderSection(section: SettingsSection) {
   switch (section) {
-    case 'general':
-      return <GeneralSection />;
+    case 'appearance':
+      return <AppearanceSection />;
     case 'providers':
       return <ProvidersSection />;
     case 'models':
       return <ModelsSection />;
+    case 'agents':
+      return <AgentsSection />;
+    case 'permissions':
+      return <PermissionsSection />;
+    case 'terminal':
+      return <TerminalSection />;
+    case 'brain':
+      return <BrainSection />;
+    case 'updates':
+      return <UpdatesSection />;
+    case 'diagnostics':
+      return <DiagnosticsSection />;
     case 'keybindings':
       return <KeybindingsSection />;
+    case 'capabilities':
+      return <CapabilitiesSection />;
     case 'about':
       return <AboutSection />;
   }
@@ -41,23 +84,17 @@ export interface SettingsPageProps {
 
 export function SettingsPage({ section }: SettingsPageProps) {
   const parsed = parseSettingsSection(section);
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
 
   return (
     <div className="flex h-full min-h-0">
       <nav
         aria-label="Settings sections"
-        className="flex w-56 shrink-0 flex-col gap-1 border-r border-border p-3"
+        className="flex w-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-3"
       >
         <h1 className="px-2 pb-2 text-sm font-semibold text-foreground">Settings</h1>
         {SETTINGS_SECTIONS.map((id) => {
-          const meta = SECTION_META[id];
-          const Icon = meta.icon;
-          const path = `/settings/${id}`;
-          const active =
-            pathname === path ||
-            pathname === `${path}/` ||
-            (id === 'general' && (pathname === '/settings' || pathname === '/settings/'));
+          const Icon = SECTION_ICON[id];
+          const active = parsed === id;
 
           return (
             <Link
@@ -73,14 +110,14 @@ export function SettingsPage({ section }: SettingsPageProps) {
               )}
             >
               <Icon strokeWidth={1.75} className="size-4 shrink-0" />
-              {meta.label}
+              <span className="truncate">{SETTINGS_SECTION_LABEL[id]}</span>
             </Link>
           );
         })}
       </nav>
 
       <ScrollArea className="h-full min-w-0 flex-1">
-        <div className="mx-auto w-full max-w-3xl p-6">
+        <div className="mx-auto w-full max-w-[760px] p-6">
           {parsed ? (
             renderSection(parsed)
           ) : (
@@ -90,10 +127,10 @@ export function SettingsPage({ section }: SettingsPageProps) {
               action={
                 <Link
                   to="/settings/{-$section}"
-                  params={{}}
+                  params={{ section: 'appearance' }}
                   className={buttonVariants({ variant: 'secondary', size: 'sm' })}
                 >
-                  Go to General
+                  Go to Appearance
                 </Link>
               }
             />
