@@ -42,6 +42,10 @@ the project uses semantic versioning.
 - Interactive brain graph and a memory search tool.
 - Light mode caption buttons and window chrome follow the theme.
 - Sidebar lists projects and threads only.
+- Slash commands now execute real services: /model, /plan, /council, /subagent, /prompt,
+  /context, /agents, /clear, /compact, /help.
+- Subagent pane with cards, connector line, tabs and cancel; strip when closed.
+- Council node board with dependency edges and click-through.
 
 ## [0.1.1] - 2026-11-24
 
