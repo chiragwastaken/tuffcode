@@ -6,6 +6,7 @@ import {
   CommandSchema,
   DEFAULT_SETTINGS,
   DiffFileSchema,
+  MessageSchema,
   ModelSchema,
   PROTOCOL_VERSION,
   ProjectSchema,
@@ -27,6 +28,7 @@ import {
   type Command,
   type DiffFile,
   type Goal,
+  type Message,
   type Model,
   type Project,
   type ProviderView,
@@ -209,6 +211,14 @@ const threadEventRow: ThreadEventRow = {
   createdAt: at,
 };
 
+const message: Message = {
+  id: 'm1',
+  threadId: 't1',
+  role: 'user',
+  content: 'hello',
+  createdAt: at,
+};
+
 const adapterEvents: AdapterEvent[] = [
   {
     type: 'session.started',
@@ -303,6 +313,7 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     params: { id: 't1', sinceSeq: 0, limit: 100 },
     result: { events: [threadEventRow], hasMore: false },
   },
+  'messages.list': { params: { threadId: 't1' }, result: [message] },
   'checkpoints.create': {
     params: { threadId: 't1', label: 'before review fixes' },
     result: checkpoint,
@@ -436,6 +447,7 @@ const expectedMethods: RpcMethod[] = [
   'git.commit',
   'git.pr',
   'git.push',
+  'messages.list',
   'models.list',
   'projects.add',
   'projects.list',
@@ -537,8 +549,8 @@ describe('protocol envelope', () => {
 });
 
 describe('rpc methods', () => {
-  it('exposes exactly 47 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(47);
+  it('exposes exactly 48 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(48);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -609,6 +621,8 @@ describe('rpc methods', () => {
       ['providers.test', 'result', { ok: true, detail: 'x', models: 'claude-opus-4-5' }],
       ['providers.login', 'params', { id: '' }],
       ['providers.loginCancel', 'params', { loginId: '' }],
+      ['messages.list', 'params', { threadId: '' }],
+      ['messages.list', 'result', [{ ...message, role: 'bot' }]],
     ];
 
     for (const [method, side, value] of cases) {
@@ -838,6 +852,7 @@ describe('entity schemas', () => {
   it('round-trips every entity fixture', () => {
     expect(ProjectSchema.parse(project)).toEqual(project);
     expect(ThreadSchema.parse(thread)).toEqual(thread);
+    expect(MessageSchema.parse(message)).toEqual(message);
     expect(ProviderViewSchema.parse(provider)).toEqual(provider);
     expect(ModelSchema.parse(model)).toEqual(model);
     expect(BrainEntrySchema.parse(brainEntry)).toEqual(brainEntry);
@@ -854,6 +869,7 @@ describe('entity schemas', () => {
     expect(BrainEntrySchema.safeParse({ ...brainEntry, kind: 'idea' }).success).toBe(false);
     expect(DiffFileSchema.safeParse({ ...diffFile, status: 'unknown' }).success).toBe(false);
     expect(ReviewCommentSchema.safeParse({ ...reviewComment, side: 'both' }).success).toBe(false);
+    expect(MessageSchema.safeParse({ ...message, role: 'bot' }).success).toBe(false);
   });
 
   it('accepts every provider kind including anthropic', () => {
