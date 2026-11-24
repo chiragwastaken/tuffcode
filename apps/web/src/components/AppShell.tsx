@@ -8,7 +8,7 @@ import {
   buttonVariants,
   cn,
 } from '@tuffcode/ui';
-import { ArrowLeft, PanelLeft, PanelRight, Settings, X } from 'lucide-react';
+import { ArrowLeft, PanelLeft, PanelRight, Settings } from 'lucide-react';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
@@ -263,19 +263,11 @@ export function AppShell() {
                 inspectorVisible ? 'flex' : 'hidden',
               )}
             >
-              <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-3 xl:hidden">
-                <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-                  Inspector
-                </span>
-                <IconButton
-                  icon={X}
-                  label="Close inspector"
-                  size="sm"
-                  onClick={() => setInspectorOpen(false)}
-                />
-              </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <InspectorPanel threadId={inspectorThreadId} />
+                <InspectorPanel
+                  threadId={inspectorThreadId}
+                  onCollapse={() => setInspectorOpen(false)}
+                />
               </div>
             </aside>
           </>
