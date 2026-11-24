@@ -9,6 +9,7 @@ import {
   resolveTheme,
   TITLE_BAR_HEIGHT,
   themeChrome,
+  windowChromeOptions,
   type ThemeChromeTarget,
 } from './theme';
 
@@ -51,11 +52,24 @@ function createTarget(): {
   };
 }
 
+/** Mirrors `openDb` in packages/server/src/db/index.ts and the settings migration. */
+function openSettingsDb(file: string): DatabaseSync {
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA journal_mode=WAL;');
+  db.exec(
+    'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  );
+  return db;
+}
+
 function writeTheme(dir: string, theme: string): string {
   const file = join(dir, 'tuffcode.db');
-  const db = new DatabaseSync(file);
-  db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('theme', JSON.stringify(theme));
+  const db = openSettingsDb(file);
+  db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+    'theme',
+    JSON.stringify(theme),
+    new Date().toISOString(),
+  );
   db.close();
   return file;
 }
@@ -82,6 +96,17 @@ describe('theme chrome', () => {
     expect(resolveTheme('light', false)).toBe('light');
     expect(resolveTheme('system', true)).toBe('dark');
     expect(resolveTheme('system', false)).toBe('light');
+  });
+
+  it('builds the window options that paint the chrome at create time', () => {
+    expect(windowChromeOptions('light')).toEqual({
+      backgroundColor: '#ffffff',
+      titleBarOverlay: { color: '#f4f4f5', symbolColor: '#18181b', height: TITLE_BAR_HEIGHT },
+    });
+    expect(windowChromeOptions('dark')).toEqual({
+      backgroundColor: '#000000',
+      titleBarOverlay: { color: '#01000000', symbolColor: '#f8fafc', height: TITLE_BAR_HEIGHT },
+    });
   });
 
   it('repaints the title bar overlay and window background', () => {
@@ -112,10 +137,21 @@ describe('readPersistedTheme', () => {
     expect(readPersistedTheme(join(dir, 'missing.db'))).toBe('dark');
 
     const empty = join(dir, 'empty.db');
-    const db = new DatabaseSync(empty);
-    db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    db.close();
+    openSettingsDb(empty).close();
     expect(readPersistedTheme(empty)).toBe('dark');
+  });
+
+  it('reads a light theme while the server holds a WAL connection open', () => {
+    const file = join(tempDir(), 'tuffcode.db');
+    const server = openSettingsDb(file);
+    server
+      .prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)')
+      .run('theme', JSON.stringify('light'), new Date().toISOString());
+    try {
+      expect(readPersistedTheme(file)).toBe('light');
+    } finally {
+      server.close();
+    }
   });
 
   it('falls back to dark when the stored value is not a theme', () => {

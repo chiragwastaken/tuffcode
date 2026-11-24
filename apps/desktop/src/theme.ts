@@ -10,8 +10,8 @@ export interface ThemeChrome {
   backgroundColor: string;
 }
 
-/** Windows 11 caption buttons need this much height; keep it in sync with the renderer inset. */
-export const TITLE_BAR_HEIGHT = 40;
+/** Matches `--topbar-height` in packages/ui/src/tokens.css so the overlay covers the header. */
+export const TITLE_BAR_HEIGHT = 52;
 
 const CHROME: Record<ResolvedTheme, ThemeChrome> = {
   dark: {
@@ -30,6 +30,24 @@ export function themeChrome(theme: ResolvedTheme): ThemeChrome {
   return CHROME[theme];
 }
 
+export interface WindowChromeOptions {
+  backgroundColor: string;
+  titleBarOverlay: { color: string; symbolColor: string; height: number };
+}
+
+/** The `BrowserWindow` options that paint the native chrome for a theme. */
+export function windowChromeOptions(theme: ResolvedTheme): WindowChromeOptions {
+  const chrome = themeChrome(theme);
+  return {
+    backgroundColor: chrome.backgroundColor,
+    titleBarOverlay: {
+      color: chrome.overlayColor,
+      symbolColor: chrome.symbolColor,
+      height: TITLE_BAR_HEIGHT,
+    },
+  };
+}
+
 /** Resolves the `system` preference against the OS, matching the renderer's resolver. */
 export function resolveTheme(theme: Theme, prefersDark: boolean): ResolvedTheme {
   if (theme !== 'system') return theme;
@@ -44,13 +62,9 @@ export interface ThemeChromeTarget {
 
 /** Paints the native window chrome (title bar overlay and window background) for a theme. */
 export function applyThemeChrome(target: ThemeChromeTarget, theme: ResolvedTheme): void {
-  const chrome = themeChrome(theme);
-  target.setTitleBarOverlay({
-    color: chrome.overlayColor,
-    symbolColor: chrome.symbolColor,
-    height: TITLE_BAR_HEIGHT,
-  });
-  target.setBackgroundColor(chrome.backgroundColor);
+  const { backgroundColor, titleBarOverlay } = windowChromeOptions(theme);
+  target.setTitleBarOverlay(titleBarOverlay);
+  target.setBackgroundColor(backgroundColor);
 }
 
 /**
