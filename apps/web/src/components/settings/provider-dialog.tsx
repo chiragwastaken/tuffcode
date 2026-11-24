@@ -461,15 +461,23 @@ export function ProviderDialog({ open, onOpenChange, provider }: ProviderDialogP
       return;
     }
 
+    const current = activeProviderId
+      ? providers.find((entry) => entry.id === activeProviderId)
+      : undefined;
+    const currentBaseUrl =
+      typeof current?.config.baseUrl === 'string' ? current.config.baseUrl.trim() : '';
+    if (provider && currentBaseUrl && currentBaseUrl !== baseUrl) {
+      setErrors((previous) => ({
+        ...previous,
+        baseUrl: 'Save the provider before detecting models on a different endpoint.',
+      }));
+      return;
+    }
+
     setDetecting(true);
     setServerError(null);
     try {
-      const current = activeProviderId
-        ? providers.find((entry) => entry.id === activeProviderId)
-        : undefined;
       let id = current?.id;
-      const currentBaseUrl =
-        typeof current?.config.baseUrl === 'string' ? current.config.baseUrl.trim() : '';
 
       if (!id || currentBaseUrl !== baseUrl) {
         const payload = buildProviderPayload(draft, {
