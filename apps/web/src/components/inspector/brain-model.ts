@@ -55,20 +55,27 @@ export function brainEntryMeta(entry: BrainEntry): string {
 }
 
 /**
- * Round-trips every field the upsert contract exposes, so a toggle cannot clear
- * data: an omitted projectId would drop a project-scoped entry to global. The
- * repository preserves sourceQuote when it is omitted.
+ * Round-trips every field the upsert contract exposes, so an edit or a toggle
+ * cannot clear data: an omitted projectId would drop a project-scoped entry to
+ * global. The repository preserves sourceQuote when it is omitted.
  */
-export function toggleBrainEntryParams(entry: BrainEntry): RpcParams<'brain.upsert'> {
+export function updateBrainEntryParams(
+  entry: BrainEntry,
+  patch: Partial<Pick<BrainEntry, 'text' | 'tags' | 'importance' | 'active'>>,
+): RpcParams<'brain.upsert'> {
   return {
     id: entry.id,
     kind: entry.kind,
     scope: entry.scope,
     projectId: entry.projectId,
-    text: entry.text,
-    tags: entry.tags,
+    text: patch.text ?? entry.text,
+    tags: patch.tags ?? entry.tags,
     ...(entry.appliesTo === null ? {} : { appliesTo: entry.appliesTo }),
-    importance: entry.importance,
-    active: !entry.active,
+    importance: patch.importance ?? entry.importance,
+    active: patch.active ?? entry.active,
   };
+}
+
+export function toggleBrainEntryParams(entry: BrainEntry): RpcParams<'brain.upsert'> {
+  return updateBrainEntryParams(entry, { active: !entry.active });
 }

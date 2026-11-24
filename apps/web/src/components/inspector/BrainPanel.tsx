@@ -1,28 +1,23 @@
-import type { BrainEntry, BrainKind, BrainSlice } from '@tuffcode/contracts';
-import {
-  Badge,
-  Button,
-  EmptyState,
-  IconButton,
-  Input,
-  ScrollArea,
-  Select,
-  Spinner,
-  Textarea,
-  cn,
-  focusRing,
-} from '@tuffcode/ui';
-import { ChevronRight, RefreshCw, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import type { BrainEntry, BrainKind, BrainSlice, RpcParams, RpcResult } from '@tuffcode/contracts';
+import { Button, IconButton, Input, ScrollArea, Select, Spinner } from '@tuffcode/ui';
+import { Plus, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
+import { BrainAddForm, BrainList, type BrainListRow } from '../brain/BrainList';
+import { BrainDetails, type BrainEntryPatch } from '../brain/BrainDetails';
+import { BrainGraph } from '../brain/BrainGraph';
+import {
+  createDebouncedRunner,
+  filterByKind,
+  sortGraphNodes,
+  type DebouncedRunner,
+} from '../brain/brain-search';
+import type { BrainGraphEdge, BrainGraphNode } from '../brain/graph-layout';
 import {
   BRAIN_KIND_LABEL,
-  CREATABLE_BRAIN_KINDS,
-  brainEntryMeta,
-  isBrainSliceEmpty,
-  sortBrainEntries,
-  summarizeBrainSlice,
+  BRAIN_KINDS,
   toggleBrainEntryParams,
+  updateBrainEntryParams,
 } from './brain-model';
 
 export interface BrainPanelProps {
@@ -30,48 +25,74 @@ export interface BrainPanelProps {
   projectId: string | null;
 }
 
+type MemorySearchEntry = RpcResult<'memory.search'>['entries'][number];
+
 const SEARCH_DEBOUNCE_MS = 150;
 const PREVIEW_DEBOUNCE_MS = 250;
+const PREVIEW_MESSAGE_MAX = 500;
+const ENTRY_LIMIT = 300;
 
-const CREATABLE_OPTIONS = CREATABLE_BRAIN_KINDS.map((kind) => ({
-  value: kind,
-  label: BRAIN_KIND_LABEL[kind],
-}));
+const EMPTY_NODES: readonly BrainGraphNode[] = [];
+const EMPTY_EDGES: readonly BrainGraphEdge[] = [];
+
+const KIND_FILTER_OPTIONS = [
+  { value: 'all', label: 'All kinds' },
+  ...BRAIN_KINDS.map((kind) => ({ value: kind, label: BRAIN_KIND_LABEL[kind] })),
+];
+
+function isBrainKind(value: string): value is BrainKind {
+  return (BRAIN_KINDS as readonly string[]).includes(value);
+}
 
 function brainErrorMessage(cause: unknown): string {
   if (cause instanceof Error && cause.message.length > 0) return cause.message;
   return 'The brain request failed.';
 }
 
+function mergeEntries(groups: readonly BrainEntry[][]): Map<string, BrainEntry> {
+  const byId = new Map<string, BrainEntry>();
+  for (const group of groups) {
+    for (const entry of group) byId.set(entry.id, entry);
+  }
+  return byId;
+}
+
 /**
- * Brain inspector: search and manage the entries the turn runner injects, plus a
- * live preview of the exact slice the next send would carry.
+ * Brain inspector, spec section 7.7: an interactive force graph with a searchable
+ * kind-filtered list on the left and the selected entry's details on the right.
+ * Search runs `memory.search` as you type so the list explains the selector's own
+ * ranking, while the graph and details read from `brain.graph` and `brain.list`.
  */
 export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
   const rpc = useRpc();
 
   const [query, setQuery] = useState('');
-  const [entries, setEntries] = useState<BrainEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [listError, setListError] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<BrainKind | null>(null);
+
+  const [graphNodes, setGraphNodes] = useState<readonly BrainGraphNode[]>(EMPTY_NODES);
+  const [graphEdges, setGraphEdges] = useState<readonly BrainGraphEdge[]>(EMPTY_EDGES);
+  const [entries, setEntries] = useState<Map<string, BrainEntry>>(new Map());
+  const [graphLoading, setGraphLoading] = useState(true);
+  const [graphError, setGraphError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
+  const [searchResults, setSearchResults] = useState<readonly MemorySearchEntry[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [slice, setSlice] = useState<BrainSlice | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const [addOpen, setAddOpen] = useState(false);
   const [addKind, setAddKind] = useState<BrainKind>('rule');
   const [addText, setAddText] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-
-  const [previewMessage, setPreviewMessage] = useState('');
-  const [slice, setSlice] = useState<BrainSlice | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [previewToken, setPreviewToken] = useState(0);
-
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const addTextRef = useRef<HTMLTextAreaElement | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -82,51 +103,122 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
   }, []);
 
   useEffect(() => {
-    const search = query.trim();
     let cancelled = false;
-    const timer = setTimeout(() => {
-      setLoading(true);
-      void rpc
-        .request('brain.list', {
-          ...(search.length === 0 ? {} : { query: search }),
-          includeInactive: true,
-          limit: 100,
-        })
-        .then((rows) => {
-          if (cancelled) return;
-          setEntries(rows);
-          setListError(null);
-        })
-        .catch((cause: unknown) => {
-          if (cancelled) return;
-          setListError(brainErrorMessage(cause));
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    }, SEARCH_DEBOUNCE_MS);
+    setGraphLoading(true);
+    const graphParams: RpcParams<'brain.graph'> = projectId === null ? {} : { projectId };
+    const listParams: RpcParams<'brain.list'> = {
+      includeInactive: true,
+      limit: ENTRY_LIMIT,
+    };
+
+    void Promise.all([
+      rpc.request('brain.graph', graphParams),
+      rpc.request('brain.list', listParams),
+      projectId === null
+        ? Promise.resolve([] as BrainEntry[])
+        : rpc.request('brain.list', { ...listParams, projectId }),
+    ])
+      .then(([graph, allEntries, projectEntries]) => {
+        if (cancelled) return;
+        setGraphNodes(graph.nodes);
+        setGraphEdges(graph.edges);
+        setEntries(mergeEntries([allEntries, projectEntries]));
+        setGraphError(null);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setGraphError(brainErrorMessage(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setGraphLoading(false);
+      });
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
-  }, [rpc, query, reloadToken]);
+  }, [rpc, projectId, reloadToken]);
+
+  const searchTokenRef = useRef(0);
+  const searchRunRef = useRef<(value: string) => void>(() => {});
+  const searchRunnerRef = useRef<DebouncedRunner<string> | null>(null);
+
+  useEffect(() => {
+    const runner = createDebouncedRunner<string>(SEARCH_DEBOUNCE_MS, (value) => {
+      searchRunRef.current(value);
+    });
+    searchRunnerRef.current = runner;
+    return () => {
+      runner.cancel();
+      searchRunnerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    searchRunRef.current = (value: string) => {
+      const token = searchTokenRef.current + 1;
+      searchTokenRef.current = token;
+      const params: RpcParams<'memory.search'> = {
+        query: value,
+        ...(projectId === null ? {} : { projectId }),
+      };
+      void rpc
+        .request('memory.search', params)
+        .then((result) => {
+          if (!mountedRef.current || token !== searchTokenRef.current) return;
+          setSearchResults(result.entries);
+          setSearchError(null);
+        })
+        .catch((cause: unknown) => {
+          if (!mountedRef.current || token !== searchTokenRef.current) return;
+          setSearchResults([]);
+          setSearchError(brainErrorMessage(cause));
+        })
+        .finally(() => {
+          if (mountedRef.current && token === searchTokenRef.current) setSearchLoading(false);
+        });
+    };
+  }, [rpc, projectId]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) {
+      searchRunnerRef.current?.cancel();
+      searchTokenRef.current += 1;
+      setSearchResults([]);
+      setSearchError(null);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    setSearchError(null);
+    searchRunnerRef.current?.schedule(trimmed);
+  }, [query, reloadToken]);
+
+  const selectedEntry = selectedId === null ? null : (entries.get(selectedId) ?? null);
+  const selectedNode = useMemo(
+    () =>
+      selectedId === null ? null : (graphNodes.find((node) => node.id === selectedId) ?? null),
+    [graphNodes, selectedId],
+  );
+
+  const previewMessage = useMemo(() => {
+    const typed = query.trim();
+    const source = typed.length > 0 ? typed : (selectedEntry?.text ?? '');
+    return source.slice(0, PREVIEW_MESSAGE_MAX);
+  }, [query, selectedEntry?.text]);
 
   useEffect(() => {
     if (projectId === null) {
       setSlice(null);
       setPreviewError(null);
+      setPreviewLoading(false);
       return;
     }
     let cancelled = false;
+    setPreviewLoading(true);
     const timer = setTimeout(() => {
-      setPreviewLoading(true);
       void rpc
-        .request('brain.preview', {
-          projectId,
-          threadId,
-          message: previewMessage,
-        })
+        .request('brain.preview', { projectId, threadId, message: previewMessage })
         .then((next) => {
           if (cancelled) return;
           setSlice(next);
@@ -146,30 +238,33 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [rpc, projectId, threadId, previewMessage, previewToken]);
+  }, [rpc, projectId, threadId, previewMessage, reloadToken]);
 
   const refresh = useCallback(() => {
     setReloadToken((token) => token + 1);
-    setPreviewToken((token) => token + 1);
   }, []);
 
-  async function handleAdd(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  const handleSelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    setActionError(null);
+  }, []);
+
+  async function addEntry(): Promise<void> {
     const text = addText.trim();
     if (text.length === 0 || adding) return;
-
     setAdding(true);
     setAddError(null);
     try {
-      await rpc.request('brain.upsert', {
+      const created = await rpc.request('brain.upsert', {
         kind: addKind,
         scope: 'global',
         text,
       });
       if (!mountedRef.current) return;
+      setEntries((current) => new Map(current).set(created.id, created));
       setAddText('');
-      // Reload rather than inserting locally: an active search must not gain a
-      // row it does not match.
+      setAddOpen(false);
+      setSelectedId(created.id);
       refresh();
     } catch (cause) {
       if (mountedRef.current) setAddError(brainErrorMessage(cause));
@@ -178,322 +273,244 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
     }
   }
 
-  async function toggleEntry(entry: BrainEntry): Promise<void> {
-    if (busyId !== null) return;
-    setBusyId(entry.id);
+  async function saveEntry(patch: BrainEntryPatch): Promise<void> {
+    if (selectedEntry === null || busy) return;
+    setBusy(true);
     setActionError(null);
     try {
-      const updated = await rpc.request('brain.upsert', toggleBrainEntryParams(entry));
+      const updated = await rpc.request(
+        'brain.upsert',
+        updateBrainEntryParams(selectedEntry, patch),
+      );
       if (!mountedRef.current) return;
-      setEntries((current) => current.map((row) => (row.id === updated.id ? updated : row)));
-      setPreviewToken((token) => token + 1);
+      setEntries((current) => new Map(current).set(updated.id, updated));
+      refresh();
     } catch (cause) {
       if (mountedRef.current) setActionError(brainErrorMessage(cause));
     } finally {
-      if (mountedRef.current) setBusyId(null);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
-  async function deleteEntry(entry: BrainEntry): Promise<void> {
-    if (busyId !== null) return;
-    setBusyId(entry.id);
+  async function toggleSelected(): Promise<void> {
+    if (selectedEntry === null || busy) return;
+    setBusy(true);
     setActionError(null);
     try {
-      await rpc.request('brain.delete', { id: entry.id });
+      const updated = await rpc.request('brain.upsert', toggleBrainEntryParams(selectedEntry));
       if (!mountedRef.current) return;
-      setEntries((current) => current.filter((row) => row.id !== entry.id));
-      setPendingDeleteId(null);
-      setPreviewToken((token) => token + 1);
+      setEntries((current) => new Map(current).set(updated.id, updated));
+      refresh();
     } catch (cause) {
       if (mountedRef.current) setActionError(brainErrorMessage(cause));
     } finally {
-      if (mountedRef.current) setBusyId(null);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
-  const sorted = sortBrainEntries(entries);
+  async function deleteSelected(): Promise<void> {
+    if (selectedEntry === null || busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await rpc.request('brain.delete', { id: selectedEntry.id });
+      if (!mountedRef.current) return;
+      setEntries((current) => {
+        const next = new Map(current);
+        next.delete(selectedEntry.id);
+        return next;
+      });
+      setSelectedId(null);
+      refresh();
+    } catch (cause) {
+      if (mountedRef.current) setActionError(brainErrorMessage(cause));
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  }
+
   const searching = query.trim().length > 0;
+  const visibleNodes = useMemo(
+    () => filterByKind(sortGraphNodes(graphNodes), kindFilter),
+    [graphNodes, kindFilter],
+  );
+  const visibleResults = useMemo(
+    () => filterByKind(searchResults, kindFilter),
+    [searchResults, kindFilter],
+  );
+
+  // The graph only carries active entries, so inactive rows come from the entry
+  // map; without them deactivating an entry would remove every way to re-enable it.
+  const inactiveRows = useMemo<BrainListRow[]>(() => {
+    const nodeIds = new Set(graphNodes.map((node) => node.id));
+    return [...entries.values()]
+      .filter(
+        (entry) =>
+          !entry.active &&
+          !nodeIds.has(entry.id) &&
+          (entry.projectId === null || entry.projectId === projectId) &&
+          (kindFilter === null || entry.kind === kindFilter),
+      )
+      .toSorted((a, b) => b.importance - a.importance || a.id.localeCompare(b.id))
+      .map((entry) => ({
+        id: entry.id,
+        kind: entry.kind,
+        text: entry.text,
+        importance: entry.importance,
+        active: false,
+      }));
+  }, [entries, graphNodes, projectId, kindFilter]);
+
+  const rows = useMemo<BrainListRow[]>(() => {
+    if (searching) {
+      return visibleResults.map((entry) => ({
+        id: entry.id,
+        kind: entry.kind,
+        text: entry.text,
+        score: entry.score,
+        reason: entry.reason,
+      }));
+    }
+    const graphRows = visibleNodes.map((node) => ({
+      id: node.id,
+      kind: node.kind,
+      text: node.label,
+      importance: node.importance,
+      degree: node.degree,
+    }));
+    return [...graphRows, ...inactiveRows];
+  }, [searching, visibleResults, visibleNodes, inactiveRows]);
+
+  const searchHit = useMemo(
+    () =>
+      selectedId === null ? null : (searchResults.find((entry) => entry.id === selectedId) ?? null),
+    [searchResults, selectedId],
+  );
 
   return (
     <section
       aria-label="Brain"
       data-testid="brain-panel"
-      className="flex h-full min-h-0 flex-col bg-background text-foreground"
+      className="@container flex h-full min-h-0 flex-col bg-background text-foreground"
     >
-      <div className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="flex h-[var(--row-height)] shrink-0 items-center gap-1.5 border-b border-border px-2">
         <Input
           type="search"
-          className="h-8 text-xs"
-          placeholder="Search brain"
+          className="h-7 text-xs"
+          placeholder="Search memories"
           aria-label="Search brain entries"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
         <IconButton
           icon={RefreshCw}
-          label="Refresh brain entries"
+          label="Refresh brain"
           size="sm"
-          disabled={loading}
+          disabled={graphLoading}
           onClick={refresh}
         />
       </div>
 
-      {listError ? (
-        <p role="alert" className="shrink-0 border-b border-border px-3 py-2 text-xs text-error">
-          {listError}
-        </p>
-      ) : null}
-      {actionError ? (
-        <p role="alert" className="shrink-0 border-b border-border px-3 py-2 text-xs text-error">
-          {actionError}
-        </p>
-      ) : null}
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col">
-          <form
-            onSubmit={(event) => void handleAdd(event)}
-            className="flex flex-col gap-1.5 border-b border-border px-3 py-2"
+      <div className="relative flex min-h-0 flex-1">
+        {selectedId !== null ? null : (
+          <aside
+            aria-label="Brain list"
+            className="flex w-[172px] shrink-0 flex-col border-r border-border"
           >
-            <Textarea
-              ref={addTextRef}
-              rows={2}
-              className="min-h-0 text-xs"
-              aria-label="New brain entry"
-              placeholder="Add a rule or preference for every thread"
-              value={addText}
-              onChange={(event) => setAddText(event.target.value)}
-            />
-            <div className="flex items-center gap-1.5">
-              <div className="w-28 shrink-0">
+            <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-1.5">
+              <div className="min-w-0 flex-1">
                 <Select
-                  aria-label="New entry kind"
-                  className="h-8 text-xs"
-                  options={CREATABLE_OPTIONS}
-                  value={addKind}
+                  aria-label="Filter by kind"
+                  className="h-6 text-2xs"
+                  options={KIND_FILTER_OPTIONS}
+                  value={kindFilter ?? 'all'}
                   onValueChange={(value) => {
-                    if (value === 'rule' || value === 'preference') setAddKind(value);
+                    setKindFilter(
+                      value === null || value === 'all' || !isBrainKind(value) ? null : value,
+                    );
                   }}
                 />
               </div>
-              <Button
-                type="submit"
+              <IconButton
+                icon={Plus}
+                label={addOpen ? 'Close new entry form' : 'Add brain entry'}
                 size="sm"
-                variant="primary"
-                disabled={adding || addText.trim().length === 0}
-              >
-                {adding ? <Spinner size="sm" label="Adding entry" /> : null}
-                Add
-              </Button>
-            </div>
-            {addError ? (
-              <p role="alert" className="text-2xs text-error">
-                {addError}
-              </p>
-            ) : null}
-          </form>
-
-          <section aria-label="Injection preview" className="border-b border-border">
-            <button
-              type="button"
-              aria-expanded={previewOpen}
-              onClick={() => setPreviewOpen((open) => !open)}
-              className={cn(
-                'flex h-9 w-full items-center gap-2 px-3 text-left',
-                'transition-colors duration-150 ease-out hover:bg-accent',
-                focusRing,
-              )}
-            >
-              <ChevronRight
-                aria-hidden="true"
-                strokeWidth={1.75}
-                className={cn(
-                  'size-3.5 shrink-0 text-muted-foreground transition-transform duration-150',
-                  previewOpen && 'rotate-90',
-                )}
+                aria-expanded={addOpen}
+                onClick={() => setAddOpen((open) => !open)}
               />
-              <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-                Injection preview
-              </span>
-              {previewLoading ? <Spinner size="sm" label="Loading preview" /> : null}
-              {slice ? (
-                <span className="ml-auto text-2xs tabular-nums text-muted-foreground">
-                  {summarizeBrainSlice(slice)}
-                </span>
-              ) : null}
-            </button>
-            {previewOpen ? (
-              <div className="flex flex-col gap-2 px-3 pb-2">
-                <Input
-                  className="h-8 text-xs"
-                  aria-label="Preview message"
-                  placeholder="Preview with a draft message"
-                  value={previewMessage}
-                  onChange={(event) => setPreviewMessage(event.target.value)}
-                />
-                {projectId === null ? (
-                  <p className="text-2xs leading-5 text-muted-foreground">
-                    Open a thread to preview the injection for its project.
-                  </p>
-                ) : previewError ? (
-                  <p role="alert" className="text-2xs text-error">
-                    {previewError}
-                  </p>
-                ) : slice === null ? (
-                  <p className="text-2xs leading-5 text-muted-foreground">
-                    {previewLoading ? 'Loading preview…' : 'No preview available.'}
-                  </p>
-                ) : isBrainSliceEmpty(slice) ? (
-                  <p className="text-2xs leading-5 text-muted-foreground">
-                    Nothing is injected for this message.
-                  </p>
-                ) : (
-                  <PreviewGroups slice={slice} />
-                )}
-              </div>
+            </div>
+
+            {addOpen ? (
+              <BrainAddForm
+                kind={addKind}
+                text={addText}
+                adding={adding}
+                error={addError}
+                onKindChange={setAddKind}
+                onTextChange={setAddText}
+                onSubmit={() => void addEntry()}
+                onCancel={() => setAddOpen(false)}
+              />
             ) : null}
-          </section>
 
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-              Entries
-            </span>
-            <span className="text-2xs tabular-nums text-muted-foreground">{entries.length}</span>
-            {loading ? <Spinner size="sm" label="Loading brain entries" /> : null}
-          </div>
+            <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-2xs text-muted-foreground">
+              <span>{searching ? 'Results' : 'Entries'}</span>
+              <span className="tabular-nums">{rows.length}</span>
+              {searchLoading ? <Spinner size="sm" label="Searching memories" /> : null}
+            </div>
 
-          {sorted.length === 0 ? (
-            <div className="px-3 py-3">
-              <EmptyState
-                variant="inline"
-                title={searching ? 'No entries match that search.' : 'No brain entries yet.'}
-                action={
-                  searching ? (
-                    <Button size="sm" variant="secondary" onClick={() => setQuery('')}>
-                      Clear search
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => addTextRef.current?.focus()}
-                    >
-                      Add entry
-                    </Button>
-                  )
+            <ScrollArea className="min-h-0 flex-1">
+              <BrainList
+                rows={rows}
+                loading={searching ? searchLoading : graphLoading}
+                error={searching ? searchError : graphError}
+                searching={searching}
+                selectedId={selectedId}
+                emptyAction={
+                  <Button size="sm" variant="secondary" onClick={() => setAddOpen(true)}>
+                    Add
+                  </Button>
                 }
-                className="w-full"
+                onSelect={handleSelect}
+                onClearSearch={() => setQuery('')}
               />
-            </div>
-          ) : (
-            <ul
-              aria-label="Brain entries"
-              className="divide-y divide-border border-t border-border"
-            >
-              {sorted.map((entry) => (
-                <li key={entry.id} className="flex flex-col gap-1.5 px-3 py-2">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <Badge variant={entry.active ? 'primary' : 'neutral'} size="sm">
-                      {BRAIN_KIND_LABEL[entry.kind]}
-                    </Badge>
-                    <span className="truncate text-2xs text-muted-foreground">
-                      {brainEntryMeta(entry)}
-                    </span>
-                    <span className="ml-auto shrink-0 text-2xs text-muted-foreground">
-                      {entry.active ? 'Active' : 'Off'}
-                    </span>
-                  </div>
-                  <p
-                    className={cn(
-                      'text-xs leading-5 break-words whitespace-pre-wrap',
-                      entry.active ? 'text-foreground' : 'text-muted-foreground',
-                    )}
-                  >
-                    {entry.text}
-                  </p>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busyId !== null}
-                      onClick={() => void toggleEntry(entry)}
-                    >
-                      {entry.active ? 'Deactivate' : 'Activate'}
-                    </Button>
-                    {pendingDeleteId === entry.id ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={busyId !== null}
-                          onClick={() => void deleteEntry(entry)}
-                        >
-                          {busyId === entry.id ? (
-                            <Spinner size="sm" label="Deleting entry" />
-                          ) : null}
-                          Delete
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busyId !== null}
-                          onClick={() => setPendingDeleteId(null)}
-                        >
-                          Cancel
-                        </Button>
-                      </>
-                    ) : (
-                      <IconButton
-                        icon={Trash2}
-                        label={`Delete ${BRAIN_KIND_LABEL[entry.kind].toLowerCase()} entry`}
-                        size="sm"
-                        className="ml-auto"
-                        disabled={busyId !== null}
-                        onClick={() => setPendingDeleteId(entry.id)}
-                      />
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+            </ScrollArea>
+          </aside>
+        )}
+
+        <div className="min-w-0 flex-1">
+          <BrainGraph
+            nodes={visibleNodes}
+            edges={graphEdges}
+            selectedId={selectedId}
+            loading={graphLoading}
+            error={graphError}
+            onSelect={handleSelect}
+            onRetry={refresh}
+          />
         </div>
-      </ScrollArea>
+
+        {selectedId === null ? null : (
+          <BrainDetails
+            entry={selectedEntry}
+            node={selectedNode}
+            slice={slice}
+            previewMessage={previewMessage}
+            previewLoading={previewLoading}
+            previewError={previewError}
+            searchHit={
+              searchHit === null ? null : { score: searchHit.score, reason: searchHit.reason }
+            }
+            busy={busy}
+            actionError={actionError}
+            onRefresh={refresh}
+            onClose={() => handleSelect(null)}
+            onSave={(patch) => void saveEntry(patch)}
+            onToggle={() => void toggleSelected()}
+            onDelete={() => void deleteSelected()}
+          />
+        )}
+      </div>
     </section>
-  );
-}
-
-function PreviewGroups({ slice }: { slice: BrainSlice }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {slice.always.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          <span className="text-2xs font-medium text-muted-foreground">Always</span>
-          <PreviewEntries entries={slice.always} />
-        </div>
-      ) : null}
-      {slice.retrieved.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          <span className="text-2xs font-medium text-muted-foreground">Retrieved</span>
-          <PreviewEntries entries={slice.retrieved} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PreviewEntries({ entries }: { entries: readonly BrainEntry[] }) {
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {entries.map((entry) => (
-        <li
-          key={entry.id}
-          className="truncate rounded-sm bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground"
-          title={entry.text}
-        >
-          <span className="text-foreground">{BRAIN_KIND_LABEL[entry.kind]}</span> {entry.text}
-        </li>
-      ))}
-    </ul>
   );
 }
