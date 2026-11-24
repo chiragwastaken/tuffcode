@@ -24,7 +24,7 @@ export function AgentsSection() {
   }
 
   return (
-    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+    <form className="flex flex-1 flex-col gap-4" onSubmit={handleSubmit}>
       <SettingsSectionHeader
         title="Agents and tools"
         description="What the built-in harness may call in a thread, how long it may keep calling, and the shell it runs commands in. Vendor CLIs keep their own tool sets."
