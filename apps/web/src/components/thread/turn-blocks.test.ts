@@ -1,0 +1,296 @@
+import type { AdapterEvent, ThreadEventRow } from '@tuffcode/contracts';
+import { describe, expect, it } from 'vitest';
+import { groupTimeline } from './grouping';
+import {
+  blockCopyText,
+  formatDuration,
+  groupTurnBlocks,
+  outputTail,
+  toolDetail,
+  toolDiffLines,
+  toolHeadline,
+  toolTarget,
+  toolVerb,
+  type TimelineBlock,
+} from './turn-blocks';
+
+function event(seq: number, payload: AdapterEvent, at: string): ThreadEventRow {
+  return {
+    id: seq + 1,
+    threadId: 'thread-1',
+    seq,
+    type: payload.type,
+    payload,
+    createdAt: `2026-01-01T00:00:${at}.000Z`,
+  };
+}
+
+function blocksOf(events: ThreadEventRow[], supersededTurns?: ReadonlySet<string>) {
+  return groupTurnBlocks(
+    groupTimeline({
+      events,
+      userMessages: [],
+      approvals: {},
+      ...(supersededTurns ? { supersededTurns } : {}),
+    }),
+  );
+}
+
+function toolCall(
+  turnId: string,
+  startSeq: number,
+  id: string,
+  name: string,
+  input: unknown,
+  startedAt: string,
+  finishedAt: string,
+  output = 'ok',
+): ThreadEventRow[] {
+  return [
+    event(startSeq, { type: 'tool.started', turnId, toolCallId: id, name, input }, startedAt),
+    event(
+      startSeq + 1,
+      { type: 'tool.finished', turnId, toolCallId: id, output, isError: false },
+      finishedAt,
+    ),
+  ];
+}
+
+describe('groupTurnBlocks', () => {
+  it('renders reasoning, prose, one tool group, then the closing answer', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Plan ' }, '00'),
+      event(2, { type: 'reasoning.delta', turnId: 'turn-1', text: 'the change' }, '01'),
+      event(3, { type: 'text.delta', turnId: 'turn-1', text: 'First I inspect.' }, '02'),
+      ...toolCall('turn-1', 4, 'c1', 'read', { path: 'src/index.ts' }, '02', '03'),
+      ...toolCall('turn-1', 6, 'c2', 'grep', { pattern: 'answer' }, '03', '04'),
+      event(8, { type: 'text.delta', turnId: 'turn-1', text: 'The answer is 42.' }, '05'),
+      event(9, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '05'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['reasoning', 'prose', 'tools', 'final']);
+    const [reasoning, prose, tools, final] = blocks;
+    if (reasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning block.');
+    expect(reasoning.text).toBe('Plan the change');
+    expect(reasoning.durationMs).toBe(2000);
+    if (prose?.kind !== 'prose') throw new Error('Expected a prose block.');
+    expect(prose.text).toBe('First I inspect.');
+    if (tools?.kind !== 'tools') throw new Error('Expected a tool block.');
+    expect(tools.tools.map((tool) => tool.name)).toEqual(['read', 'grep']);
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.text).toBe('The answer is 42.');
+  });
+
+  it('treats a lone answer with no tools as the final block', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'text.delta', turnId: 'turn-1', text: 'All done.' }, '00'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['final']);
+  });
+
+  it('splits interleaved prose from the answer around each tool run', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Opening the file.' }, '00'),
+      ...toolCall('turn-1', 2, 'c1', 'read', { path: 'a.ts' }, '01', '02'),
+      event(4, { type: 'text.delta', turnId: 'turn-1', text: 'Now searching.' }, '03'),
+      ...toolCall('turn-1', 5, 'c2', 'grep', { pattern: 'todo' }, '04', '05'),
+      event(7, { type: 'text.delta', turnId: 'turn-1', text: 'Found two.' }, '06'),
+      event(8, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '06'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'prose',
+      'tools',
+      'prose',
+      'tools',
+      'final',
+    ]);
+    const texts = blocks.map((block) =>
+      block.kind === 'prose' || block.kind === 'final' ? block.text : null,
+    );
+    expect(texts).toEqual(['Opening the file.', null, 'Now searching.', null, 'Found two.']);
+  });
+
+  it('keeps the user prompt on the final block for retry and edit', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Answer' }, '00'),
+    ]);
+    const final = blocks.at(-1);
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.prompt).toBeNull();
+  });
+
+  it('folds consecutive tools into one group with a combined duration', () => {
+    const blocks = blocksOf([
+      ...toolCall('turn-1', 1, 'c1', 'read', { path: 'a.ts' }, '00', '01'),
+      ...toolCall('turn-1', 3, 'c2', 'bash', { command: 'pnpm test' }, '01', '04'),
+    ]);
+
+    const tools = blocks[0];
+    if (tools?.kind !== 'tools') throw new Error('Expected a tool block.');
+    expect(tools.tools).toHaveLength(2);
+    expect(tools.durationMs).toBe(4000);
+  });
+
+  it('drops superseded turns from the rendered blocks', () => {
+    const blocks = blocksOf(
+      [
+        event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Old answer' }, '00'),
+        event(2, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '00'),
+        event(3, { type: 'text.delta', turnId: 'turn-2', text: 'New answer' }, '01'),
+      ],
+      new Set(['turn-1']),
+    );
+
+    expect(blocks).toHaveLength(1);
+    const final = blocks[0];
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.text).toBe('New answer');
+  });
+
+  it('strips the prose the server folded into the persisted answer', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Prose. ' }, '00'),
+        ...toolCall('turn-1', 2, 'c1', 'read', { path: 'a.ts' }, '01', '02'),
+        event(4, { type: 'text.delta', turnId: 'turn-1', text: 'Final.' }, '03'),
+        event(5, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '03'),
+      ],
+      messages: [
+        {
+          id: 'msg_turn-1_assistant',
+          threadId: 'thread-1',
+          role: 'assistant',
+          content: 'Prose. Final.',
+          createdAt: '2026-01-01T00:00:04.000Z',
+        },
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const blocks = groupTurnBlocks(items);
+    expect(blocks.map((block) => block.kind)).toEqual(['prose', 'tools', 'final']);
+    const final = blocks.at(-1);
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.text).toBe('Final.');
+  });
+});
+
+describe('formatDuration', () => {
+  it('formats sub-second, second, minute and hour spans', () => {
+    expect(formatDuration(null)).toBe('');
+    expect(formatDuration(0)).toBe('<1s');
+    expect(formatDuration(999)).toBe('<1s');
+    expect(formatDuration(1000)).toBe('1s');
+    expect(formatDuration(1500)).toBe('2s');
+    expect(formatDuration(59_500)).toBe('1m');
+    expect(formatDuration(65_000)).toBe('1m 5s');
+    expect(formatDuration(3_600_000)).toBe('1h');
+    expect(formatDuration(3_900_000)).toBe('1h 5m');
+  });
+});
+
+describe('toolTarget', () => {
+  it('prefers a path, then the first line of a command, then a pattern', () => {
+    expect(toolTarget({ path: 'src/index.ts', content: 'x' })).toBe('src/index.ts');
+    expect(toolTarget({ file_path: 'docs/readme.md' })).toBe('docs/readme.md');
+    expect(toolTarget({ command: 'git status\n  && git diff' })).toBe('git status');
+    expect(toolTarget({ pattern: 'TODO' })).toBe('TODO');
+  });
+
+  it('falls back to a short string and ignores empty input', () => {
+    expect(toolTarget({ description: 'List the files' })).toBe('List the files');
+    expect(toolTarget('echo hello')).toBe('echo hello');
+    expect(toolTarget(null)).toBe('');
+    expect(toolTarget({})).toBe('');
+  });
+});
+
+describe('toolHeadline and toolVerb', () => {
+  it('names the action before the target', () => {
+    expect(toolVerb('read')).toBe('Read');
+    expect(toolVerb('write_file')).toBe('Wrote');
+    expect(toolVerb('bash')).toBe('Ran');
+    expect(toolVerb('grep')).toBe('Searched');
+    expect(toolVerb('custom_tool')).toBe('Used custom tool');
+    expect(toolHeadline('bash', { command: 'pnpm test' })).toBe('Ran pnpm test');
+    expect(toolHeadline('grep', {})).toBe('Searched');
+  });
+});
+
+describe('toolDetail', () => {
+  it('routes edit and write to a diff, grep to matches, everything else to output', () => {
+    expect(toolDetail('edit')).toBe('diff');
+    expect(toolDetail('write_file')).toBe('diff');
+    expect(toolDetail('apply_patch')).toBe('diff');
+    expect(toolDetail('grep')).toBe('matches');
+    expect(toolDetail('bash')).toBe('output');
+  });
+});
+
+describe('toolDiffLines', () => {
+  it('marks a write body as added lines', () => {
+    expect(toolDiffLines({ path: 'a.ts', content: 'one\ntwo' })).toEqual([
+      { kind: 'add', text: 'one' },
+      { kind: 'add', text: 'two' },
+    ]);
+  });
+
+  it('renders the replaced fragment as removals then additions', () => {
+    expect(toolDiffLines({ old_string: 'old', new_string: 'new' })).toEqual([
+      { kind: 'remove', text: 'old' },
+      { kind: 'add', text: 'new' },
+    ]);
+  });
+
+  it('parses a unified patch and ignores its file headers', () => {
+    expect(toolDiffLines({ patch: '--- a.ts\n+++ b.ts\n@@ -1 +1 @@\n-old\n+new' })).toEqual([
+      { kind: 'context', text: '@@ -1 +1 @@' },
+      { kind: 'remove', text: 'old' },
+      { kind: 'add', text: 'new' },
+    ]);
+  });
+
+  it('returns nothing for inputs without a change', () => {
+    expect(toolDiffLines({ path: 'a.ts' })).toEqual([]);
+    expect(toolDiffLines(null)).toEqual([]);
+  });
+});
+
+describe('outputTail', () => {
+  it('keeps short output whole and counts the lines it hides', () => {
+    expect(outputTail('a\nb')).toEqual({ lines: ['a', 'b'], hidden: 0 });
+    const long = Array.from({ length: 15 }, (_, index) => `line ${index + 1}`).join('\n');
+    expect(outputTail(long, 12)).toEqual({
+      lines: ['line 4', 'line 5', 'line 6', 'line 7', 'line 8', 'line 9', 'line 10', 'line 11', 'line 12', 'line 13', 'line 14', 'line 15'],
+      hidden: 3,
+    });
+    expect(outputTail('   ')).toEqual({ lines: [], hidden: 0 });
+  });
+});
+
+describe('blockCopyText', () => {
+  it('copies the answer text for a final block', () => {
+    const block: TimelineBlock = {
+      kind: 'final',
+      key: 'final-1',
+      turnId: 'turn-1',
+      text: '# Answer\n\nBody.',
+      streaming: false,
+      prompt: null,
+    };
+    expect(blockCopyText(block)).toBe('# Answer\n\nBody.');
+  });
+
+  it('copies each tool headline with its output', () => {
+    const blocks = blocksOf([
+      ...toolCall('turn-1', 1, 'c1', 'read', { path: 'a.ts' }, '00', '01', 'contents'),
+      ...toolCall('turn-1', 3, 'c2', 'bash', { command: 'pnpm test' }, '01', '02', 'passed'),
+    ]);
+    const tools = blocks[0];
+    if (tools?.kind !== 'tools') throw new Error('Expected a tool block.');
+    expect(blockCopyText(tools)).toBe('Read a.ts\ncontents\n\nRan pnpm test\npassed');
+  });
+});

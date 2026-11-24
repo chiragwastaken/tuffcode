@@ -35,6 +35,7 @@ import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './a
 import {
   addLocalUserMessage,
   failLocalUserMessage,
+  nextLocalUserMessageId,
   resolveLocalUserMessage,
 } from './local-messages';
 import { filterPalette, parseTrigger, triggerInsert, type PaletteKind } from './slash';
@@ -54,13 +55,6 @@ const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
 ];
 
 const MAX_TEXTAREA_HEIGHT = 200;
-
-let localMessageSeq = 0;
-
-function nextLocalMessageId(threadId: string): string {
-  localMessageSeq += 1;
-  return `${threadId}-${Date.now().toString(36)}-${localMessageSeq.toString(36)}`;
-}
 
 export interface ComposerProps {
   thread: Thread | undefined;
@@ -170,7 +164,7 @@ export function Composer({ thread }: ComposerProps) {
     if (!thread || !canSend) return;
     const text = input.trim();
     if (text.length === 0) return;
-    const messageId = nextLocalMessageId(thread.id);
+    const messageId = nextLocalUserMessageId(thread.id);
     addLocalUserMessage({
       id: messageId,
       threadId: thread.id,

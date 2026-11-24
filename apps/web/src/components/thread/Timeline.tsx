@@ -1,66 +1,83 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { MarkdownTheme } from '@tuffcode/ui';
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import { ApprovalCard } from './ApprovalCard';
 import type { TimelineItem, UserItem } from './grouping';
 import {
-  AssistantMessage,
+  FinalAnswer,
   NoticeRow,
+  ProseText,
   ReasoningRow,
-  ToolGroupRow,
-  ToolRow,
+  ToolGroup,
   UserBubble,
 } from './timeline-items';
+import { groupTurnBlocks, type TimelineBlock } from './turn-blocks';
 
 export interface TimelineProps {
   items: TimelineItem[];
   theme: MarkdownTheme;
   threadId: string;
   onRetryUserMessage?: (item: UserItem) => void;
+  onEditUserMessage?: (item: UserItem, text: string) => void;
 }
 
 const BOTTOM_THRESHOLD_PX = 64;
 
-function renderItem(
-  item: TimelineItem,
+function renderBlock(
+  block: TimelineBlock,
   theme: MarkdownTheme,
   threadId: string,
   onRetryUserMessage?: (item: UserItem) => void,
+  onEditUserMessage?: (item: UserItem, text: string) => void,
 ): ReactNode {
-  switch (item.kind) {
+  switch (block.kind) {
     case 'user':
-      return <UserBubble item={item} onRetry={onRetryUserMessage} />;
-    case 'assistant':
-      return <AssistantMessage item={item} theme={theme} />;
+      return <UserBubble item={block.item} onRetry={onRetryUserMessage} />;
     case 'reasoning':
-      return <ReasoningRow item={item} />;
-    case 'tool':
-      return <ToolRow item={item} />;
-    case 'tool-group':
-      return <ToolGroupRow item={item} />;
+      return <ReasoningRow block={block} />;
+    case 'prose':
+      return <ProseText block={block} theme={theme} />;
+    case 'tools':
+      return <ToolGroup block={block} />;
+    case 'final':
+      return (
+        <FinalAnswer
+          block={block}
+          theme={theme}
+          onRetry={onRetryUserMessage}
+          onEdit={onEditUserMessage}
+        />
+      );
     case 'approval':
-      return <ApprovalCard item={item} threadId={threadId} />;
+      return <ApprovalCard item={block.item} threadId={threadId} />;
     case 'notice':
-      return <NoticeRow item={item} />;
+      return <NoticeRow item={block.item} />;
   }
 }
 
-export function Timeline({ items, theme, threadId, onRetryUserMessage }: TimelineProps) {
+export function Timeline({
+  items,
+  theme,
+  threadId,
+  onRetryUserMessage,
+  onEditUserMessage,
+}: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  const blocks = useMemo(() => groupTurnBlocks(items), [items]);
 
   const virtualizer = useVirtualizer({
-    count: items.length,
+    count: blocks.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 64,
     overscan: 8,
-    getItemKey: (index) => items[index]?.key ?? index,
+    getItemKey: (index) => blocks[index]?.key ?? index,
   });
 
   useLayoutEffect(() => {
-    if (items.length === 0 || !pinnedRef.current) return;
-    virtualizer.scrollToIndex(items.length - 1, { align: 'end' });
-  }, [items, virtualizer]);
+    if (blocks.length === 0 || !pinnedRef.current) return;
+    virtualizer.scrollToIndex(blocks.length - 1, { align: 'end' });
+  }, [blocks, virtualizer]);
 
   return (
     <div
@@ -78,8 +95,8 @@ export function Timeline({ items, theme, threadId, onRetryUserMessage }: Timelin
     >
       <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
-          const item = items[virtualRow.index];
-          if (!item) return null;
+          const block = blocks[virtualRow.index];
+          if (!block) return null;
           return (
             <div
               key={virtualRow.key}
@@ -89,7 +106,7 @@ export function Timeline({ items, theme, threadId, onRetryUserMessage }: Timelin
               style={{ transform: `translateY(${virtualRow.start}px)` }}
             >
               <div className="mx-auto w-full max-w-[var(--chat-content-max-width)] px-4">
-                {renderItem(item, theme, threadId, onRetryUserMessage)}
+                {renderBlock(block, theme, threadId, onRetryUserMessage, onEditUserMessage)}
               </div>
             </div>
           );
