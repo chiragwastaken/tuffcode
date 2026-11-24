@@ -3,7 +3,7 @@ import {
   type AdapterLogger,
   type ProviderConfig,
 } from '@tuffcode/contracts';
-import type { ToolSchema } from '@tuffcode/prompt';
+import type { HarnessToolSchema } from '../tool-policy.js';
 import { allowedToolSchemas } from '../tool-policy.js';
 
 export interface AnthropicTextBlock {
@@ -43,6 +43,8 @@ export interface AnthropicRequestBody {
   temperature?: number;
   /** Settings allowlist for this turn; unset offers every harness tool. */
   toolAllowlist?: string[];
+  /** Offer the `subagent` delegation tool for this turn. */
+  subagentTool?: boolean;
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -130,8 +132,11 @@ export function readAnthropicConfig(provider: ProviderConfig): AnthropicClientCo
   };
 }
 
-export function toAnthropicTools(allowlist?: readonly string[]): unknown[] {
-  return allowedToolSchemas(allowlist).map((schema: ToolSchema) => ({
+export function toAnthropicTools(
+  allowlist?: readonly string[],
+  options: { subagent?: boolean } = {},
+): unknown[] {
+  return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
     name: schema.name,
     description: schema.description,
     input_schema: schema.parameters,
@@ -143,7 +148,9 @@ function buildBody(
   request: AnthropicRequestBody,
 ): Record<string, unknown> {
   const system = request.system?.trim() ?? '';
-  const tools = toAnthropicTools(request.toolAllowlist);
+  const tools = toAnthropicTools(request.toolAllowlist, {
+    subagent: request.subagentTool === true,
+  });
   return {
     model: request.model,
     max_tokens: request.max_tokens,

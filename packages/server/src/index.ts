@@ -24,6 +24,9 @@ export * from './providers/service.js';
 export * from './providers/rpc.js';
 export * from './runner/runner.js';
 export * from './runner/rpc.js';
+export * from './subagents/service.js';
+export * from './subagents/rpc.js';
+export * from './subagents/types.js';
 export * from './secrets/bridge.js';
 export * from './server.js';
 

@@ -1,5 +1,5 @@
 import type { AdapterDeps, AdapterEvent, ApprovalChoice, TurnContext } from '@tuffcode/contracts';
-import { TOOL_NAMES, type ToolName } from '@tuffcode/prompt';
+import { TOOL_NAMES, SUBAGENT_TOOL_NAME, type ToolName } from '@tuffcode/prompt';
 import { newId } from '@tuffcode/shared';
 import {
   AnthropicRequestError,
@@ -11,6 +11,7 @@ import {
   streamAnthropicSse,
 } from './client.js';
 import {
+  classifySubagentTool,
   classifyTool,
   executeTool,
   type ToolExecResult,
@@ -117,6 +118,9 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             max_tokens: options.maxTokens,
             ...(system.length > 0 ? { system } : {}),
             ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
+            ...(deps.spawnSubagent !== undefined && ctx.permissionMode !== 'read-only'
+              ? { subagentTool: true }
+              : {}),
           },
           signal,
         );
@@ -325,6 +329,35 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
         let result: ToolExecResult;
         if (parseError !== null) {
           result = { output: parseError, isError: true };
+        } else if (call.name === SUBAGENT_TOOL_NAME) {
+          const decision = classifySubagentTool(ctx.permissionMode);
+          if (decision === 'deny') {
+            result = {
+              output: 'tool is not allowed in ' + ctx.permissionMode + ' mode',
+              isError: true,
+            };
+          } else if (decision === 'approve') {
+            const approvalId = newId('apr');
+            const pending = options.requestApproval(approvalId);
+            yield {
+              type: 'approval.requested',
+              turnId,
+              approvalId,
+              toolCallId,
+              name: call.name,
+              input: args,
+            };
+            const choice = await pending;
+            if (signal.aborted) {
+              result = { output: '[interrupted]', isError: true };
+            } else if (choice === 'deny') {
+              result = { output: 'denied by user', isError: true };
+            } else {
+              result = await executeTool(call.name, args ?? {}, ctx, state, deps);
+            }
+          } else {
+            result = await executeTool(call.name, args ?? {}, ctx, state, deps);
+          }
         } else if (!isToolName(call.name)) {
           result = { output: 'unknown tool: ' + call.name, isError: true };
         } else if (isToolDisabled(call.name, ctx.toolAllowlist)) {

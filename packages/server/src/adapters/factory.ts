@@ -35,6 +35,8 @@ export interface AdapterDepsOptions {
   logger: AdapterLogger;
   resolveCommand?: ResolveCommand;
   env?: NodeJS.ProcessEnv;
+  /** Late-bound so the subagent service can be created after the runner it needs. */
+  spawnSubagent?: AdapterDeps['spawnSubagent'];
 }
 
 /** Filters the environment to string values, which is all an adapter may pass on. */
@@ -52,6 +54,7 @@ export function createAdapterDeps(options: AdapterDepsOptions): AdapterDeps {
     logger: options.logger,
     resolveCommand: options.resolveCommand ?? createResolveCommand(),
     env: adapterEnv(options.env),
+    ...(options.spawnSubagent === undefined ? {} : { spawnSubagent: options.spawnSubagent }),
   };
 }
 
