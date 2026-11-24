@@ -1,13 +1,5 @@
 import type { GoalAutonomy, RpcResult } from '@tuffcode/contracts';
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ScrollArea,
-  Select,
-  Spinner,
-  Textarea,
-} from '@tuffcode/ui';
+import { Badge, Button, EmptyState, ScrollArea, Select, Spinner, Textarea } from '@tuffcode/ui';
 import { Crown, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
@@ -140,13 +132,11 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     return (
       <section
         aria-label="Council"
+        data-testid="council-panel"
         className="flex h-full min-h-0 flex-col bg-background text-foreground"
       >
         <ScrollArea className="min-h-0 flex-1">
-          <form
-            onSubmit={(event) => void handleStart(event)}
-            className="flex flex-col gap-2 p-3"
-          >
+          <form onSubmit={(event) => void handleStart(event)} className="flex flex-col gap-2 p-3">
             <label
               htmlFor="council-goal"
               className="text-2xs font-medium tracking-wide text-muted-foreground uppercase"
@@ -210,6 +200,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   return (
     <section
       aria-label="Council"
+      data-testid="council-panel"
       className="flex h-full min-h-0 flex-col bg-background text-foreground"
     >
       {status === null ? (
@@ -281,12 +272,18 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
           </div>
 
           {error ? (
-            <p role="alert" className="shrink-0 border-b border-border px-3 py-2 text-2xs text-error">
+            <p
+              role="alert"
+              className="shrink-0 border-b border-border px-3 py-2 text-2xs text-error"
+            >
               {error}
             </p>
           ) : null}
           {cancelError ? (
-            <p role="alert" className="shrink-0 border-b border-border px-3 py-2 text-2xs text-error">
+            <p
+              role="alert"
+              className="shrink-0 border-b border-border px-3 py-2 text-2xs text-error"
+            >
               {cancelError}
             </p>
           ) : null}
@@ -306,18 +303,26 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
                   The goal has not split into tasks yet.
                 </p>
               ) : (
-                <ul aria-label="Council tasks" className="divide-y divide-border border-y border-border">
+                <ul
+                  aria-label="Council tasks"
+                  className="divide-y divide-border border-y border-border"
+                >
                   {status.tasks.map((task) => (
                     <li key={task.id} className="flex flex-col gap-1 px-3 py-2">
                       <div className="flex min-w-0 items-center gap-1.5">
                         <Badge variant={TASK_STATE_TONE[task.state]} size="sm">
                           {TASK_STATE_LABEL[task.state]}
                         </Badge>
-                        <span className="min-w-0 flex-1 truncate text-xs font-medium" title={task.title}>
+                        <span
+                          className="min-w-0 flex-1 truncate text-xs font-medium"
+                          title={task.title}
+                        >
                           {task.title}
                         </span>
                         {task.critical ? (
-                          <span className="shrink-0 text-2xs text-warning-foreground">critical</span>
+                          <span className="shrink-0 text-2xs text-warning-foreground">
+                            critical
+                          </span>
                         ) : null}
                         <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
                           round {task.round}

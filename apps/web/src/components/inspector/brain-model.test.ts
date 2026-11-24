@@ -73,7 +73,9 @@ describe('brain entry helpers', () => {
   it('describes scope, applies-to, tags and importance', () => {
     expect(brainEntryMeta(makeEntry())).toBe('global | importance 0.50');
     expect(
-      brainEntryMeta(makeEntry({ scope: 'prj_1', appliesTo: 'plan', tags: 'style', importance: 0.9 })),
+      brainEntryMeta(
+        makeEntry({ scope: 'prj_1', appliesTo: 'plan', tags: 'style', importance: 0.9 }),
+      ),
     ).toBe('prj_1 | plan | style | importance 0.90');
   });
 

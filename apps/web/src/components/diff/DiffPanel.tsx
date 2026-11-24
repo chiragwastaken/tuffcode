@@ -244,6 +244,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
   return (
     <section
       aria-label="Diff"
+      data-testid="diff-panel"
       className="flex h-full min-h-0 flex-col bg-background text-foreground"
     >
       <header className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border px-3">

@@ -131,6 +131,7 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
         })
         .catch((cause: unknown) => {
           if (cancelled) return;
+          setSlice(null);
           setPreviewError(brainErrorMessage(cause));
         })
         .finally(() => {
@@ -181,9 +182,7 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
     try {
       const updated = await rpc.request('brain.upsert', toggleBrainEntryParams(entry));
       if (!mountedRef.current) return;
-      setEntries((current) =>
-        current.map((row) => (row.id === updated.id ? updated : row)),
-      );
+      setEntries((current) => current.map((row) => (row.id === updated.id ? updated : row)));
       setPreviewToken((token) => token + 1);
     } catch (cause) {
       if (mountedRef.current) setActionError(brainErrorMessage(cause));
@@ -215,6 +214,7 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
   return (
     <section
       aria-label="Brain"
+      data-testid="brain-panel"
       className="flex h-full min-h-0 flex-col bg-background text-foreground"
     >
       <div className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border px-3">
@@ -236,18 +236,12 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
       </div>
 
       {listError ? (
-        <p
-          role="alert"
-          className="shrink-0 border-b border-border px-3 py-2 text-xs text-error"
-        >
+        <p role="alert" className="shrink-0 border-b border-border px-3 py-2 text-xs text-error">
           {listError}
         </p>
       ) : null}
       {actionError ? (
-        <p
-          role="alert"
-          className="shrink-0 border-b border-border px-3 py-2 text-xs text-error"
-        >
+        <p role="alert" className="shrink-0 border-b border-border px-3 py-2 text-xs text-error">
           {actionError}
         </p>
       ) : null}
@@ -356,7 +350,10 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
               />
             </div>
           ) : (
-            <ul aria-label="Brain entries" className="divide-y divide-border border-t border-border">
+            <ul
+              aria-label="Brain entries"
+              className="divide-y divide-border border-t border-border"
+            >
               {sorted.map((entry) => (
                 <li key={entry.id} className="flex flex-col gap-1.5 px-3 py-2">
                   <div className="flex min-w-0 items-center gap-1.5">
@@ -396,7 +393,9 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
                           disabled={busyId !== null}
                           onClick={() => void deleteEntry(entry)}
                         >
-                          {busyId === entry.id ? <Spinner size="sm" label="Deleting entry" /> : null}
+                          {busyId === entry.id ? (
+                            <Spinner size="sm" label="Deleting entry" />
+                          ) : null}
                           Delete
                         </Button>
                         <Button

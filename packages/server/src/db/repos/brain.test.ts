@@ -71,7 +71,9 @@ describe('brain repo FTS sync', () => {
 
     expect(ctx.repos.brain.list({})).toHaveLength(0);
     expect(ctx.repos.brain.list({ query: 'pnpm' })).toHaveLength(0);
-    expect(ctx.repos.brain.list({ includeInactive: true }).map((row) => row.id)).toEqual([entry.id]);
+    expect(ctx.repos.brain.list({ includeInactive: true }).map((row) => row.id)).toEqual([
+      entry.id,
+    ]);
     expect(
       ctx.repos.brain.list({ query: 'pnpm', includeInactive: true }).map((row) => row.id),
     ).toEqual([entry.id]);
