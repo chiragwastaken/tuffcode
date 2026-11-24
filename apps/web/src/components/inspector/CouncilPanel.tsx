@@ -1,8 +1,12 @@
-import type { GoalAutonomy, RpcResult } from '@tuffcode/contracts';
-import { Badge, Button, EmptyState, ScrollArea, Select, Spinner, Textarea } from '@tuffcode/ui';
-import { RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import type { GoalAutonomy, RpcResult, Review, Task, TaskState } from '@tuffcode/contracts';
+import { Badge, Button, ScrollArea, Select, Spinner, Textarea } from '@tuffcode/ui';
+import { useNavigate } from '@tanstack/react-router';
+import { RefreshCw, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
+import { useAppStore } from '../../store/app-store';
+import { CouncilBoard } from '../council/CouncilBoard';
+import type { BoardNode } from '../council/council-board';
 import {
   GOAL_STATE_LABEL,
   GOAL_STATE_TONE,
@@ -40,16 +44,18 @@ function isAutonomy(value: unknown): value is GoalAutonomy {
  */
 export function CouncilPanel({ threadId }: CouncilPanelProps) {
   const rpc = useRpc();
+  const navigate = useNavigate();
+  const projectId = useAppStore((state) => state.threads[threadId]?.projectId);
 
   const [goalId, setGoalId] = useState<string | null>(() => rememberedCouncilGoal(threadId));
   const [status, setStatus] = useState<CouncilStatus | null>(null);
+  const [selectedNode, setSelectedNode] = useState<BoardNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollingStopped, setPollingStopped] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   const [goalText, setGoalText] = useState('');
-  const goalRef = useRef<HTMLTextAreaElement | null>(null);
   const [autonomy, setAutonomy] = useState<GoalAutonomy>('manual');
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -83,6 +89,16 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     void load();
   }, [goalId, load, reloadToken]);
 
+  // The board follows events between polls so a state change shows up in the same
+  // frame the server announces it.
+  useEffect(() => {
+    if (goalId === null) return;
+    return rpc.onEvent((event) => {
+      if (event.type !== 'council.updated' || event.payload.goalId !== goalId) return;
+      void load();
+    });
+  }, [goalId, load, rpc]);
+
   const goalState = status?.goal.state;
   useEffect(() => {
     if (goalId === null || pollingStopped) return;
@@ -102,6 +118,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
       const started = await rpc.request('council.start', { threadId, goal, autonomy });
       rememberCouncilGoal(threadId, started.goalId);
       setStatus(null);
+      setSelectedNode(null);
       setError(null);
       setGoalText('');
       setGoalId(started.goalId);
@@ -130,6 +147,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     forgetCouncilGoal(threadId);
     setGoalId(null);
     setStatus(null);
+    setSelectedNode(null);
     setError(null);
     setPollingStopped(false);
     setCancelError(null);
@@ -141,6 +159,21 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     setReloadToken((token) => token + 1);
   }
 
+  function openTaskThread(task: Task): void {
+    if (task.threadId === null || projectId === undefined) return;
+    void navigate({
+      to: '/project/$projectId/thread/$threadId',
+      params: { projectId, threadId: task.threadId },
+    });
+  }
+
+  const selectedReview = useMemo<Review | null>(() => {
+    const taskId = selectedNode?.taskId ?? null;
+    if (taskId === null || status === null) return null;
+    const forTask = status.reviews.filter((review) => review.taskId === taskId);
+    return forTask[forTask.length - 1] ?? null;
+  }, [selectedNode, status]);
+
   if (goalId === null) {
     return (
       <section
@@ -148,7 +181,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
         data-testid="council-panel"
         className="flex h-full min-h-0 flex-col bg-background text-foreground"
       >
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea className="max-h-[55%] shrink-0">
           <form onSubmit={(event) => void handleStart(event)} className="flex flex-col gap-2 p-3">
             <label
               htmlFor="council-goal"
@@ -157,7 +190,6 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
               Goal
             </label>
             <Textarea
-              ref={goalRef}
               id="council-goal"
               rows={4}
               placeholder="What should the council ship?"
@@ -195,20 +227,18 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
               </p>
             ) : null}
           </form>
-
-          <div className="px-3 pb-3">
-            <EmptyState
-              variant="inline"
-              title="No council goal running."
-              action={
-                <Button size="sm" variant="secondary" onClick={() => goalRef.current?.focus()}>
-                  Write a goal
-                </Button>
-              }
-              className="w-full"
-            />
-          </div>
         </ScrollArea>
+
+        <CouncilBoard
+          status={null}
+          selectedNodeId={null}
+          onSelectNode={() => undefined}
+          onOpenTask={() => undefined}
+          onCancel={() => undefined}
+          cancelling={false}
+          canCancel={false}
+          className="min-h-56 flex-1 border-t border-border"
+        />
       </section>
     );
   }
@@ -270,17 +300,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
                 <Button size="sm" variant="outline" onClick={handleNewGoal}>
                   New goal
                 </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={cancelling}
-                  onClick={() => void handleCancel()}
-                >
-                  {cancelling ? <Spinner size="sm" label="Cancelling goal" /> : null}
-                  Cancel
-                </Button>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -300,6 +320,127 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
               {cancelError}
             </p>
           ) : null}
+
+          <CouncilBoard
+            status={status}
+            selectedNodeId={selectedNode?.id ?? null}
+            onSelectNode={setSelectedNode}
+            onOpenTask={openTaskThread}
+            onCancel={() => void handleCancel()}
+            cancelling={cancelling}
+            canCancel={!terminal}
+            className="h-80 shrink-0 border-b border-border"
+          />
+
+          {selectedNode === null ? null : (
+            <div
+              data-testid="council-node-details"
+              data-kind={selectedNode.kind}
+              className="shrink-0 border-b border-border bg-message-surface/40 px-3 py-2"
+            >
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0 text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+                  {selectedNode.kind === 'reviewer' ? 'Review' : selectedNode.kind}
+                </span>
+                <span
+                  className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+                  title={selectedNode.title}
+                >
+                  {selectedNode.kind === 'planner' || selectedNode.kind === 'report'
+                    ? status.goal.text
+                    : selectedNode.title}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Close node details"
+                  onClick={() => setSelectedNode(null)}
+                >
+                  <X strokeWidth={1.75} />
+                </Button>
+              </div>
+
+              {selectedNode.kind === 'planner' ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
+                  <Badge variant={GOAL_STATE_TONE[status.goal.state]} size="sm">
+                    {GOAL_STATE_LABEL[status.goal.state]}
+                  </Badge>
+                  <span>{status.goal.autonomy === 'auto' ? 'Auto' : 'Manual'}</span>
+                  <span className="tabular-nums">
+                    {status.tasks.length} {status.tasks.length === 1 ? 'task' : 'tasks'} planned
+                  </span>
+                  <p className="w-full leading-5">{status.goal.text}</p>
+                </div>
+              ) : null}
+
+              {selectedNode.kind === 'report' ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
+                  <Badge variant={GOAL_STATE_TONE[status.goal.state]} size="sm">
+                    {GOAL_STATE_LABEL[status.goal.state]}
+                  </Badge>
+                  <span className="tabular-nums">
+                    {countFinishedTasks(status.tasks)}/{status.tasks.length} tasks finished
+                  </span>
+                  <span className="tabular-nums">
+                    {status.reviews.filter((review) => review.verdict === 'pass').length} passed
+                  </span>
+                  <span className="tabular-nums">
+                    {
+                      status.reviews.filter((review) => review.verdict === 'changes-requested')
+                        .length
+                    }{' '}
+                    changes
+                  </span>
+                  <span className="tabular-nums">
+                    {status.reviews.filter((review) => review.verdict === 'escalate').length}{' '}
+                    escalated
+                  </span>
+                </div>
+              ) : null}
+
+              {selectedNode.kind === 'reviewer' ? (
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
+                    {selectedReview === null ? (
+                      <span>No verdict yet.</span>
+                    ) : (
+                      <Badge variant={REVIEW_VERDICT_TONE[selectedReview.verdict]} size="sm">
+                        {REVIEW_VERDICT_LABEL[selectedReview.verdict]}
+                      </Badge>
+                    )}
+                    <span className="truncate font-mono">
+                      {selectedReview?.modelId ?? selectedNode.model ?? 'no reviewer assigned'}
+                    </span>
+                  </div>
+                  {selectedReview !== null && selectedReview.body.length > 0 ? (
+                    <p className="max-h-24 overflow-y-auto text-xs leading-5 break-words whitespace-pre-wrap">
+                      {selectedReview.body}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {selectedNode.kind === 'task' ? (
+                <div className="flex flex-col gap-1 text-2xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <Badge variant={TASK_STATE_TONE[selectedNode.state as TaskState]} size="sm">
+                      {TASK_STATE_LABEL[selectedNode.state as TaskState]}
+                    </Badge>
+                    <span className="truncate font-mono">{selectedNode.model ?? 'no model'}</span>
+                    <span>
+                      {status.tasks.find((task) => task.id === selectedNode.taskId)?.threadId ===
+                      null
+                        ? 'No child thread yet'
+                        : 'Click the node to open its thread'}
+                    </span>
+                  </div>
+                  <p className="leading-5">
+                    {status.tasks.find((task) => task.id === selectedNode.taskId)?.brief ?? ''}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          )}
 
           <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col">

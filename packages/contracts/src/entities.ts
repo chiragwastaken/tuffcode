@@ -281,6 +281,8 @@ export const TaskSchema = z.object({
   threadId: IdSchema.nullable(),
   title: z.string(),
   brief: z.string(),
+  /** Titles of the tasks that must pass before this one starts; the plan's edges. */
+  dependsOn: z.string().array(),
   state: TaskStateSchema,
   authorProvider: z.string(),
   authorModel: z.string(),

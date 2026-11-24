@@ -10,7 +10,7 @@ import type {
   TaskState,
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
-import { asRow, boolean, integer, nullableText, text, type SqlRow } from '../rows.js';
+import { asRow, boolean, integer, json, nullableText, text, type SqlRow } from '../rows.js';
 
 export interface CreateGoalInput {
   id?: string;
@@ -26,6 +26,7 @@ export interface CreateTaskInput {
   threadId?: string | null;
   title: string;
   brief: string;
+  dependsOn?: string[];
   state?: TaskState;
   authorProvider: string;
   authorModel: string;
@@ -77,7 +78,7 @@ export interface CouncilRepo {
 
 const GOAL_COLUMNS = 'id, thread_id, text, autonomy, state, created_at, reported_at';
 const TASK_COLUMNS =
-  'id, goal_id, thread_id, title, brief, state, author_provider, author_model, reviewer_provider, reviewer_model, critical, round, error, created_at, updated_at';
+  'id, goal_id, thread_id, title, brief, depends_on, state, author_provider, author_model, reviewer_provider, reviewer_model, critical, round, error, created_at, updated_at';
 const REVIEW_COLUMNS = 'id, task_id, provider_id, model_id, verdict, body, created_at';
 const ESCALATION_COLUMNS = 'id, task_id, question, answer, created_at, resolved_at';
 
@@ -93,6 +94,13 @@ function mapGoal(row: SqlRow): Goal {
   };
 }
 
+/** JSON text column holding task titles; older rows carry the empty-array default. */
+function stringList(row: SqlRow, column: string): string[] {
+  const value = json(row, column);
+  if (!Array.isArray(value)) throw new Error(`column ${column} is not a string array`);
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
 function mapTask(row: SqlRow): Task {
   return {
     id: text(row, 'id'),
@@ -100,6 +108,7 @@ function mapTask(row: SqlRow): Task {
     threadId: nullableText(row, 'thread_id'),
     title: text(row, 'title'),
     brief: text(row, 'brief'),
+    dependsOn: stringList(row, 'depends_on'),
     state: text(row, 'state') as TaskState,
     authorProvider: text(row, 'author_provider'),
     authorModel: text(row, 'author_model'),
@@ -156,8 +165,8 @@ export function createCouncilRepo(db: DatabaseSync): CouncilRepo {
     `SELECT ${TASK_COLUMNS} FROM tasks WHERE goal_id = ? ORDER BY created_at ASC, rowid ASC`,
   );
   const insertTask = db.prepare(
-    `INSERT INTO tasks (id, goal_id, thread_id, title, brief, state, author_provider, author_model, reviewer_provider, reviewer_model, critical, round, error, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, goal_id, thread_id, title, brief, depends_on, state, author_provider, author_model, reviewer_provider, reviewer_model, critical, round, error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const updateTaskState = db.prepare(
     `UPDATE tasks SET state = ?,
@@ -237,6 +246,7 @@ export function createCouncilRepo(db: DatabaseSync): CouncilRepo {
         input.threadId ?? null,
         input.title,
         input.brief,
+        JSON.stringify(input.dependsOn ?? []),
         input.state ?? 'queued',
         input.authorProvider,
         input.authorModel,

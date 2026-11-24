@@ -630,6 +630,7 @@ describe('council dependencies', () => {
       expect(tasks.find((task) => task.title === 'First')?.state).toBe('failed');
       const second = tasks.find((task) => task.title === 'Second');
       expect(second?.state).toBe('failed');
+      expect(second?.dependsOn).toEqual(['First']);
       expect(second?.error).toContain('blocked by');
       expect(harness.ports.created.some((request) => request.title === 'Council: Second')).toBe(
         false,

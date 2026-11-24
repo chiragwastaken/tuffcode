@@ -296,6 +296,14 @@ const MODEL_REFRESH_SQL = `
 ALTER TABLE provider_models ADD COLUMN refreshed_at TEXT;
 `;
 
+/**
+ * The plan's dependency edges, kept as a JSON array of task titles. Existing rows
+ * read as no dependencies, which is what they were planned with.
+ */
+const TASK_DEPENDS_ON_SQL = `
+ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -326,5 +334,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 6,
     name: 'provider-model-refresh',
     sql: MODEL_REFRESH_SQL,
+  },
+  {
+    version: 7,
+    name: 'task-depends-on',
+    sql: TASK_DEPENDS_ON_SQL,
   },
 ];
