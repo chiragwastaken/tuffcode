@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import type { Thread } from '@tuffcode/contracts';
 import { cn } from '@tuffcode/ui';
 import { StatusChip } from '../thread/status-chip';
+import { formatRelativeTime } from './sidebar-model';
 
 export interface ThreadRowProps {
   thread: Thread;
@@ -10,11 +11,13 @@ export interface ThreadRowProps {
 }
 
 /**
- * One 44px thread row. The title owns the full width on its own line and the
- * status chip sits beneath it, so a wide chip never squeezes the title.
+ * One 34px thread row: the title truncates across the full width on its own
+ * line, and an 11px line beneath it pairs the status chip with the relative
+ * update time. The native tooltip carries the untruncated title.
  */
 export function ThreadRow({ thread, selected, onSelect }: ThreadRowProps) {
   const title = thread.title.trim() === '' ? 'Untitled thread' : thread.title;
+  const updated = formatRelativeTime(thread.updatedAt);
 
   return (
     <Link
@@ -26,15 +29,22 @@ export function ThreadRow({ thread, selected, onSelect }: ThreadRowProps) {
       aria-current={selected ? 'page' : undefined}
       title={title}
       className={cn(
-        'flex h-11 flex-col justify-center gap-0.5 rounded-md px-2.5 py-1',
+        'flex h-[34px] flex-col justify-center gap-0.5 rounded-md px-2',
         'transition-colors duration-150',
         selected
           ? 'bg-sidebar-row-active text-sidebar-foreground shadow-[inset_2px_0_0_0_var(--color-primary)]'
           : 'text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground',
       )}
     >
-      <span className="min-w-0 truncate text-xs">{title}</span>
-      <StatusChip status={thread.status} className="self-start" />
+      <span className="min-w-0 w-full truncate text-xs leading-4">{title}</span>
+      <span className="flex min-w-0 items-center gap-1.5 text-2xs leading-none">
+        <StatusChip status={thread.status} className="h-3.5 px-1" />
+        {updated === '' ? null : (
+          <time dateTime={thread.updatedAt} className="ml-auto shrink-0 tabular-nums">
+            {updated}
+          </time>
+        )}
+      </span>
     </Link>
   );
 }

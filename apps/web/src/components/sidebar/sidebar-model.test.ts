@@ -1,12 +1,17 @@
 import type { Project, Thread } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  SIDEBAR_COLLAPSED_KEY,
   VIRTUALIZE_AFTER,
   buildSidebarItems,
   filterGroups,
+  formatRelativeTime,
   groupThreadsByProject,
   needsVirtualization,
+  readCollapsedProjects,
   sidebarItemKey,
+  writeCollapsedProjects,
+  type CollapseStore,
   type ProjectThreadGroup,
 } from './sidebar-model';
 
@@ -189,5 +194,94 @@ describe('needsVirtualization', () => {
 
   it('turns on above the threshold', () => {
     expect(needsVirtualization(groupsWithThreadCount(VIRTUALIZE_AFTER + 1))).toBe(true);
+  });
+
+  it('counts rows across projects, not per project', () => {
+    const alpha = makeProject({ id: 'p1', name: 'Alpha' });
+    const beta = makeProject({ id: 'p2', name: 'Beta' });
+    const threads = (projectId: string, count: number): Thread[] =>
+      Array.from({ length: count }, (_, index) =>
+        makeThread({ id: `${projectId}-${index}`, projectId, title: `Thread ${index}` }),
+      );
+
+    expect(
+      needsVirtualization([group(alpha, threads('p1', 50)), group(beta, threads('p2', 50))]),
+    ).toBe(false);
+    expect(
+      needsVirtualization([group(alpha, threads('p1', 60)), group(beta, threads('p2', 41))]),
+    ).toBe(true);
+  });
+});
+
+function memoryStore(initial: Record<string, string> = {}): CollapseStore {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  };
+}
+
+describe('collapsed project preference', () => {
+  it('defaults to nothing collapsed', () => {
+    expect(readCollapsedProjects(memoryStore())).toEqual(new Set());
+  });
+
+  it('round-trips the collapsed project ids', () => {
+    const storage = memoryStore();
+
+    writeCollapsedProjects(storage, new Set(['p1', 'p3']));
+    expect(readCollapsedProjects(storage)).toEqual(new Set(['p1', 'p3']));
+
+    writeCollapsedProjects(storage, new Set());
+    expect(readCollapsedProjects(storage)).toEqual(new Set());
+  });
+
+  it('ignores malformed or non-string entries', () => {
+    expect(readCollapsedProjects(memoryStore({ [SIDEBAR_COLLAPSED_KEY]: '{' }))).toEqual(new Set());
+    expect(readCollapsedProjects(memoryStore({ [SIDEBAR_COLLAPSED_KEY]: '{"p1":true}' }))).toEqual(
+      new Set(),
+    );
+    expect(
+      readCollapsedProjects(memoryStore({ [SIDEBAR_COLLAPSED_KEY]: '["p1",7,null,"p2"]' })),
+    ).toEqual(new Set(['p1', 'p2']));
+  });
+
+  it('forgets the preference when storage is missing or throws', () => {
+    const broken: CollapseStore = {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('blocked');
+      },
+    };
+
+    expect(readCollapsedProjects(null)).toEqual(new Set());
+    expect(readCollapsedProjects(broken)).toEqual(new Set());
+    expect(() => writeCollapsedProjects(broken, new Set(['p1']))).not.toThrow();
+    expect(() => writeCollapsedProjects(null, new Set(['p1']))).not.toThrow();
+  });
+});
+
+describe('formatRelativeTime', () => {
+  const now = Date.parse('2026-11-24T12:00:00.000Z');
+
+  it('renders compact minutes, hours and days', () => {
+    expect(formatRelativeTime('2026-11-24T11:59:30.000Z', now)).toBe('now');
+    expect(formatRelativeTime('2026-11-24T11:55:00.000Z', now)).toBe('5m');
+    expect(formatRelativeTime('2026-11-24T09:00:00.000Z', now)).toBe('3h');
+    expect(formatRelativeTime('2026-11-22T12:00:00.000Z', now)).toBe('2d');
+  });
+
+  it('falls back to a calendar date after a week', () => {
+    const date = formatRelativeTime('2026-11-01T12:00:00.000Z', now);
+    expect(date).not.toMatch(/^\d+[mhd]$/);
+    expect(date.length).toBeGreaterThan(0);
+  });
+
+  it('renders nothing for an unparseable timestamp', () => {
+    expect(formatRelativeTime('not-a-date', now)).toBe('');
   });
 });
