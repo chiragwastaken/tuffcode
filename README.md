@@ -89,6 +89,9 @@ pnpm check      # typecheck, lint, and emdash scan
   loopback WebSocket carrying a typed JSON envelope: requests are `{ id, method, params }`,
   responses are `{ id, ok, result }` or `{ id, ok: false, error }`, and server pushes are
   `{ kind: 'event', type, ... }` frames. Zod validates every frame.
+See [docs/architecture.md](./docs/architecture.md) for the process model, wire protocol, prompt
+assembly, subagents and testing.
+
 - `packages/contracts` (Zod schemas and wire types), `packages/adapters` (Claude, Codex, ACP,
   OpenAI-compatible), `packages/prompt` (system prompt, tools, council prompts), `packages/ui`
   (design system), `packages/shared` (paths, ids, logger, Windows helpers).
