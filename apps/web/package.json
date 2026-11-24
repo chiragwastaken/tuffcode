@@ -1,0 +1,38 @@
+{
+  "name": "@tuffcode/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@pierre/diffs": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
+    "@xterm/addon-fit": "catalog:",
+    "@xterm/addon-search": "catalog:",
+    "@xterm/addon-web-links": "catalog:",
+    "@xterm/addon-webgl": "catalog:",
+    "@xterm/xterm": "catalog:",
+    "class-variance-authority": "catalog:",
+    "clsx": "catalog:",
+    "lucide-react": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-markdown": "catalog:",
+    "remark-gfm": "catalog:",
+    "shiki": "catalog:",
+    "sonner": "catalog:",
+    "tailwind-merge": "catalog:",
+    "zustand": "catalog:"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "tailwindcss": "catalog:"
+  }
+}

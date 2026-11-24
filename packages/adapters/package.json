@@ -1,0 +1,18 @@
+{
+  "name": "@tuffcode/adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@opencode-ai/sdk": "catalog:",
+    "zod": "catalog:"
+  }
+}

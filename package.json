@@ -1,0 +1,40 @@
+{
+  "name": "tuffcode",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @tuffcode/desktop dev",
+    "build": "pnpm --filter @tuffcode/desktop build",
+    "build:win": "pnpm build && electron-builder --win",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "oxlint .",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:emdash",
+    "check:emdash": "node scripts/check-emdash.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@types/ws": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "electron": "catalog:",
+    "electron-builder": "catalog:",
+    "electron-updater": "catalog:",
+    "electron-vite": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.3.0"
+}
