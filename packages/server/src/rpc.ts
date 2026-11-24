@@ -31,6 +31,7 @@ import {
   revertCheckpoint,
 } from './git/index.js';
 import { addProject, listProjects, refreshProject, removeProject } from './projects.js';
+import { createPromptHandlers } from './prompt/rpc.js';
 import { createProviderHandlers } from './providers/rpc.js';
 import type { ProvidersService } from './providers/service.js';
 import { createRunnerHandlers } from './runner/rpc.js';
@@ -180,6 +181,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   });
 
   register(createRunnerHandlers({ runner: deps.runner }));
+  register(createPromptHandlers({ repos: deps.repos }));
   register(createProviderHandlers({ providers: deps.providers }));
   register(createCommentHandlers({ repos: deps.repos }));
   register(createBrainRpcHandlers(deps.brain));

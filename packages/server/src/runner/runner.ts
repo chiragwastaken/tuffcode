@@ -9,12 +9,11 @@ import {
   type ThreadStatus,
   type TurnContext,
 } from '@tuffcode/contracts';
-import { buildSystemPrompt, buildTurnContext } from '@tuffcode/prompt';
 import { newId, resolveWithin, type Logger } from '@tuffcode/shared';
-import { assembleBrain, renderBrainSlice } from '../brain/service.js';
 import type { ProviderRecord, Repos, TurnStatus } from '../db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
+import { planPrompt } from '../prompt/service.js';
 import type { Secrets } from '../secrets/bridge.js';
 
 export interface RunnerDeps {
@@ -335,23 +334,20 @@ export function createRunner(deps: RunnerDeps): Runner {
       const createdAt = now.toISOString();
       const turnId = newId('turn');
       const settings = deps.settings();
-      const brain = assembleBrain(repos, settings, {
-        projectId: project.id,
-        threadId: thread.id,
-        mode: thread.executionMode,
+      const { assembly, brain } = planPrompt(repos, {
+        thread,
+        project,
         message: text,
+        settings,
         now,
       });
-      const rules = brain.slice.always
-        .filter((entry) => entry.kind === 'rule')
-        .map((entry) => entry.text);
-      const systemPrompt = `${buildSystemPrompt({ extraRules: rules })}\n\n${buildTurnContext({
-        date: createdAt.slice(0, 10),
-        mode: thread.executionMode,
-        cwd: worktreePath,
-        projectName: project.name,
-        brainSlice: '',
-      })}`;
+      // Token counts only: prompt text can contain user content and never belongs in logs.
+      logger.debug('prompt assembled', {
+        threadId: thread.id,
+        turnId,
+        sections: assembly.sections.map(({ name, tokens }) => ({ name, tokens })),
+        total: assembly.total,
+      });
 
       recordTurnStart(repos, {
         threadId: thread.id,
@@ -392,10 +388,10 @@ export function createRunner(deps: RunnerDeps): Runner {
       const ctx: TurnContext = {
         turnId,
         cwd: worktreePath,
-        systemPrompt,
+        systemPrompt: assembly.systemPrompt,
         permissionMode: thread.permissionMode,
         model: thread.modelId,
-        brainSlice: renderBrainSlice(brain.slice),
+        brainSlice: '',
         attachments: turnAttachments,
         signal: controller.signal,
         toolAllowlist: settings.enabledTools,

@@ -5,8 +5,12 @@ import {
   COUNCIL_PLANNER_PROMPT,
   COUNCIL_REVIEWER_PROMPT,
   COUNCIL_WORKER_BRIEF_TEMPLATE,
+  CUSTOM_INSTRUCTION_TOKEN_BUDGET,
+  CUSTOM_INSTRUCTIONS_HEADING,
   TOOL_NAMES,
   TOOL_SCHEMAS,
+  assemblePrompt,
+  buildCustomInstructions,
   buildSystemPrompt,
   buildTurnContext,
   estimateTokens,
@@ -213,6 +217,108 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('1. never force push');
     expect(prompt).toContain('2. use pnpm');
     expect(prompt.startsWith(BASE_SYSTEM_PROMPT)).toBe(true);
+  });
+});
+
+describe('custom instructions', () => {
+  it('returns undefined for empty or whitespace-only text', () => {
+    expect(buildCustomInstructions('')).toBeUndefined();
+    expect(buildCustomInstructions('   \n\t ')).toBeUndefined();
+  });
+
+  it('trims and normalizes line endings without changing the text', () => {
+    expect(buildCustomInstructions('  Prefer pnpm.\r\nNever force push.  ')).toBe(
+      'Prefer pnpm.\nNever force push.',
+    );
+  });
+
+  it('keeps text inside the budget untouched', () => {
+    const text = 'Use pnpm for installs. '.repeat(40).trim();
+    expect(estimateTokens(text)).toBeLessThanOrEqual(CUSTOM_INSTRUCTION_TOKEN_BUDGET);
+    expect(buildCustomInstructions(text)).toBe(text);
+  });
+
+  it('caps at 300 tokens and cuts on a sentence boundary', () => {
+    const sentence = 'Always run the narrow test before claiming a change works. ';
+    const text = sentence.repeat(60);
+    const capped = buildCustomInstructions(text);
+    expect(capped).toBeDefined();
+    expect(estimateTokens(capped ?? '')).toBeLessThanOrEqual(CUSTOM_INSTRUCTION_TOKEN_BUDGET);
+    expect(capped?.endsWith('works.')).toBe(true);
+    expect(text.startsWith(capped ?? '\u0000')).toBe(true);
+  });
+
+  it('falls back to a word boundary when the cap lands inside one long sentence', () => {
+    const capped = buildCustomInstructions(`${'word '.repeat(400)}end`);
+    expect(estimateTokens(capped ?? '')).toBeLessThanOrEqual(CUSTOM_INSTRUCTION_TOKEN_BUDGET);
+    expect(capped?.endsWith('word')).toBe(true);
+  });
+});
+
+describe('assemblePrompt', () => {
+  const turnContext = {
+    date: '2026-11-24',
+    mode: 'work' as const,
+    cwd: 'D:\\repo',
+    projectName: 'demo',
+    brainSlice: '',
+  };
+
+  it('orders base, custom instructions, brain, memory, context, then the user message', () => {
+    const assembly = assemblePrompt({
+      customInstructions: 'Prefer pnpm.',
+      brainAlways: '- [rule] never force push',
+      retrievedMemory: '- [memory] tests live in packages',
+      turnContext,
+      userMessage: 'run the tests',
+    });
+
+    expect(assembly.sections.map((entry) => entry.name)).toEqual([
+      'base',
+      'custom-instructions',
+      'brain-always',
+      'retrieved-memory',
+      'turn-context',
+      'user-message',
+    ]);
+    expect(assembly.sections[0]?.text).toBe(BASE_SYSTEM_PROMPT);
+    expect(assembly.sections.at(-1)?.text).toBe('run the tests');
+
+    const system = assembly.systemPrompt;
+    expect(system.startsWith(BASE_SYSTEM_PROMPT)).toBe(true);
+    expect(system.indexOf(CUSTOM_INSTRUCTIONS_HEADING)).toBeLessThan(
+      system.indexOf('never force push'),
+    );
+    expect(system.indexOf('never force push')).toBeLessThan(
+      system.indexOf('tests live in packages'),
+    );
+    expect(system.indexOf('tests live in packages')).toBeLessThan(system.indexOf('<context>'));
+    expect(system).not.toContain('run the tests');
+    expect(assembly.total).toBe(assembly.sections.reduce((sum, entry) => sum + entry.tokens, 0));
+  });
+
+  it('omits empty custom instructions and empty brain blocks', () => {
+    const assembly = assemblePrompt({
+      customInstructions: '   ',
+      brainAlways: '  ',
+      retrievedMemory: '',
+      turnContext,
+      userMessage: 'hi',
+    });
+    expect(assembly.sections.map((entry) => entry.name)).toEqual([
+      'base',
+      'turn-context',
+      'user-message',
+    ]);
+    expect(assembly.systemPrompt).not.toContain(CUSTOM_INSTRUCTIONS_HEADING);
+  });
+
+  it('counts every section at four characters per token', () => {
+    const assembly = assemblePrompt({ turnContext, userMessage: 'abcd' });
+    for (const entry of assembly.sections) {
+      expect(entry.tokens).toBe(estimateTokens(entry.text));
+    }
+    expect(assembly.sections.at(-1)?.tokens).toBe(1);
   });
 });
 
