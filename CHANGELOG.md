@@ -45,7 +45,8 @@ the project uses semantic versioning.
 - Slash commands now execute real services: /model, /plan, /council, /subagent, /prompt,
   /context, /agents, /clear, /compact, /help.
 - Subagent pane with cards, connector line, tabs and cancel; strip when closed.
-- Council node board with dependency edges and click-through.
+- Council node board with dependency edges and click-through, restored after reload via council.latest.
+- Split panes: two or three resizable panes per thread with draggable splitters, tab drag between panes, keyboard shortcuts and persisted layout.
 
 ## [0.1.1] - 2026-11-24
 
