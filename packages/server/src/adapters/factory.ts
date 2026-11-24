@@ -1,5 +1,6 @@
 import {
   createAcpAdapter,
+  createAnthropicAdapter,
   createClaudeAdapter,
   createCodexAdapter,
   createOpenAIChatAdapter,
@@ -99,10 +100,12 @@ export async function createAdapterForProvider(
       );
     case 'openai-compatible':
       return (factories['openai-compatible'] ?? openai)(descriptor, deps);
+    case 'anthropic':
+      return (factories.anthropic ?? createAnthropicAdapter)(descriptor, deps);
     default:
       throw new AdapterUnavailableError(
         provider.id,
-        `unsupported provider kind "${String(provider.kind)}". Configure claude, codex, acp, opencode, or openai-compatible.`,
+        `unsupported provider kind "${String(provider.kind)}". Configure claude, codex, acp, opencode, openai-compatible, or anthropic.`,
       );
   }
 }

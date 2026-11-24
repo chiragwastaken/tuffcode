@@ -80,6 +80,7 @@ describe('adapter factory', () => {
         acp: capture(captured, 'acp'),
         opencode: capture(captured, 'opencode'),
         'openai-compatible': capture(captured, 'openai'),
+        anthropic: capture(captured, 'anthropic'),
       },
     };
     const deps = adapterDeps();
@@ -99,6 +100,12 @@ describe('adapter factory', () => {
       null,
       overrides,
     );
+    const anthropic = await createAdapterForProvider(
+      provider('anthropic', { model: 'claude-sonnet-4-5' }),
+      deps,
+      'sk-ant-test',
+      overrides,
+    );
 
     expect(captured.map((entry) => entry.session.id)).toEqual([
       'sess_claude',
@@ -106,8 +113,9 @@ describe('adapter factory', () => {
       'sess_acp',
       'sess_opencode',
       'sess_openai',
+      'sess_anthropic',
     ]);
-    expect([claude, codex, acp, opencode, openai]).toHaveLength(5);
+    expect([claude, codex, acp, opencode, openai, anthropic]).toHaveLength(6);
     expect(captured[0]?.provider).toEqual({
       id: 'prv_a',
       kind: 'claude',
