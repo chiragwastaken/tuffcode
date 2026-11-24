@@ -163,6 +163,13 @@ describe('review comments', () => {
     });
     expect(blank).toMatchObject({ ok: false, error: { code: 'bad-request' } });
 
+    const blankPath = await dispatch(handlers, {
+      id: 'blank-path',
+      method: 'comments.add',
+      params: { threadId: 'thr_a', filePath: '   ', line: 1, side: 'new', body: 'x' },
+    });
+    expect(blankPath).toMatchObject({ ok: false, error: { code: 'bad-request' } });
+
     const invalidLine = await dispatch(handlers, {
       id: 'bad-line',
       method: 'comments.add',

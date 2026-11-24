@@ -180,9 +180,16 @@ describe('provider login', () => {
       label: 'API',
       config: { baseUrl: 'https://api.example.com' },
     });
+    ctx.repos.providers.upsert({
+      id: 'prv_anthropic',
+      kind: 'anthropic',
+      label: 'Anthropic',
+      config: { baseUrl: 'https://api.anthropic.com' },
+    });
 
     await expect(logins.start('prv_acp')).rejects.toMatchObject({ code: 'bad-request' });
     await expect(logins.start('prv_api')).rejects.toMatchObject({ code: 'bad-request' });
+    await expect(logins.start('prv_anthropic')).rejects.toMatchObject({ code: 'bad-request' });
     await expect(logins.start('prv_missing')).rejects.toMatchObject({ code: 'not-found' });
     expect(spawned).toEqual([]);
   });

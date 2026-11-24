@@ -25,10 +25,12 @@ export function addReviewComment(repos: Repos, request: AddReviewCommentRequest)
   requireThread(repos, request.threadId);
   const body = request.body.trim();
   if (body.length === 0) throw badRequest('comment body is required');
+  const filePath = request.filePath.trim();
+  if (filePath.length === 0) throw badRequest('comment file path is required');
   return repos.comments.create({
     id: newId('rc'),
     threadId: request.threadId,
-    filePath: request.filePath.trim(),
+    filePath,
     line: request.line,
     side: request.side,
     body,
