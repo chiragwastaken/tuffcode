@@ -167,7 +167,6 @@ export const ApprovalSchema = z.object({
 export type Approval = z.infer<typeof ApprovalSchema>;
 
 export const ProviderConfigSchema = z.record(z.string(), z.unknown());
-export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
 export const ProviderViewSchema = z.object({
   id: IdSchema,
