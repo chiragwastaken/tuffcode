@@ -54,6 +54,11 @@ interface ActiveRun {
   adapterKey: string;
 }
 
+interface TurnText {
+  text: string;
+  persisted: boolean;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -66,6 +71,52 @@ function turnStatusFor(reason: 'complete' | 'interrupted' | 'error'): TurnStatus
   if (reason === 'complete') return 'complete';
   if (reason === 'interrupted') return 'interrupted';
   return 'failed';
+}
+
+/** Appended to whatever streamed when the user interrupts, so the row is not read as final. */
+export const INTERRUPTED_MARKER = '\n\n[interrupted]';
+
+/** Message ids derive from the turn, so replaying a turn insert can never duplicate a row. */
+function userMessageId(turnId: string): string {
+  return `msg_${turnId}_user`;
+}
+
+function assistantMessageId(turnId: string): string {
+  return `msg_${turnId}_assistant`;
+}
+
+export interface TurnStartInput {
+  threadId: string;
+  turnId: string;
+  text: string;
+  injectedIds: string[];
+  createdAt: string;
+}
+
+/**
+ * Creates the turn row and its user message in one transaction. A replay of the same
+ * turn start (a retried request, a re-run) leaves the message untouched instead of
+ * inserting a second copy.
+ */
+export function recordTurnStart(repos: Repos, input: TurnStartInput): void {
+  repos.transaction(() => {
+    if (repos.turns.get(input.turnId) === undefined) {
+      repos.turns.create({
+        id: input.turnId,
+        threadId: input.threadId,
+        status: 'running',
+        injectedIds: input.injectedIds,
+        createdAt: input.createdAt,
+      });
+    }
+    repos.messages.addIfAbsent({
+      id: userMessageId(input.turnId),
+      threadId: input.threadId,
+      role: 'user',
+      content: input.text,
+      createdAt: input.createdAt,
+    });
+  });
 }
 
 function resolveAttachments(
@@ -98,6 +149,8 @@ export function createRunner(deps: RunnerDeps): Runner {
   const { repos, bus, logger } = deps;
   const sessions = new Map<string, CachedSession>();
   const active = new Map<string, ActiveRun>();
+  /** Streamed assistant text per in-flight turn, plus whether it was already stored. */
+  const turnText = new Map<string, TurnText>();
 
   function emitThread(thread: Thread): void {
     bus.emit({ kind: 'event', type: 'thread.updated', threadId: thread.id, payload: thread });
@@ -129,25 +182,38 @@ export function createRunner(deps: RunnerDeps): Runner {
     }
   }
 
+  /** Stores the streamed assistant text once per turn; interrupted text keeps a marker. */
+  function persistAssistant(
+    threadId: string,
+    turnId: string,
+    reason: 'complete' | 'interrupted' | 'error',
+  ): void {
+    const state = turnText.get(turnId);
+    if (state === undefined || state.persisted || state.text.length === 0) return;
+    state.persisted = true;
+    repos.messages.addIfAbsent({
+      id: assistantMessageId(turnId),
+      threadId,
+      role: 'assistant',
+      content: reason === 'interrupted' ? `${state.text}${INTERRUPTED_MARKER}` : state.text,
+      createdAt: nowIso(),
+    });
+  }
+
   function finishTurn(
     thread: Thread,
     turnId: string,
     reason: 'complete' | 'interrupted' | 'error',
-    assistantText: string,
   ): void {
     const at = nowIso();
-    repos.turns.finish(turnId, turnStatusFor(reason), at);
-    if (assistantText.length > 0) {
-      repos.messages.add({
-        id: newId('msg'),
-        threadId: thread.id,
-        role: 'assistant',
-        content: assistantText,
-        createdAt: at,
-      });
-    }
+    // An interrupt that landed first wins: a late adapter error must not flip the
+    // turn (or its marker) back to a failed run.
+    const current = repos.turns.get(turnId);
+    const effective = current?.status === 'interrupted' ? 'interrupted' : reason;
+    repos.turns.finish(turnId, turnStatusFor(effective), at);
+    persistAssistant(thread.id, turnId, effective);
     denyPending(thread.id);
-    setThreadStatus(thread, reason === 'error' ? 'failed' : 'ready-to-review');
+    setThreadStatus(thread, effective === 'error' ? 'failed' : 'ready-to-review');
   }
 
   function requestApproval(
@@ -186,18 +252,20 @@ export function createRunner(deps: RunnerDeps): Runner {
     session: AdapterSession,
     text: string,
     ctx: TurnContext,
+    state: TurnText,
   ): Promise<void> {
-    let assistantText = '';
     let settled = false;
     try {
       for await (const event of session.send(text, ctx)) {
-        appendEvent(thread.id, event);
-        if (event.type === 'text.delta') assistantText += event.text;
-        else if (event.type === 'approval.requested') requestApproval(thread, turnId, event);
-        else if (event.type === 'turn.finished') {
-          finishTurn(thread, turnId, event.reason, assistantText);
+        if (event.type === 'text.delta') state.text += event.text;
+        if (event.type === 'turn.finished') {
+          // Persist the assistant row before the event is broadcast, so a client that
+          // refetches on turn.finished already sees it.
+          finishTurn(thread, turnId, event.reason);
           settled = true;
         }
+        appendEvent(thread.id, event);
+        if (event.type === 'approval.requested') requestApproval(thread, turnId, event);
       }
       if (!settled) {
         appendEvent(thread.id, {
@@ -205,8 +273,8 @@ export function createRunner(deps: RunnerDeps): Runner {
           message: `${kind}: adapter ended without turn.finished`,
           retryable: false,
         });
+        finishTurn(thread, turnId, 'error');
         appendEvent(thread.id, { type: 'turn.finished', turnId, reason: 'error' });
-        finishTurn(thread, turnId, 'error', assistantText);
       }
     } catch (error) {
       if (settled) {
@@ -220,10 +288,11 @@ export function createRunner(deps: RunnerDeps): Runner {
           message: `${kind}: ${errorMessage(error)}`,
           retryable: false,
         });
+        finishTurn(thread, turnId, 'error');
         appendEvent(thread.id, { type: 'turn.finished', turnId, reason: 'error' });
-        finishTurn(thread, turnId, 'error', assistantText);
       }
     } finally {
+      turnText.delete(turnId);
       const current = active.get(thread.id);
       if (current?.turnId === turnId) active.delete(thread.id);
     }
@@ -283,18 +352,11 @@ export function createRunner(deps: RunnerDeps): Runner {
         brainSlice: '',
       })}`;
 
-      repos.turns.create({
-        id: turnId,
+      recordTurnStart(repos, {
         threadId: thread.id,
-        status: 'running',
+        turnId,
+        text,
         injectedIds: brain.injectedIds,
-        createdAt,
-      });
-      repos.messages.add({
-        id: newId('msg'),
-        threadId: thread.id,
-        role: 'user',
-        content: text,
         createdAt,
       });
       if (brain.injectedIds.length > 0) repos.brain.touch(brain.injectedIds, createdAt);
@@ -338,7 +400,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       };
       active.set(thread.id, { session, turnId, controller, adapterKey });
       setThreadStatus(thread, 'running');
-      void runTurn(thread, provider.kind, turnId, session, text, ctx);
+      const state: TurnText = { text: '', persisted: false };
+      turnText.set(turnId, state);
+      void runTurn(thread, provider.kind, turnId, session, text, ctx, state);
       return { turnId };
     },
 
@@ -363,6 +427,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         (turn.status === 'running' || turn.status === 'needs-approval')
       ) {
         repos.turns.finish(run.turnId, 'interrupted', nowIso());
+        persistAssistant(threadId, run.turnId, 'interrupted');
       }
       setThreadStatus(thread, 'ready-to-review');
     },

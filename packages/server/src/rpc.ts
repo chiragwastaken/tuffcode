@@ -141,6 +141,12 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
     return { events, hasMore: rows.length > max };
   });
 
+  // getThread is the ownership check: an unknown thread is not-found, never an
+  // empty list that hides a bad id.
+  define('messages.list', ({ threadId }) =>
+    deps.repos.messages.list(getThread(deps.repos, threadId).id),
+  );
+
   define('settings.get', () => deps.repos.settings.get());
   define('settings.set', ({ patch }) => {
     const settings = deps.repos.settings.patch(patch);

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { transaction } from '../index.js';
 import { createApprovalsRepo, type ApprovalsRepo } from './approvals.js';
 import { createBrainRepo, type BrainRepo } from './brain.js';
 import { createCheckpointsRepo, type CheckpointsRepo } from './checkpoints.js';
@@ -23,6 +24,8 @@ export interface Repos {
   council: CouncilRepo;
   turns: TurnsRepo;
   settings: SettingsRepo;
+  /** Runs `fn` in a transaction on the shared connection; nesting is rejected. */
+  transaction<T>(fn: () => T): T;
 }
 
 /** Builds every repository over one connection. Repos never open their own. */
@@ -39,6 +42,7 @@ export function createRepos(db: DatabaseSync): Repos {
     council: createCouncilRepo(db),
     turns: createTurnsRepo(db),
     settings: createSettingsRepo(db),
+    transaction: (fn) => transaction(db, fn),
   };
 }
 
