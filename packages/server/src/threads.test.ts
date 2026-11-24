@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { isInside } from '@tuffcode/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,7 +46,7 @@ describe('threads service', () => {
     expect(thread.worktreePath).not.toBeNull();
     const worktreePath = thread.worktreePath ?? '';
     expect(existsSync(worktreePath)).toBe(true);
-    expect(isInside(repo, worktreePath)).toBe(false);
+    expect(isInside(realpathSync.native(repo), worktreePath)).toBe(false);
     expect(git(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(thread.branch);
 
     const listed = git(repo, ['worktree', 'list', '--porcelain']).replace(/\\/g, '/').toLowerCase();

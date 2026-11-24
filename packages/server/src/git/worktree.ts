@@ -1,5 +1,5 @@
-import { existsSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, realpathSync, rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { isInside, normalizePath } from '@tuffcode/shared';
 import { badRequest, conflict } from '../errors.js';
 import { runGit, tryRunGit } from './runGit.js';
@@ -18,17 +18,40 @@ export interface ProvisionedWorktree {
   baseBranch: string;
 }
 
+/**
+ * Resolves a path that may not exist yet to its canonical long form. Windows can hand
+ * out 8.3 aliases (`RUNNER~1`) for the same directory, and comparing an alias against
+ * the real path breaks containment checks, so the nearest existing ancestor is
+ * resolved with `realpath` and the missing tail is re-appended.
+ */
+function canonicalPath(path: string): string {
+  const resolved = resolve(normalizePath(path));
+  const missing: string[] = [];
+  let current = resolved;
+  for (;;) {
+    try {
+      const real = realpathSync.native(current);
+      return normalizePath(join(real, ...missing.toReversed()));
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolved;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 export async function isGitRepo(dir: string): Promise<boolean> {
   const result = await tryRunGit(['rev-parse', '--is-inside-work-tree'], dir);
   return result.ok && result.stdout.trim() === 'true';
 }
 
-/** Absolute repository root for `dir`, or null when it is not inside a work tree. */
+/** Canonical absolute repository root for `dir`, or null when it is not a work tree. */
 export async function repoRoot(dir: string): Promise<string | null> {
   const result = await tryRunGit(['rev-parse', '--show-toplevel'], dir);
   if (!result.ok) return null;
   const root = result.stdout.trim();
-  return root.length === 0 ? null : normalizePath(root);
+  return root.length === 0 ? null : canonicalPath(root);
 }
 
 /** Current branch name, or null for a detached HEAD. */
@@ -89,20 +112,21 @@ export async function provisionWorktree(
   if (!(await isGitRepo(input.repoPath))) {
     throw badRequest('project is not a git repository');
   }
-  const root = resolve(normalizePath(input.worktreesRoot));
-  if (isInside(input.repoPath, root)) {
+  const repo = canonicalPath(input.repoPath);
+  const root = canonicalPath(input.worktreesRoot);
+  if (isInside(repo, root)) {
     throw badRequest('worktree root must be outside the project');
   }
   const target = join(root, input.projectId, input.threadId);
-  if (isInside(input.repoPath, target)) {
+  if (isInside(repo, target)) {
     throw badRequest('worktree path must be outside the project');
   }
   if (existsSync(target)) {
     throw conflict('worktree path already exists');
   }
   const branch = `tuffcode/${input.threadId}`;
-  const startPoint = await resolveBaseRef(input.repoPath, input.baseBranch);
-  await runGit(['worktree', 'add', '-b', branch, target, startPoint], input.repoPath);
+  const startPoint = await resolveBaseRef(repo, input.baseBranch);
+  await runGit(['worktree', 'add', '-b', branch, target, startPoint], repo);
   return { path: target, branch, baseBranch: input.baseBranch };
 }
 
@@ -112,10 +136,11 @@ export async function provisionWorktree(
  * `git worktree prune` so the repository stops listing it.
  */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  const target = resolve(normalizePath(worktreePath));
-  const removed = await tryRunGit(['worktree', 'remove', '--force', target], repoPath);
+  const target = canonicalPath(worktreePath);
+  const repo = canonicalPath(repoPath);
+  const removed = await tryRunGit(['worktree', 'remove', '--force', target], repo);
   if (!removed.ok && existsSync(target)) {
     rmSync(target, { recursive: true, force: true });
   }
-  await tryRunGit(['worktree', 'prune'], repoPath);
+  await tryRunGit(['worktree', 'prune'], repo);
 }

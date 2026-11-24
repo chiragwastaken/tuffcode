@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addProject, listProjects, refreshProject, removeProject } from './projects.js';
@@ -22,7 +22,9 @@ describe('projects service', () => {
     const project = await addProject(ctx.repos, repo);
     expect(project.name).toBe('demo-repo');
     expect(project.defaultBranch).toBe('main');
-    expect(project.path.toLowerCase()).toBe(repo.replace(/\//g, '\\').toLowerCase());
+    expect(project.path.toLowerCase()).toBe(
+      realpathSync.native(repo).replace(/\//g, '\\').toLowerCase(),
+    );
     expect(project.lastOpenedAt).not.toBeNull();
     expect(listProjects(ctx.repos).map((row) => row.id)).toEqual([project.id]);
   });
