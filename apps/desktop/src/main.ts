@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from 'electron';
@@ -23,6 +23,7 @@ import {
   type RunningServer,
 } from './server';
 import { setupUpdater } from './updater';
+import { resolveUserDataPath } from './user-data';
 
 const currentDir = fileURLToPath(new URL('.', import.meta.url));
 const logger = createMainLogger();
@@ -33,6 +34,15 @@ let bootstrap: BootstrapInfo | null = null;
 let isQuitting = false;
 
 app.setName('Tuffcode');
+
+// The single-instance lock is keyed on `userData`, so an override has to land before
+// `requestSingleInstanceLock()` below. Tests and parallel worktrees set this to a temp
+// directory to keep their locks and Chromium state apart.
+const userDataPath = resolveUserDataPath();
+if (userDataPath !== undefined) {
+  mkdirSync(userDataPath, { recursive: true });
+  app.setPath('userData', userDataPath);
+}
 
 function rendererIndexFile(): string {
   return app.isPackaged
