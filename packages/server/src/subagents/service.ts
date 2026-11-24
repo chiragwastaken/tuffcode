@@ -326,6 +326,12 @@ export function createSubagents(deps: SubagentDeps): Subagents {
         return;
       }
       run.childThreadId = child.id;
+      // Cancel can land while the checkout is being provisioned; the row must stay
+      // cancelled and the child turn must never start.
+      if (run.cancelled || run.controller.signal.aborted) {
+        finish(childId, 'cancelled', 'cancelled before the child turn started');
+        return;
+      }
       repos.subagents.setRunning(childId, child.id, nowIso());
 
       const project = repos.projects.get(parent.projectId);

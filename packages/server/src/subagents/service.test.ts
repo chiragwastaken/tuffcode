@@ -80,15 +80,23 @@ class FakePorts implements SubagentPorts {
   handler: (input: SubagentTurnInput) => Promise<SubagentTurnResult> = () =>
     Promise.resolve({ status: 'complete', text: 'child summary' });
   block = false;
+  /** Holds child thread creation so a cancel can land mid-provisioning. */
+  blockCreate = false;
   active = 0;
   maxActive = 0;
   private readonly releases: (() => void)[] = [];
+  private readonly createReleases: (() => void)[] = [];
 
   constructor(private readonly ctx: TestContext) {}
 
   async createChildThread(request: SubagentChildRequest): Promise<Thread> {
     const id = `thr_child_${this.created.length + 1}`;
     this.created.push(request);
+    if (this.blockCreate) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      this.createReleases.push(resolve);
+      await promise;
+    }
     const now = new Date().toISOString();
     return this.ctx.repos.threads.create({
       id,
@@ -135,6 +143,15 @@ class FakePorts implements SubagentPorts {
     this.block = false;
     for (;;) {
       const release = this.releases.shift();
+      if (release === undefined) return;
+      release();
+    }
+  }
+
+  releaseCreate(): void {
+    this.blockCreate = false;
+    for (;;) {
+      const release = this.createReleases.shift();
       if (release === undefined) return;
       release();
     }
@@ -417,6 +434,24 @@ describe('subagent service', () => {
       const view = await harness.subagents.awaitChild(childId);
       expect(view.status).toBe('cancelled');
       expect(harness.runner.interrupts).toEqual(['thr_child_1']);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('keeps a child cancelled when the cancel lands during worktree creation', async () => {
+    const harness = createHarness();
+    try {
+      harness.ports.blockCreate = true;
+      const childId = await spawn(harness, 'worker');
+      await until(() => harness.ports.created.length === 1);
+      await harness.subagents.cancel(childId);
+      harness.ports.releaseCreate();
+      await until(() => harness.ctx.repos.threads.get('thr_child_1') !== undefined);
+      const view = await harness.subagents.awaitChild(childId);
+      expect(view.status).toBe('cancelled');
+      expect(harness.ports.turns).toHaveLength(0);
+      expect(harness.ctx.repos.subagents.get(childId)?.status).toBe('cancelled');
     } finally {
       await harness.dispose();
     }
