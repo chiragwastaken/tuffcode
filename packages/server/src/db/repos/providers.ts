@@ -2,19 +2,26 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   ProviderConfigSchema,
   type Model,
-  type ProviderConfig,
   type ProviderKind,
   type ProviderView,
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
+import type { z } from 'zod';
 import { transaction } from '../index.js';
 import { asRow, boolean, json, nullableInteger, nullableText, text, type SqlRow } from '../rows.js';
+
+/**
+ * The entity config value, derived from its schema. `ProviderConfig` itself is
+ * ambiguous in the contracts barrel: adapters.ts exports a provider descriptor under
+ * the same name, so importing that name yields the wrong shape.
+ */
+export type ProviderConfigValue = z.infer<typeof ProviderConfigSchema>;
 
 export interface ProviderRecord {
   id: string;
   kind: ProviderKind;
   label: string;
-  config: ProviderConfig;
+  config: ProviderConfigValue;
   secretRef: string | null;
   enabled: boolean;
   createdAt: string;
@@ -25,7 +32,7 @@ export interface UpsertProviderInput {
   id?: string;
   kind: ProviderKind;
   label: string;
-  config: ProviderConfig;
+  config: ProviderConfigValue;
   secretRef?: string | null;
   enabled?: boolean;
 }
