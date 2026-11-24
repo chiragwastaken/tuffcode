@@ -31,6 +31,9 @@ test('thread history survives a restart', async ({ session, workspace, mock, rpc
   await expect(row).toBeVisible();
   await row.click();
   await expect(session.page.getByTestId('thread-title')).toHaveText(title);
+  await expect(
+    session.page.getByTestId('user-message').filter({ hasText: 'Say hello before the restart' }),
+  ).toBeVisible();
   await expectAssistantText(session.page, MOCK_TEXT);
 });
 

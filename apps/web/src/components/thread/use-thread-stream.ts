@@ -29,12 +29,32 @@ function toRow(event: ThreadEventFrame): ThreadEventRow {
 export function useThreadStream(threadId: string): void {
   const rpc = useRpc();
   const appendEvent = useAppStore((state) => state.appendEvent);
+  const setMessages = useAppStore((state) => state.setMessages);
 
   useEffect(() => {
     const sinceSeq = useAppStore.getState().events[threadId]?.at(-1)?.seq ?? 0;
     let disposed = false;
     let replayed = false;
+    let messagesToken = 0;
     const buffered: ThreadEventRow[] = [];
+
+    function loadMessages(notify: boolean): void {
+      messagesToken += 1;
+      const token = messagesToken;
+      void rpc.request('messages.list', { threadId }).then(
+        (rows) => {
+          if (!disposed && token === messagesToken) setMessages(threadId, rows);
+        },
+        (error: unknown) => {
+          if (disposed || !notify) return;
+          toast.error(error instanceof Error ? error.message : 'Could not load thread messages.');
+        },
+      );
+    }
+
+    // Persisted rows carry the user turns and any assistant text the event replay
+    // cannot reconstruct, so a reopened thread reads the same as a live one.
+    loadMessages(true);
 
     const batcher = createStreamBatcher({
       flush: (events) => {
@@ -54,6 +74,8 @@ export function useThreadStream(threadId: string): void {
         const row = toRow(event);
         if (replayed) batcher.push(row);
         else buffered.push(row);
+        // The server persists the assistant row before it broadcasts turn.finished.
+        if (event.payload.type === 'turn.finished') loadMessages(false);
         return;
       }
       if (event.type === 'approval.requested' && event.payload.threadId === threadId) {
@@ -79,5 +101,5 @@ export function useThreadStream(threadId: string): void {
       unsubscribe();
       batcher.dispose();
     };
-  }, [appendEvent, rpc, threadId]);
+  }, [appendEvent, rpc, setMessages, threadId]);
 }

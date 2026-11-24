@@ -2,11 +2,19 @@ import { Link } from '@tanstack/react-router';
 import type { Thread, ThreadEventRow } from '@tuffcode/contracts';
 import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
 import { FolderOpen, GitBranch, MessagesSquare } from 'lucide-react';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
+import { toast } from 'sonner';
+import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { Composer } from './Composer';
-import { groupTimeline } from './grouping';
-import { useApprovalDecisions, useLocalUserMessages } from './local-messages';
+import { groupTimeline, type UserItem } from './grouping';
+import {
+  failLocalUserMessage,
+  resolveLocalUserMessage,
+  retryLocalUserMessage,
+  useApprovalDecisions,
+  useLocalUserMessages,
+} from './local-messages';
 import { StatusChip } from './status-chip';
 import { Timeline } from './Timeline';
 import { useThreadStream } from './use-thread-stream';
@@ -26,14 +34,42 @@ export interface ThreadViewProps {
 export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   useThreadStream(threadId);
 
+  const rpc = useRpc();
   const events = useAppStore((state) => state.events[threadId]);
+  const messages = useAppStore((state) => state.messages[threadId]);
   const userMessages = useLocalUserMessages(threadId);
   const approvals = useApprovalDecisions();
   const theme = useAppStore((state) => state.settings?.theme ?? 'dark');
 
   const items = useMemo(
-    () => groupTimeline({ events: events ?? EMPTY_EVENTS, userMessages, approvals }),
-    [approvals, events, userMessages],
+    () =>
+      groupTimeline({
+        events: events ?? EMPTY_EVENTS,
+        messages: messages ?? [],
+        userMessages,
+        approvals,
+      }),
+    [approvals, events, messages, userMessages],
+  );
+
+  const retryUserMessage = useCallback(
+    (item: UserItem) => {
+      retryLocalUserMessage(item.messageId);
+      void rpc
+        .request('threads.send', {
+          id: threadId,
+          text: item.text,
+          ...(item.attachments.length > 0 ? { attachments: item.attachments } : {}),
+        })
+        .then(
+          (result) => resolveLocalUserMessage(item.messageId, result.turnId),
+          (error: unknown) => {
+            failLocalUserMessage(item.messageId);
+            toast.error(error instanceof Error ? error.message : 'Could not send the message.');
+          },
+        );
+    },
+    [rpc, threadId],
   );
 
   const title = thread?.title ?? threadId;
@@ -105,7 +141,12 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
             )}
           </div>
         ) : (
-          <Timeline items={items} theme={theme} threadId={threadId} />
+          <Timeline
+            items={items}
+            theme={theme}
+            threadId={threadId}
+            onRetryUserMessage={retryUserMessage}
+          />
         )}
 
         <Composer thread={thread} />

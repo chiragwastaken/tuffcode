@@ -10,14 +10,18 @@ import {
   type TimelineItem,
 } from './grouping';
 
-function event(seq: number, payload: AdapterEvent): ThreadEventRow {
+function event(
+  seq: number,
+  payload: AdapterEvent,
+  createdAt = '2026-01-01T00:00:00.000Z',
+): ThreadEventRow {
   return {
     id: seq + 1,
     threadId: 'thread-1',
     seq,
     type: payload.type,
     payload,
-    createdAt: '2026-01-01T00:00:00.000Z',
+    createdAt,
   };
 }
 
@@ -28,8 +32,20 @@ function message(overrides: Partial<LocalUserMessage> = {}): LocalUserMessage {
     turnId: 'turn-1',
     text: 'Do the thing',
     attachments: [],
+    status: 'sent',
+    createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
+}
+
+function persisted(
+  id: string,
+  role: 'user' | 'assistant',
+  content: string,
+  createdAt: string,
+  threadId = 'thread-1',
+) {
+  return { id, threadId, role, content, createdAt } as const;
 }
 
 describe('groupTimeline', () => {
@@ -214,6 +230,198 @@ describe('groupTimeline', () => {
     if (items[0]?.kind !== 'notice') throw new Error('Expected a notice row.');
     expect(items[0].tone).toBe('error');
     expect(items[0].text).toBe('Provider failed');
+  });
+});
+
+describe('persisted messages', () => {
+  it('merges rows and events in createdAt order across turns', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'turn.started', turnId: 'turn-1' }, '2026-01-01T00:00:02.000Z'),
+        event(
+          2,
+          { type: 'text.delta', turnId: 'turn-1', text: 'First answer' },
+          '2026-01-01T00:00:03.000Z',
+        ),
+        event(
+          3,
+          { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' },
+          '2026-01-01T00:00:04.000Z',
+        ),
+        event(
+          4,
+          { type: 'text.delta', turnId: 'turn-2', text: 'Second answer' },
+          '2026-01-01T00:00:12.000Z',
+        ),
+      ],
+      messages: [
+        persisted('msg_turn-1_user', 'user', 'First question', '2026-01-01T00:00:01.000Z'),
+        persisted('msg_turn-1_assistant', 'assistant', 'First answer', '2026-01-01T00:00:04.000Z'),
+        persisted('msg_turn-2_user', 'user', 'Second question', '2026-01-01T00:00:11.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'user' ? item.text : item.kind))).toEqual([
+      'First question',
+      'assistant',
+      'Second question',
+      'assistant',
+    ]);
+    const firstAssistant = items[1];
+    if (firstAssistant?.kind !== 'assistant') throw new Error('Expected an assistant row.');
+    expect(firstAssistant.text).toBe('First answer');
+  });
+
+  it('renders user and assistant rows when the event replay has no turn events', () => {
+    const items = groupTimeline({
+      events: [],
+      messages: [
+        persisted('msg_turn-1_user', 'user', 'Question', '2026-01-01T00:00:01.000Z'),
+        persisted('msg_turn-1_assistant', 'assistant', 'Answer', '2026-01-01T00:00:02.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(['user', 'assistant']);
+    const assistant = items[1];
+    if (assistant?.kind !== 'assistant') throw new Error('Expected an assistant row.');
+    expect(assistant.text).toBe('Answer');
+    expect(assistant.streaming).toBe(false);
+  });
+
+  it('replaces streamed text with the persisted row instead of duplicating it', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Hel' }),
+        event(2, { type: 'text.delta', turnId: 'turn-1', text: 'lo' }),
+        event(3, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }),
+      ],
+      messages: [
+        persisted('msg_turn-1_assistant', 'assistant', 'Hello', '2026-01-01T00:00:00.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items).toHaveLength(1);
+    const assistant = items[0];
+    if (assistant?.kind !== 'assistant') throw new Error('Expected an assistant row.');
+    expect(assistant.text).toBe('Hello');
+    expect(assistant.streaming).toBe(false);
+  });
+
+  it('drops the local echo once the persisted row for its turn arrives', () => {
+    const items = groupTimeline({
+      events: [event(1, { type: 'turn.started', turnId: 'turn-1' }, '2026-01-01T00:00:02.000Z')],
+      messages: [persisted('msg_turn-1_user', 'user', 'Do the thing', '2026-01-01T00:00:01.000Z')],
+      userMessages: [
+        message({
+          turnId: 'turn-1',
+          text: 'Do the thing',
+          status: 'sent',
+          createdAt: '2026-01-01T00:00:01.500Z',
+          attachments: [{ name: 'notes.md', path: 'notes.md' }],
+        }),
+      ],
+      approvals: {},
+    });
+
+    const users = items.filter((item) => item.kind === 'user');
+    expect(users).toHaveLength(1);
+    expect(users[0]?.attachments).toHaveLength(1);
+    expect(users[0]?.status).toBe('sent');
+  });
+
+  it('matches an echo without a turn id by text and timestamp window', () => {
+    const items = groupTimeline({
+      events: [],
+      messages: [persisted('msg_turn-1_user', 'user', 'Do the thing', '2026-01-01T00:00:01.000Z')],
+      userMessages: [
+        message({
+          id: 'echo-1',
+          turnId: null,
+          text: 'Do the thing',
+          status: 'pending',
+          createdAt: '2026-01-01T00:00:05.000Z',
+        }),
+      ],
+      approvals: {},
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe('user');
+  });
+
+  it('keeps a failed echo even when a persisted row has the same text', () => {
+    const items = groupTimeline({
+      events: [],
+      messages: [persisted('msg_turn-1_user', 'user', 'Do the thing', '2026-01-01T00:00:01.000Z')],
+      userMessages: [
+        message({
+          id: 'echo-1',
+          turnId: null,
+          text: 'Do the thing',
+          status: 'failed',
+          createdAt: '2026-01-01T00:00:05.000Z',
+        }),
+      ],
+      approvals: {},
+    });
+
+    expect(items).toHaveLength(2);
+    const failed = items[1];
+    if (failed?.kind !== 'user') throw new Error('Expected a user row.');
+    expect(failed.status).toBe('failed');
+    expect(failed.messageId).toBe('echo-1');
+  });
+
+  it('carries pending and failed send states into the user row', () => {
+    const items = groupTimeline({
+      events: [],
+      messages: [],
+      userMessages: [
+        message({ id: 'echo-pending', turnId: null, status: 'pending', text: 'Waiting' }),
+        message({ id: 'echo-failed', turnId: null, status: 'failed', text: 'Broken' }),
+      ],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'user' ? item.status : item.kind))).toEqual([
+      'pending',
+      'failed',
+    ]);
+  });
+
+  it('interleaves a turn without events between turns that have them', () => {
+    const items = groupTimeline({
+      events: [
+        event(
+          1,
+          { type: 'text.delta', turnId: 'turn-2', text: 'Live answer' },
+          '2026-01-01T00:00:10.000Z',
+        ),
+      ],
+      messages: [
+        persisted('msg_turn-1_user', 'user', 'Old question', '2026-01-01T00:00:01.000Z'),
+        persisted('msg_turn-1_assistant', 'assistant', 'Old answer', '2026-01-01T00:00:02.000Z'),
+        persisted('msg_turn-2_user', 'user', 'Live question', '2026-01-01T00:00:09.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'user' ? item.text : item.kind))).toEqual([
+      'Old question',
+      'assistant',
+      'Live question',
+      'assistant',
+    ]);
+    const oldAssistant = items[1];
+    if (oldAssistant?.kind !== 'assistant') throw new Error('Expected an assistant row.');
+    expect(oldAssistant.text).toBe('Old answer');
   });
 });
 

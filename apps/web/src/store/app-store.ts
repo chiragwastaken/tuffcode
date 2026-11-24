@@ -1,4 +1,5 @@
 import type {
+  Message,
   Project,
   ProviderView,
   RpcMethod,
@@ -23,6 +24,7 @@ export interface AppState {
   projects: Project[];
   threads: Record<string, Thread>;
   events: Record<string, ThreadEventRow[]>;
+  messages: Record<string, Message[]>;
   settings: Settings | null;
   providers: ProviderView[];
   activeThreadId: string | null;
@@ -35,6 +37,7 @@ export interface AppState {
   upsertThread(thread: Thread): void;
   removeThread(threadId: string): void;
   appendEvent(threadId: string, event: ThreadEventRow): void;
+  setMessages(threadId: string, messages: Message[]): void;
   setSettings(settings: Settings): void;
   upsertProvider(provider: ProviderView): void;
   setActiveThread(threadId: string | null): void;
@@ -46,6 +49,7 @@ const initialState = {
   projects: [] as Project[],
   threads: {} as Record<string, Thread>,
   events: {} as Record<string, ThreadEventRow[]>,
+  messages: {} as Record<string, Message[]>,
   settings: null,
   providers: [] as ProviderView[],
   activeThreadId: null,
@@ -97,10 +101,14 @@ export function createAppStore() {
         const events = Object.fromEntries(
           Object.entries(state.events).filter(([threadId]) => !removedThreadIds.has(threadId)),
         );
+        const messages = Object.fromEntries(
+          Object.entries(state.messages).filter(([threadId]) => !removedThreadIds.has(threadId)),
+        );
         return {
           projects: state.projects.filter((project) => project.id !== projectId),
           threads,
           events,
+          messages,
           activeThreadId:
             state.activeThreadId && removedThreadIds.has(state.activeThreadId)
               ? null
@@ -119,9 +127,12 @@ export function createAppStore() {
         delete threads[threadId];
         const events = { ...state.events };
         delete events[threadId];
+        const messages = { ...state.messages };
+        delete messages[threadId];
         return {
           threads,
           events,
+          messages,
           activeThreadId: state.activeThreadId === threadId ? null : state.activeThreadId,
         };
       }),
@@ -148,6 +159,11 @@ export function createAppStore() {
           threads,
         };
       }),
+
+    setMessages: (threadId, messages) =>
+      set((state) => ({
+        messages: { ...state.messages, [threadId]: messages },
+      })),
 
     setSettings: (settings) => set({ settings }),
 

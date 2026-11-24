@@ -2,7 +2,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { MarkdownTheme } from '@tuffcode/ui';
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { ApprovalCard } from './ApprovalCard';
-import type { TimelineItem } from './grouping';
+import type { TimelineItem, UserItem } from './grouping';
 import {
   AssistantMessage,
   NoticeRow,
@@ -16,14 +16,20 @@ export interface TimelineProps {
   items: TimelineItem[];
   theme: MarkdownTheme;
   threadId: string;
+  onRetryUserMessage?: (item: UserItem) => void;
 }
 
 const BOTTOM_THRESHOLD_PX = 64;
 
-function renderItem(item: TimelineItem, theme: MarkdownTheme, threadId: string): ReactNode {
+function renderItem(
+  item: TimelineItem,
+  theme: MarkdownTheme,
+  threadId: string,
+  onRetryUserMessage?: (item: UserItem) => void,
+): ReactNode {
   switch (item.kind) {
     case 'user':
-      return <UserBubble item={item} />;
+      return <UserBubble item={item} onRetry={onRetryUserMessage} />;
     case 'assistant':
       return <AssistantMessage item={item} theme={theme} />;
     case 'reasoning':
@@ -39,7 +45,7 @@ function renderItem(item: TimelineItem, theme: MarkdownTheme, threadId: string):
   }
 }
 
-export function Timeline({ items, theme, threadId }: TimelineProps) {
+export function Timeline({ items, theme, threadId, onRetryUserMessage }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
 
@@ -83,7 +89,7 @@ export function Timeline({ items, theme, threadId }: TimelineProps) {
               style={{ transform: `translateY(${virtualRow.start}px)` }}
             >
               <div className="mx-auto w-full max-w-[var(--chat-content-max-width)] px-4">
-                {renderItem(item, theme, threadId)}
+                {renderItem(item, theme, threadId, onRetryUserMessage)}
               </div>
             </div>
           );

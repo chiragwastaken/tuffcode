@@ -1,6 +1,16 @@
-import type { ThreadEventRow } from '@tuffcode/contracts';
+import type { Message, ThreadEventRow } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import { MAX_EVENTS_PER_THREAD, createAppStore } from './app-store';
+
+function message(id: string, threadId = 'thread-1'): Message {
+  return {
+    id,
+    threadId,
+    role: 'user',
+    content: id,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
 
 function textEvent(seq: number, threadId = 'thread-1'): ThreadEventRow {
   return {
@@ -51,5 +61,54 @@ describe('app store appendEvent', () => {
     expect(kept).toHaveLength(MAX_EVENTS_PER_THREAD);
     expect(kept[0]).toBe(1);
     expect(kept.at(-1)).toBe(MAX_EVENTS_PER_THREAD);
+  });
+});
+
+describe('app store messages', () => {
+  it('stores persisted rows per thread and replaces them on reload', () => {
+    const store = createAppStore();
+
+    store.getState().setMessages('thread-1', [message('msg_turn-1_user')]);
+    store.getState().setMessages('thread-2', [message('msg_turn-2_user', 'thread-2')]);
+
+    expect(store.getState().messages['thread-1']?.map((row) => row.id)).toEqual([
+      'msg_turn-1_user',
+    ]);
+    expect(store.getState().messages['thread-2']?.map((row) => row.id)).toEqual([
+      'msg_turn-2_user',
+    ]);
+
+    store.getState().setMessages('thread-1', [message('msg_turn-3_user')]);
+    expect(store.getState().messages['thread-1']?.map((row) => row.id)).toEqual([
+      'msg_turn-3_user',
+    ]);
+  });
+
+  it('drops messages with the thread', () => {
+    const store = createAppStore();
+
+    store.getState().upsertThread({
+      id: 'thread-1',
+      projectId: 'project-1',
+      parentThreadId: null,
+      title: 'Thread',
+      providerId: 'provider-1',
+      modelId: 'model-1',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      status: 'idle',
+      worktreePath: 'C:/worktree',
+      branch: 'tuffcode/thread-1',
+      baseBranch: 'main',
+      prUrl: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastSeq: 0,
+    });
+    store.getState().setMessages('thread-1', [message('msg_turn-1_user')]);
+
+    store.getState().removeThread('thread-1');
+
+    expect(store.getState().messages['thread-1']).toBeUndefined();
   });
 });

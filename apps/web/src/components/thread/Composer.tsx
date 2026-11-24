@@ -32,7 +32,11 @@ import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './attachments';
-import { addLocalUserMessage } from './local-messages';
+import {
+  addLocalUserMessage,
+  failLocalUserMessage,
+  resolveLocalUserMessage,
+} from './local-messages';
 import { filterPalette, parseTrigger, triggerInsert, type PaletteKind } from './slash';
 import { useProjectPalette } from './use-project-palette';
 
@@ -166,23 +170,28 @@ export function Composer({ thread }: ComposerProps) {
     if (!thread || !canSend) return;
     const text = input.trim();
     if (text.length === 0) return;
+    const messageId = nextLocalMessageId(thread.id);
+    addLocalUserMessage({
+      id: messageId,
+      threadId: thread.id,
+      turnId: null,
+      text,
+      attachments,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    });
     setSending(true);
+    setInput('');
+    setAttachments([]);
     try {
       const result = await rpc.request('threads.send', {
         id: thread.id,
         text,
         ...(attachments.length > 0 ? { attachments } : {}),
       });
-      addLocalUserMessage({
-        id: nextLocalMessageId(thread.id),
-        threadId: thread.id,
-        turnId: result.turnId,
-        text,
-        attachments,
-      });
-      setInput('');
-      setAttachments([]);
+      resolveLocalUserMessage(messageId, result.turnId);
     } catch (error) {
+      failLocalUserMessage(messageId);
       toast.error(error instanceof Error ? error.message : 'Could not send the message.');
     } finally {
       setSending(false);
