@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { glob as fsGlob, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob, relative, resolve } from 'node:path';
 import type { AdapterDeps, PermissionMode, TurnContext } from '@tuffcode/contracts';
-import { TOOL_NAMES, type ToolName } from '@tuffcode/prompt';
+import { SUBAGENT_TOOL_NAME, TOOL_NAMES, isSubagentType, type ToolName } from '@tuffcode/prompt';
 import { applyEol, dominantEol, normalizeEol, resolveWithin, type Eol } from '@tuffcode/shared';
 
 const MAX_OUTPUT = 64 * 1024;
@@ -486,6 +486,50 @@ const bashTool: ToolExecutor = async (args, ctx, _state, deps) => {
   }
 };
 
+/**
+ * Delegation is allowed everywhere except a read-only turn; asking first matches the
+ * other side-effecting tools, so `ask` mode shows one approval per spawn.
+ */
+export function classifySubagentTool(mode: PermissionMode): PermissionDecision {
+  if (mode === 'read-only') return 'deny';
+  return mode === 'ask' ? 'approve' : 'allow';
+}
+
+/**
+ * Spawns a child and answers immediately with its id. The child's summary arrives as
+ * a `subagent.finished` event and through `subagents.list`, never by blocking the
+ * parent turn on a long-running child.
+ */
+async function subagentTool(
+  args: Record<string, unknown>,
+  ctx: TurnContext,
+  deps: AdapterDeps,
+): Promise<ToolExecResult> {
+  if (deps.spawnSubagent === undefined) {
+    return fail('the subagent tool is unavailable in this session');
+  }
+  if (!isSubagentType(args.type)) {
+    return fail('type must be one of explorer, reviewer, notetaker, worker, planner');
+  }
+  if (typeof args.task !== 'string' || args.task.trim().length === 0) {
+    return fail('task must be a non-empty string');
+  }
+  const model = typeof args.model === 'string' ? args.model.trim() : '';
+  try {
+    const spawned = await deps.spawnSubagent({
+      cwd: ctx.cwd,
+      type: args.type,
+      task: args.task,
+      ...(model.length === 0 ? {} : { model }),
+    });
+    return ok(
+      `subagent ${spawned.childId} (${args.type}) ${spawned.status}. Poll subagents.list with the parent thread for its summary.`,
+    );
+  } catch (error) {
+    return fail(errorMessage(error));
+  }
+}
+
 export const TOOL_EXECUTORS: Record<ToolName, ToolExecutor> = {
   bash: bashTool,
   read: readTool,
@@ -502,12 +546,13 @@ export async function executeTool(
   state: ToolSessionState,
   deps: AdapterDeps,
 ): Promise<ToolExecResult> {
-  if (!(TOOL_NAMES as readonly string[]).includes(name)) {
-    return fail(`unknown tool: ${name}`);
-  }
   const parsed =
     typeof args === 'object' && args !== null && !Array.isArray(args)
       ? (args as Record<string, unknown>)
       : {};
+  if (name === SUBAGENT_TOOL_NAME) return subagentTool(parsed, ctx, deps);
+  if (!(TOOL_NAMES as readonly string[]).includes(name)) {
+    return fail(`unknown tool: ${name}`);
+  }
   return TOOL_EXECUTORS[name as ToolName](parsed, ctx, state, deps);
 }

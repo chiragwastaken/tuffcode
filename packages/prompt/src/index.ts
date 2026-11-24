@@ -12,6 +12,26 @@ export {
   COUNCIL_REVIEWER_PROMPT,
   COUNCIL_WORKER_BRIEF_TEMPLATE,
 } from './council';
+export {
+  EXPLORER_PROMPT,
+  NOTETAKER_PROMPT,
+  PLANNER_PROMPT,
+  REVIEWER_PROMPT,
+  SUBAGENT_PROMPTS,
+  SUBAGENT_TOOL,
+  SUBAGENT_TOOL_NAME,
+  SUBAGENT_TYPES,
+  WORKER_PROMPT,
+  buildSubagentMessage,
+  isSubagentType,
+  parseNotetakerFacts,
+} from './subagents';
+export type {
+  NotetakerFact,
+  SubagentMessageInput,
+  SubagentToolDefinition,
+  SubagentType,
+} from './subagents';
 export { buildTurnContext, estimateTokens } from './context';
 export type { ExecutionMode, TurnContextInput } from './context';
 

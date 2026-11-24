@@ -35,6 +35,8 @@ import { createProviderHandlers } from './providers/rpc.js';
 import type { ProvidersService } from './providers/service.js';
 import { createRunnerHandlers } from './runner/rpc.js';
 import type { Runner } from './runner/runner.js';
+import { createSubagentHandlers } from './subagents/rpc.js';
+import type { Subagents } from './subagents/types.js';
 import { createThread, deleteThread, getThread, listThreads, updateThread } from './threads.js';
 
 export interface RpcDeps {
@@ -50,6 +52,8 @@ export interface RpcDeps {
   diagnostics: DiagnosticsInput;
   /** Present once the council slice is wired; absent leaves its methods unregistered. */
   council?: Council;
+  /** Present once the subagent slice is wired; absent leaves its methods unregistered. */
+  subagents?: Subagents;
   featureHandlers: readonly RpcHandlers[];
 }
 
@@ -186,6 +190,9 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   register(deps.commands);
   register(createDiagnosticsHandlers(deps.diagnostics));
   if (deps.council !== undefined) register(createCouncilHandlers({ council: deps.council }));
+  if (deps.subagents !== undefined) {
+    register(createSubagentHandlers({ subagents: deps.subagents }));
+  }
   for (const feature of deps.featureHandlers) register(feature);
 
   return handlers;

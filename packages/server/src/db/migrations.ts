@@ -253,6 +253,25 @@ ALTER TABLE providers_new RENAME TO providers;
 ALTER TABLE provider_models_new RENAME TO provider_models;
 `;
 
+const SUBAGENTS_SQL = `
+CREATE TABLE subagents (
+  child_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  child_thread_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('explorer','reviewer','notetaker','worker','planner')),
+  provider_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed','cancelled')),
+  task TEXT NOT NULL,
+  summary TEXT,
+  budget_tokens INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_subagents_thread ON subagents(thread_id, created_at);
+CREATE INDEX idx_subagents_status ON subagents(status);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -268,5 +287,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 3,
     name: 'provider-anthropic-kind',
     sql: ANTHROPIC_KIND_SQL,
+  },
+  {
+    version: 4,
+    name: 'subagents',
+    sql: SUBAGENTS_SQL,
   },
 ];
