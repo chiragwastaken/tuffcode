@@ -111,8 +111,7 @@ describe('handleChildMessage', () => {
       store,
     );
 
-    expect(reply).toMatchObject({ id: 'r4', ok: false });
-    expect(reply).toHaveProperty('error');
+    expect(reply).toEqual({ id: 'r4', ok: false, error: 'Unknown secret message type.' });
     expect(messages).toEqual([reply]);
   });
 
@@ -120,13 +119,29 @@ describe('handleChildMessage', () => {
     const { child } = createChild();
     const { store } = createStore();
 
-    expect(handleChildMessage(child, { id: 'r5', type: 'secret.get' }, store)).toMatchObject({
+    expect(handleChildMessage(child, { id: 'r5', type: 'secret.get' }, store)).toEqual({
       id: 'r5',
       ok: false,
+      error: 'The secret request is missing its key.',
     });
     expect(
       handleChildMessage(child, { id: 'r6', type: 'secret.set', value: 'sk-test' }, store),
-    ).toMatchObject({ id: 'r6', ok: false });
+    ).toEqual({ id: 'r6', ok: false, error: 'The secret request is missing its key.' });
+  });
+
+  it('refuses a non-string value from a misbehaving store', () => {
+    const { child, messages } = createChild();
+    const { store } = createStore();
+    const broken: SecretStore = { ...store, get: () => 42 as unknown as string };
+
+    const reply = handleChildMessage(
+      child,
+      { id: 'r16', type: 'secret.get', key: 'openai' },
+      broken,
+    );
+
+    expect(reply).toEqual({ id: 'r16', ok: false, error: 'The secret could not be read.' });
+    expect(messages).toEqual([reply]);
   });
 
   it('rejects a secret.set without a string value', () => {
@@ -135,10 +150,10 @@ describe('handleChildMessage', () => {
 
     expect(
       handleChildMessage(child, { id: 'r7', type: 'secret.set', key: 'openai' }, store),
-    ).toMatchObject({ id: 'r7', ok: false });
+    ).toEqual({ id: 'r7', ok: false, error: 'The secret request is missing its value.' });
     expect(
       handleChildMessage(child, { id: 'r8', type: 'secret.set', key: 'openai', value: 42 }, store),
-    ).toMatchObject({ id: 'r8', ok: false });
+    ).toEqual({ id: 'r8', ok: false, error: 'The secret request is missing its value.' });
     expect(values.size).toBe(0);
   });
 
@@ -176,6 +191,26 @@ describe('handleChildMessage', () => {
     expect(getReply).toHaveProperty('error', expect.stringMatching(/encryption is unavailable/i));
     expect(values).toEqual(new Map([['openai', 'sk-test']]));
     expect(messages).toEqual([getReply, setReply]);
+  });
+
+  it('refuses a request when the store cannot report availability', () => {
+    const { child, messages } = createChild();
+    const { store } = createStore({ openai: 'sk-test' });
+    const broken: SecretStore = {
+      ...store,
+      available: () => {
+        throw new Error('keyring is locked');
+      },
+    };
+
+    const reply = handleChildMessage(
+      child,
+      { id: 'r17', type: 'secret.get', key: 'openai' },
+      broken,
+    );
+
+    expect(reply).toMatchObject({ id: 'r17', ok: false });
+    expect(messages).toEqual([reply]);
   });
 
   it('never puts a secret value in a reply or a log line', () => {

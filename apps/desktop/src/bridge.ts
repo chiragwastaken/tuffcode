@@ -113,7 +113,10 @@ function resolveRequest(
 
     try {
       const value = secretStore.get(key);
-      return value === undefined ? { id, ok: true } : { id, ok: true, value };
+      if (value === undefined) return { id, ok: true };
+      if (typeof value === 'string') return { id, ok: true, value };
+      logger?.warn('secret store returned a non-string value', { id });
+      return { id, ok: false, error: GET_FAILED_ERROR };
     } catch (error) {
       logger?.warn('secret read failed', { id, error: errorName(error) });
       return { id, ok: false, error: GET_FAILED_ERROR };

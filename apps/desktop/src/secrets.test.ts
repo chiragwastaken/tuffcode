@@ -63,6 +63,24 @@ describe('createSecretStore', () => {
     const store = createSecretStore({ filePath: temporaryStorePath() });
     expect(store.read()).toEqual({});
     expect(store.get('openai')).toBeUndefined();
+    expect(store.get('toString')).toBeUndefined();
+    expect(store.get('constructor')).toBeUndefined();
+  });
+
+  it('treats prototype member names as ordinary keys', () => {
+    const filePath = temporaryStorePath();
+    const store = createSecretStore({ filePath });
+
+    store.set('toString', 'text-value');
+    store.set('__proto__', 'proto-value');
+
+    expect(store.get('toString')).toBe('text-value');
+    expect(store.get('__proto__')).toBe('proto-value');
+
+    const reloaded = createSecretStore({ filePath });
+    expect(reloaded.get('toString')).toBe('text-value');
+    expect(reloaded.get('__proto__')).toBe('proto-value');
+    expect(reloaded.get('hasOwnProperty')).toBeUndefined();
   });
 
   it('refuses to read when encryption is unavailable and a file exists', () => {

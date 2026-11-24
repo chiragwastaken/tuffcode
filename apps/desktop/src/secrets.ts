@@ -53,9 +53,18 @@ const electronBackend: SecretBackend = {
   decryptString: (value) => safeStorage.decryptString(value),
 };
 
-function isSecrets(value: unknown): value is Secrets {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  return Object.values(value).every((entry) => typeof entry === 'string');
+function parseSecrets(value: unknown, filePath: string): Secrets {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new SecretsCorruptError(filePath);
+  }
+
+  // A null-prototype record keeps names like `__proto__` and `toString` as ordinary keys.
+  const secrets = Object.create(null) as Secrets;
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'string') throw new SecretsCorruptError(filePath);
+    secrets[key] = entry;
+  }
+  return secrets;
 }
 
 /**
@@ -67,7 +76,7 @@ export function createSecretStore(options: SecretStoreOptions = {}): SecretStore
   const backend = options.backend ?? electronBackend;
 
   const read = (): Secrets => {
-    if (!existsSync(filePath)) return {};
+    if (!existsSync(filePath)) return Object.create(null) as Secrets;
     if (!backend.isEncryptionAvailable()) throw new SecretsUnavailableError();
 
     let decrypted: string;
@@ -83,8 +92,7 @@ export function createSecretStore(options: SecretStoreOptions = {}): SecretStore
     } catch (error) {
       throw new SecretsCorruptError(filePath, { cause: error });
     }
-    if (!isSecrets(parsed)) throw new SecretsCorruptError(filePath);
-    return parsed;
+    return parseSecrets(parsed, filePath);
   };
 
   const write = (secrets: Secrets): void => {
