@@ -53,9 +53,9 @@ export function brainEntryMeta(entry: BrainEntry): string {
 }
 
 /**
- * Round-trips every field the repository stores so a toggle cannot clear data:
- * the upsert schema has no defaults, and an omitted projectId would otherwise
- * drop a project-scoped entry to global.
+ * Round-trips every field the upsert contract exposes, so a toggle cannot clear
+ * data: an omitted projectId would drop a project-scoped entry to global. The
+ * repository preserves sourceQuote when it is omitted.
  */
 export function toggleBrainEntryParams(entry: BrainEntry): RpcParams<'brain.upsert'> {
   return {

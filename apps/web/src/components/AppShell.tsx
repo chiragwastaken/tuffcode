@@ -97,7 +97,7 @@ export function AppShell() {
           )}
         >
           <div className="flex h-full min-w-0 flex-1 flex-col">
-            <InspectorPanel threadId={inspectorThreadId} open={inspectorOpen} />
+            <InspectorPanel threadId={inspectorThreadId} />
           </div>
         </aside>
       </div>

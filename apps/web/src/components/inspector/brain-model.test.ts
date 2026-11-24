@@ -79,7 +79,7 @@ describe('brain entry helpers', () => {
     ).toBe('prj_1 | plan | style | importance 0.90');
   });
 
-  it('round-trips every stored field when toggling active', () => {
+  it('sends every contract field when toggling active', () => {
     const entry = makeEntry({
       id: 'brn_9',
       kind: 'project',

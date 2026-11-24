@@ -12,6 +12,7 @@ import {
   councilErrorMessage,
   countFinishedTasks,
   isGoalTerminal,
+  isPermanentCouncilFailure,
 } from './council-model';
 
 describe('council state labels', () => {
@@ -103,5 +104,14 @@ describe('council error messages', () => {
       'The council request failed.',
     );
     expect(councilErrorMessage('boom')).toBe('The council request failed.');
+  });
+
+  it('separates permanent failures from transient ones', () => {
+    expect(isPermanentCouncilFailure({ code: 'not-found' })).toBe(true);
+    expect(isPermanentCouncilFailure({ code: 'bad-request' })).toBe(true);
+    expect(isPermanentCouncilFailure({ code: 'permission-denied' })).toBe(true);
+    expect(isPermanentCouncilFailure({ code: 'internal' })).toBe(false);
+    expect(isPermanentCouncilFailure(new Error('socket closed'))).toBe(false);
+    expect(isPermanentCouncilFailure(null)).toBe(false);
   });
 });
