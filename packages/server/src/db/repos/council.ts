@@ -64,6 +64,8 @@ export interface CouncilRepo {
   createGoal(input: CreateGoalInput): Goal;
   getGoal(id: string): Goal | undefined;
   listGoals(threadId?: string): Goal[];
+  /** The thread's newest goal, so a reload can reattach to it. */
+  latestGoal(threadId: string): Goal | undefined;
   setGoalState(id: string, state: GoalState, reportedAt?: string | null): Goal | undefined;
   createTask(input: CreateTaskInput): Task;
   getTask(id: string): Task | undefined;
@@ -153,6 +155,9 @@ export function createCouncilRepo(db: DatabaseSync): CouncilRepo {
   const selectGoalsByThread = db.prepare(
     `SELECT ${GOAL_COLUMNS} FROM goals WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC`,
   );
+  const selectLatestGoalByThread = db.prepare(
+    `SELECT ${GOAL_COLUMNS} FROM goals WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  );
   const insertGoal = db.prepare(
     'INSERT INTO goals (id, thread_id, text, autonomy, state, created_at, reported_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
   );
@@ -233,6 +238,10 @@ export function createCouncilRepo(db: DatabaseSync): CouncilRepo {
       (threadId === undefined ? selectGoals.all() : selectGoalsByThread.all(threadId)).map((row) =>
         mapGoal(asRow(row)),
       ),
+    latestGoal: (threadId) => {
+      const row = selectLatestGoalByThread.get(threadId);
+      return row === undefined ? undefined : mapGoal(asRow(row));
+    },
     setGoalState: (id, state, reportedAt = null) => {
       updateGoalState.run(state, reportedAt, id);
       return getGoal(id);

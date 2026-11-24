@@ -31,6 +31,10 @@ function fakeCouncil(): { council: Council; calls: string[] } {
         calls.push(`status:${goalId}`);
         return status;
       },
+      latest: (threadId) => {
+        calls.push(`latest:${threadId}`);
+        return status;
+      },
       awaitGoal: async () => goal,
       dispose: async () => undefined,
     },
@@ -38,16 +42,17 @@ function fakeCouncil(): { council: Council; calls: string[] } {
 }
 
 describe('createCouncilHandlers', () => {
-  it('registers exactly the three council methods', () => {
+  it('registers exactly the four council methods', () => {
     const { council } = fakeCouncil();
     expect(Array.from(createCouncilHandlers({ council }).keys()).toSorted()).toEqual([
       'council.cancel',
+      'council.latest',
       'council.start',
       'council.status',
     ]);
   });
 
-  it('delegates start, cancel, and status', async () => {
+  it('delegates start, cancel, status and latest', async () => {
     const { council, calls } = fakeCouncil();
     const handlers = createCouncilHandlers({ council });
 
@@ -60,6 +65,7 @@ describe('createCouncilHandlers', () => {
     ).resolves.toEqual({ goalId: 'gol_1' });
     await expect(handlers.get('council.cancel')?.({ goalId: 'gol_1' })).resolves.toEqual({});
     expect(handlers.get('council.status')?.({ goalId: 'gol_1' })).toBe(status);
-    expect(calls).toEqual(['start:thr_1:auto', 'cancel:gol_1', 'status:gol_1']);
+    expect(handlers.get('council.latest')?.({ threadId: 'thr_1' })).toBe(status);
+    expect(calls).toEqual(['start:thr_1:auto', 'cancel:gol_1', 'status:gol_1', 'latest:thr_1']);
   });
 });

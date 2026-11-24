@@ -493,6 +493,17 @@ export const methods = {
       reviews: ReviewSchema.array(),
     }),
   },
+  'council.latest': {
+    params: z.object({ threadId: IdSchema }),
+    /** The thread's newest goal, so a reload reattaches to it; null before the first one. */
+    result: z
+      .object({
+        goal: GoalSchema,
+        tasks: TaskSchema.array(),
+        reviews: ReviewSchema.array(),
+      })
+      .nullable(),
+  },
   'subagents.spawn': {
     params: z.object({
       threadId: IdSchema,

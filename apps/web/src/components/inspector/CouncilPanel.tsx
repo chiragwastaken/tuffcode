@@ -2,11 +2,12 @@ import type { RpcResult, Review, Task, TaskState } from '@tuffcode/contracts';
 import { Badge, Button, ScrollArea, Spinner } from '@tuffcode/ui';
 import { useNavigate } from '@tanstack/react-router';
 import { MessagesSquare, RefreshCw, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { CouncilBoard } from '../council/CouncilBoard';
 import type { BoardNode } from '../council/council-board';
+import { goalIdFromLatest } from '../council/council-goal-source';
 import {
   GOAL_STATE_LABEL,
   GOAL_STATE_TONE,
@@ -19,7 +20,6 @@ import {
   isGoalTerminal,
   isPermanentCouncilFailure,
 } from './council-model';
-import { forgetCouncilGoal, rememberedCouncilGoal } from './council-goals';
 
 export interface CouncilPanelProps {
   threadId: string;
@@ -41,7 +41,11 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   const executionMode = useAppStore((state) => state.threads[threadId]?.executionMode ?? 'work');
   const upsertThread = useAppStore((state) => state.upsertThread);
 
-  const [goalId, setGoalId] = useState<string | null>(() => rememberedCouncilGoal(threadId));
+  const [goalId, setGoalId] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(executionMode === 'council');
+  // The goal the user dismissed with New goal; it stays hidden until a different
+  // goal replaces it.
+  const dismissedGoal = useRef<string | null>(null);
   const [status, setStatus] = useState<CouncilStatus | null>(null);
   const [selectedNode, setSelectedNode] = useState<BoardNode | null>(null);
   const [loading, setLoading] = useState(false);
@@ -72,6 +76,31 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     }
   }, [rpc, goalId]);
 
+  const resolveLatest = useCallback(async (): Promise<void> => {
+    setResolving(true);
+    try {
+      const latest = await rpc.request('council.latest', { threadId });
+      setGoalId(goalIdFromLatest(latest, dismissedGoal.current));
+      setPollingStopped(false);
+    } catch {
+      // A failed lookup must not block the composer from starting a goal.
+      setGoalId(null);
+    } finally {
+      setResolving(false);
+    }
+  }, [rpc, threadId]);
+
+  // A goal id lives on the server, so a reload reattaches to whatever the thread ran
+  // last. Work-mode threads have no council goal, so they never ask.
+  useEffect(() => {
+    if (executionMode !== 'council') {
+      setResolving(false);
+      return;
+    }
+    setResolving(true);
+    void resolveLatest();
+  }, [executionMode, resolveLatest]);
+
   useEffect(() => {
     if (goalId === null) {
       setStatus(null);
@@ -82,14 +111,18 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   }, [goalId, load, reloadToken]);
 
   // The board follows events between polls so a state change shows up in the same
-  // frame the server announces it.
+  // frame the server announces it. With no goal yet, the first event for this thread
+  // (a goal started from the composer) pulls in the new goal.
   useEffect(() => {
-    if (goalId === null) return;
     return rpc.onEvent((event) => {
-      if (event.type !== 'council.updated' || event.payload.goalId !== goalId) return;
-      void load();
+      if (event.type !== 'council.updated') return;
+      if (goalId !== null) {
+        if (event.payload.goalId === goalId) void load();
+        return;
+      }
+      if (event.threadId === threadId) void resolveLatest();
     });
-  }, [goalId, load, rpc]);
+  }, [goalId, load, resolveLatest, rpc, threadId]);
 
   const goalState = status?.goal.state;
   useEffect(() => {
@@ -99,16 +132,13 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     return () => clearInterval(timer);
   }, [goalId, goalState, load, pollingStopped]);
 
-  // A goal started from the composer is remembered for this thread; the panel
-  // adopts it so both views follow the same run.
+  // The composer starts the goal, so the panel keeps asking for the thread's newest
+  // one while it has none; a missed event still resolves within a poll.
   useEffect(() => {
-    if (goalId !== null || executionMode !== 'council') return;
-    const timer = setInterval(() => {
-      const adopted = rememberedCouncilGoal(threadId);
-      if (adopted !== null) setGoalId(adopted);
-    }, 1500);
+    if (goalId !== null || executionMode !== 'council' || resolving) return;
+    const timer = setInterval(() => void resolveLatest(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [goalId, executionMode, threadId]);
+  }, [executionMode, goalId, resolveLatest, resolving]);
 
   async function switchToCouncil(): Promise<void> {
     if (switchingMode) return;
@@ -140,7 +170,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   }
 
   function handleNewGoal(): void {
-    forgetCouncilGoal(threadId);
+    dismissedGoal.current = goalId;
     setGoalId(null);
     setStatus(null);
     setSelectedNode(null);
@@ -168,6 +198,20 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     const forTask = status.reviews.filter((review) => review.taskId === taskId);
     return forTask[forTask.length - 1] ?? null;
   }, [selectedNode, status]);
+
+  if (goalId === null && resolving) {
+    return (
+      <section
+        aria-label="Council"
+        data-testid="council-panel"
+        data-resolving="true"
+        className="flex h-full min-h-0 flex-col items-center justify-center gap-2 bg-background text-foreground"
+      >
+        <Spinner size="sm" label="Looking for a goal" />
+        <p className="text-xs text-muted-foreground">Looking for this thread's last goal</p>
+      </section>
+    );
+  }
 
   if (goalId === null) {
     return (

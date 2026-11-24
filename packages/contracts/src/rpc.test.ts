@@ -488,6 +488,10 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     params: { goalId: 'g1' },
     result: { goal, tasks: [task], reviews: [review] },
   },
+  'council.latest': {
+    params: { threadId: 't1' },
+    result: { goal, tasks: [task], reviews: [review] },
+  },
   'subagents.spawn': {
     params: {
       threadId: 't1',
@@ -541,6 +545,7 @@ const expectedMethods: RpcMethod[] = [
   'comments.list',
   'comments.resolve',
   'council.cancel',
+  'council.latest',
   'council.start',
   'council.status',
   'diagnostics.export',
@@ -661,8 +666,8 @@ function parseCommandRunResult(result: unknown) {
 }
 
 describe('rpc methods', () => {
-  it('exposes exactly 57 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(57);
+  it('exposes exactly 58 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(58);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -776,8 +781,16 @@ describe('rpc methods', () => {
   it('rejects null params and results for every method', () => {
     for (const method of RPC_METHODS) {
       expect(methods[method].params.safeParse(null).success, `${method} params`).toBe(false);
+      // council.latest answers null when the thread never ran a goal.
+      if (method === 'council.latest') continue;
       expect(methods[method].result.safeParse(null).success, `${method} result`).toBe(false);
     }
+  });
+
+  it('accepts a null result for council.latest', () => {
+    expect(methods['council.latest'].result.safeParse(null).success).toBe(true);
+    expect(methods['council.latest'].params.safeParse({ threadId: 't1' }).success).toBe(true);
+    expect(methods['council.latest'].params.safeParse({}).success).toBe(false);
   });
 
   it('rejects wrong field values', () => {
@@ -809,6 +822,7 @@ describe('rpc methods', () => {
       ['git.pr', 'result', { url: 'https://example.test/pr/1', number: 0 }],
       ['app.health', 'result', { version: '1', pid: 1, uptimeMs: 1 }],
       ['council.status', 'result', { goal, tasks: 'none', reviews: [] }],
+      ['council.latest', 'result', { goal, tasks: [], reviews: 'none' }],
       ['providers.test', 'result', { ok: true }],
       ['brain.list', 'result', [brainEntry, { ...brainEntry, importance: 2 }]],
       [

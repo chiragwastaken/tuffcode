@@ -676,11 +676,19 @@ export function createCouncil(deps: CouncilDeps): Council {
     addGoalMessage(goal, 'Council cancelled by the user.');
   }
 
-  function status(goalId: string): CouncilStatus {
-    const goal = requireGoal(goalId);
-    const tasks = repos.council.listTasks(goalId);
+  function statusFor(goal: Goal): CouncilStatus {
+    const tasks = repos.council.listTasks(goal.id);
     const reviews = tasks.flatMap((task) => repos.council.listReviews(task.id));
     return { goal, tasks, reviews };
+  }
+
+  function status(goalId: string): CouncilStatus {
+    return statusFor(requireGoal(goalId));
+  }
+
+  function latest(threadId: string): CouncilStatus | null {
+    const goal = repos.council.latestGoal(threadId);
+    return goal === undefined ? null : statusFor(goal);
   }
 
   async function awaitGoal(goalId: string): Promise<Goal> {
@@ -700,5 +708,5 @@ export function createCouncil(deps: CouncilDeps): Council {
     }
   }
 
-  return { start, cancel, status, awaitGoal, dispose };
+  return { start, cancel, status, latest, awaitGoal, dispose };
 }

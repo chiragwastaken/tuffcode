@@ -98,6 +98,8 @@ export interface Council {
   /** Stops every worker, disposes child threads, and marks open rows cancelled. */
   cancel(goalId: string): Promise<void>;
   status(goalId: string): CouncilStatus;
+  /** The thread's newest goal with its tasks and reviews; null before the first goal. */
+  latest(threadId: string): CouncilStatus | null;
   /** Test and shutdown hook: resolves when the goal run has fully settled. */
   awaitGoal(goalId: string): Promise<Goal>;
   /** Cancels every live goal; safe to call more than once. */

@@ -714,3 +714,27 @@ describe('council cancellation', () => {
     }
   });
 });
+
+describe('council.latest', () => {
+  it('returns the newest goal on the thread with its tasks and reviews', async () => {
+    const harness = createHarness();
+    try {
+      expect(harness.council.latest('thr_goal')).toBeNull();
+      expect(harness.council.latest('thr_missing')).toBeNull();
+
+      const firstId = await startGoal(harness, 'First goal');
+      await harness.council.awaitGoal(firstId);
+      const secondId = await startGoal(harness, 'Second goal');
+      await harness.council.awaitGoal(secondId);
+
+      const latest = harness.council.latest('thr_goal');
+      expect(latest?.goal.id).toBe(secondId);
+      expect(latest?.goal.text).toBe('Second goal');
+      expect(latest?.tasks.map((task) => task.title)).toEqual(['Add widget']);
+      expect(latest?.reviews).toHaveLength(1);
+      expect(latest?.reviews[0]?.taskId).toBe(latest?.tasks[0]?.id);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
