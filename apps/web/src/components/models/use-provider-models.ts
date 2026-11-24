@@ -126,7 +126,7 @@ function commit(providerId: string, state: ProviderModelsState): void {
   emit(providerId);
 }
 
-export function subscribeProviderModels(providerId: string, listener: () => void): () => void {
+function subscribeProviderModels(providerId: string, listener: () => void): () => void {
   let set = listeners.get(providerId);
   if (!set) {
     set = new Set();
@@ -139,15 +139,7 @@ export function subscribeProviderModels(providerId: string, listener: () => void
   };
 }
 
-/** Seeds or replaces the cache without a request; used by tests and imports. */
-export function setProviderModels(providerId: string, models: readonly Model[]): void {
-  commit(
-    providerId,
-    applyProviderModels(snapshot(providerId), { models: [...models], source: 'cache' }),
-  );
-}
-
-export function loadProviderModels(
+function loadProviderModels(
   rpc: RpcClient,
   providerId: string,
   options: { refresh?: boolean } = {},
@@ -179,15 +171,8 @@ export function loadProviderModels(
   return task;
 }
 
-export function addManualProviderModel(providerId: string, modelId: string): void {
+function addManualProviderModel(providerId: string, modelId: string): void {
   commit(providerId, addManualModelToState(snapshot(providerId), providerId, modelId));
-}
-
-export function clearProviderModelsCache(): void {
-  states.clear();
-  listeners.clear();
-  inflight.clear();
-  started.clear();
 }
 
 export interface UseProviderModelsResult extends ProviderModelsState {
