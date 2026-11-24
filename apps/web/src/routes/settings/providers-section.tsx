@@ -7,26 +7,44 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
-  IconButton,
   Spinner,
 } from '@tuffcode/ui';
-import { Plus, Trash2 } from 'lucide-react';
+import { Pencil, Plus, RefreshCw, Star, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { ConfirmDialog } from '../../components/settings/confirm-dialog';
-import { InlineAlert } from '../../components/settings/inline-alert';
-import { PROVIDER_KIND_OPTIONS } from '../../components/settings/provider-form';
 import { ProviderDialog } from '../../components/settings/provider-dialog';
+import {
+  authModeLabel,
+  defaultModelOf,
+  providerAuthMode,
+  providerGroup,
+  providerKindLabel,
+  type ProviderGroup,
+} from '../../components/settings/provider-presets';
 import { SettingsSectionHeader } from '../../components/settings/settings-section-header';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 
 type ConnectionState =
   | { status: 'testing' }
-  | { status: 'done'; ok: boolean; detail: string }
+  | {
+      status: 'done';
+      ok: boolean;
+      signedIn?: boolean;
+      cliPath?: string;
+      detail: string;
+    }
   | { status: 'failed'; detail: string };
 
-const KIND_LABEL = new Map(PROVIDER_KIND_OPTIONS.map((option) => [option.value, option.label]));
+const GROUP_ORDER: readonly ProviderGroup[] = ['subscriptions', 'api', 'local', 'agents'];
+
+const GROUP_TITLE: Record<ProviderGroup, string> = {
+  subscriptions: 'Subscriptions',
+  api: 'API providers',
+  local: 'Local',
+  agents: 'Agents',
+};
 
 export function ProvidersSection() {
   const providers = useAppStore((state) => state.providers);
@@ -37,6 +55,7 @@ export function ProvidersSection() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ProviderView | null>(null);
   const [connections, setConnections] = useState<Record<string, ConnectionState>>({});
+  const [pendingDefault, setPendingDefault] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProviderView | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -48,11 +67,6 @@ export function ProvidersSection() {
 
   function openEdit(provider: ProviderView): void {
     setEditing(provider);
-    setConnections((previous) => {
-      const next = { ...previous };
-      delete next[provider.id];
-      return next;
-    });
     setDialogOpen(true);
   }
 
@@ -62,7 +76,13 @@ export function ProvidersSection() {
       const result = await rpc.request('providers.test', { id: provider.id });
       setConnections((previous) => ({
         ...previous,
-        [provider.id]: { status: 'done', ok: result.ok, detail: result.detail },
+        [provider.id]: {
+          status: 'done',
+          ok: result.ok,
+          signedIn: result.signedIn,
+          cliPath: result.cliPath,
+          detail: result.detail,
+        },
       }));
     } catch (error) {
       setConnections((previous) => ({
@@ -72,6 +92,24 @@ export function ProvidersSection() {
           detail: error instanceof Error ? error.message : 'Could not test the provider.',
         },
       }));
+    }
+  }
+
+  async function setDefault(provider: ProviderView): Promise<void> {
+    setPendingDefault(provider.id);
+    try {
+      const next = await rpc.request('settings.set', {
+        patch: {
+          defaultProviderId: provider.id,
+          defaultModelId: defaultModelOf(provider) || null,
+        },
+      });
+      setSettings(next);
+      toast.success(`${provider.label} is the default provider.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not set the default provider.');
+    } finally {
+      setPendingDefault(null);
     }
   }
 
@@ -86,6 +124,11 @@ export function ProvidersSection() {
       useAppStore.setState((state) => ({
         providers: state.providers.filter((provider) => provider.id !== target.id),
       }));
+      setConnections((previous) => {
+        const next = { ...previous };
+        delete next[target.id];
+        return next;
+      });
 
       if (settings?.defaultProviderId === target.id) {
         try {
@@ -114,83 +157,146 @@ export function ProvidersSection() {
     </Button>
   );
 
+  const grouped = new Map<ProviderGroup, ProviderView[]>(GROUP_ORDER.map((group) => [group, []]));
+  for (const provider of providers) grouped.get(providerGroup(provider))?.push(provider);
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <SettingsSectionHeader
         title="Providers"
-        description="Local CLIs and HTTP endpoints that run agent turns. API keys are stored by the server and never shown here."
+        description="Subscriptions reuse the vendor CLI and your plan. API providers use a key stored by the server. Multiple providers of any kind can coexist."
         actions={addButton}
       />
 
       {providers.length === 0 ? (
         <EmptyState
           title="No providers configured"
-          description="Add a local CLI or an OpenAI-compatible endpoint before creating a thread."
+          description="Add a subscription, an API provider, a local endpoint, or an agent before creating a thread."
           action={addButton}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          {providers.map((provider) => {
-            const connection = connections[provider.id];
-            const baseUrl =
-              typeof provider.config.baseUrl === 'string' ? provider.config.baseUrl : '';
-            const model = typeof provider.config.model === 'string' ? provider.config.model : '';
+        <div className="flex flex-col gap-6">
+          {GROUP_ORDER.map((group) => {
+            const rows = grouped.get(group) ?? [];
+            if (rows.length === 0) return null;
 
             return (
-              <Card key={provider.id}>
-                <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="truncate">{provider.label}</CardTitle>
-                      <Badge>{KIND_LABEL.get(provider.kind) ?? provider.kind}</Badge>
-                      {provider.hasSecret ? <Badge variant="success">Key saved</Badge> : null}
-                      {provider.enabled ? null : <Badge variant="warning">Disabled</Badge>}
-                    </div>
-                    <CardDescription className="break-all">
-                      {baseUrl || 'Uses the local CLI'}
-                      {model ? ` / ${model}` : ''}
-                    </CardDescription>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void testConnection(provider)}
-                      disabled={connection?.status === 'testing'}
-                    >
-                      {connection?.status === 'testing' ? <Spinner size="sm" /> : null}
-                      Test
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(provider)}>
-                      Edit
-                    </Button>
-                    <IconButton
-                      icon={Trash2}
-                      label={`Remove ${provider.label}`}
-                      size="sm"
-                      onClick={() => {
-                        setDeleteTarget(provider);
-                        setDeleteError(null);
-                      }}
-                    />
-                  </div>
-                </CardHeader>
+              <section key={group} aria-labelledby={`providers-group-${group}`}>
+                <div className="flex items-center justify-between pb-2">
+                  <h3
+                    id={`providers-group-${group}`}
+                    className="text-sm font-semibold text-foreground"
+                  >
+                    {GROUP_TITLE[group]}
+                  </h3>
+                  <span className="text-xs tabular-nums text-muted-foreground">{rows.length}</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {rows.map((provider) => {
+                    const connection = connections[provider.id];
+                    const auth = providerAuthMode(provider);
+                    const defaultModel = defaultModelOf(provider);
+                    const isDefault = settings?.defaultProviderId === provider.id;
 
-                {connection ? (
-                  <div className="px-3 pb-3">
-                    {connection.status === 'testing' ? (
-                      <p className="text-xs text-muted-foreground">Testing connection...</p>
-                    ) : connection.status === 'done' ? (
-                      <InlineAlert tone={connection.ok ? 'success' : 'error'}>
-                        {connection.detail ||
-                          (connection.ok ? 'Connection OK.' : 'Connection failed.')}
-                      </InlineAlert>
-                    ) : (
-                      <InlineAlert>{connection.detail}</InlineAlert>
-                    )}
-                  </div>
-                ) : null}
-              </Card>
+                    return (
+                      <Card key={provider.id}>
+                        <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+                          <div className="flex min-w-0 flex-col gap-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <CardTitle className="truncate">{provider.label}</CardTitle>
+                              <Badge>{providerKindLabel(provider.kind)}</Badge>
+                              <Badge variant={auth === 'subscription' ? 'primary' : 'neutral'}>
+                                {authModeLabel(auth)}
+                              </Badge>
+                              {isDefault ? <Badge variant="success">Default</Badge> : null}
+                              {provider.hasSecret ? (
+                                <Badge variant="success">Key saved</Badge>
+                              ) : null}
+                              {provider.enabled ? null : <Badge variant="warning">Disabled</Badge>}
+                            </div>
+                            <CardDescription className="break-all">
+                              {defaultModel ? `Default model: ${defaultModel}` : 'No default model'}
+                            </CardDescription>
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="text-muted-foreground">Last test:</span>
+                              {connection === undefined ? (
+                                <span className="text-muted-foreground">Not tested</span>
+                              ) : connection.status === 'testing' ? (
+                                <span className="flex items-center gap-1.5 text-muted-foreground">
+                                  <Spinner size="sm" />
+                                  Testing...
+                                </span>
+                              ) : connection.status === 'failed' ? (
+                                <>
+                                  <Badge variant="error">Failed</Badge>
+                                  <span
+                                    className="min-w-0 truncate text-muted-foreground"
+                                    title={connection.detail}
+                                  >
+                                    {connection.detail}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <Badge variant={connection.ok ? 'success' : 'error'}>
+                                    {connection.ok ? 'OK' : 'Failed'}
+                                  </Badge>
+                                  {connection.signedIn === true ? (
+                                    <Badge variant="success">Signed in</Badge>
+                                  ) : connection.signedIn === false ? (
+                                    <Badge variant="warning">Not signed in</Badge>
+                                  ) : null}
+                                  <span
+                                    className="min-w-0 truncate text-muted-foreground"
+                                    title={connection.cliPath ?? connection.detail}
+                                  >
+                                    {connection.cliPath ?? connection.detail}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void testConnection(provider)}
+                              disabled={connection?.status === 'testing'}
+                            >
+                              <RefreshCw strokeWidth={1.75} />
+                              Test
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void setDefault(provider)}
+                              disabled={isDefault || pendingDefault !== null}
+                            >
+                              <Star strokeWidth={1.75} />
+                              {isDefault ? 'Default' : 'Set default'}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => openEdit(provider)}>
+                              <Pencil strokeWidth={1.75} />
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setDeleteTarget(provider);
+                                setDeleteError(null);
+                              }}
+                            >
+                              <Trash2 strokeWidth={1.75} />
+                              Delete
+                            </Button>
+                          </div>
+                        </CardHeader>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </section>
             );
           })}
         </div>
