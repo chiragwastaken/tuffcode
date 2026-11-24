@@ -10,6 +10,9 @@ import {
   type TurnContext,
 } from '@tuffcode/contracts';
 import { newId, resolveWithin, type Logger } from '@tuffcode/shared';
+import { threadLimits, type ModelLimits } from '../context/limits.js';
+import { measureContext } from '../context/service.js';
+import type { ContextSectionInput } from '../context/usage.js';
 import type { ProviderRecord, Repos, TurnStatus } from '../db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
@@ -155,6 +158,36 @@ export function createRunner(deps: RunnerDeps): Runner {
     bus.emit({ kind: 'event', type: 'thread.updated', threadId: thread.id, payload: thread });
   }
 
+  /**
+   * Recomputes usage from the turn's assembled sections plus the conversation and
+   * broadcasts it. Compaction never touches persisted rows, so this is the only signal
+   * that the in-memory history shrank.
+   */
+  function emitContext(
+    thread: Thread,
+    sections: readonly ContextSectionInput[],
+    options: { excludeMessageId?: string; compacted: boolean; limits: ModelLimits },
+  ): void {
+    const usage = measureContext(repos, thread, sections, {
+      ...(options.excludeMessageId === undefined
+        ? {}
+        : { excludeMessageId: options.excludeMessageId }),
+      limits: options.limits,
+    });
+    bus.emit({
+      kind: 'event',
+      type: 'context.updated',
+      threadId: thread.id,
+      payload: {
+        threadId: thread.id,
+        usedTokens: usage.usedTokens,
+        maxTokens: usage.maxTokens,
+        percent: usage.percent,
+        compacted: options.compacted,
+      },
+    });
+  }
+
   function setThreadStatus(thread: Thread, status: ThreadStatus): Thread {
     const updated = repos.threads.update(thread.id, { status, updatedAt: nowIso() });
     const next = updated ?? { ...thread, status };
@@ -252,6 +285,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     text: string,
     ctx: TurnContext,
     state: TurnText,
+    sections: readonly ContextSectionInput[],
+    limits: ModelLimits,
   ): Promise<void> {
     let settled = false;
     try {
@@ -294,6 +329,15 @@ export function createRunner(deps: RunnerDeps): Runner {
       turnText.delete(turnId);
       const current = active.get(thread.id);
       if (current?.turnId === turnId) active.delete(thread.id);
+      try {
+        emitContext(thread, sections, {
+          excludeMessageId: userMessageId(turnId),
+          compacted: false,
+          limits,
+        });
+      } catch {
+        logger.warn('context accounting failed after turn', { threadId: thread.id, turnId });
+      }
     }
   }
 
@@ -334,6 +378,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       const createdAt = now.toISOString();
       const turnId = newId('turn');
       const settings = deps.settings();
+      const limits = threadLimits(repos, thread, settings);
       const { assembly, brain } = planPrompt(repos, {
         thread,
         project,
@@ -384,6 +429,38 @@ export function createRunner(deps: RunnerDeps): Runner {
         sessions.set(thread.id, { session: created, adapterKey });
       }
 
+      // The current user message already lives in the prompt sections, so its row is
+      // excluded from the conversation half of the estimate.
+      const excludeMessageId = userMessageId(turnId);
+      const preUsage = measureContext(repos, thread, assembly.sections, {
+        excludeMessageId,
+        limits,
+      });
+      let compacted = false;
+      if (
+        preUsage.percent >= settings.contextWarningThreshold &&
+        settings.autoCompact &&
+        session.compact !== undefined
+      ) {
+        try {
+          const result = await session.compact();
+          compacted = result.removed > 0;
+          logger.debug('context compacted before turn', {
+            threadId: thread.id,
+            turnId,
+            removed: result.removed,
+          });
+        } catch (error) {
+          // Compaction is an optimization: a failed summary keeps history as it was.
+          logger.warn('context compaction failed', {
+            threadId: thread.id,
+            turnId,
+            reason: errorMessage(error),
+          });
+        }
+      }
+      emitContext(thread, assembly.sections, { excludeMessageId, compacted, limits });
+
       const controller = new AbortController();
       const ctx: TurnContext = {
         turnId,
@@ -396,12 +473,23 @@ export function createRunner(deps: RunnerDeps): Runner {
         signal: controller.signal,
         toolAllowlist: settings.enabledTools,
         maxToolIterations: settings.maxToolIterations,
+        maxOutputTokens: limits.maxOutputTokens,
       };
       active.set(thread.id, { session, turnId, controller, adapterKey });
       setThreadStatus(thread, 'running');
       const state: TurnText = { text: '', persisted: false };
       turnText.set(turnId, state);
-      void runTurn(thread, provider.kind, turnId, session, text, ctx, state);
+      void runTurn(
+        thread,
+        provider.kind,
+        turnId,
+        session,
+        text,
+        ctx,
+        state,
+        assembly.sections,
+        limits,
+      );
       return { turnId };
     },
 
@@ -421,10 +509,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       });
       run.controller.abort();
       const turn = repos.turns.get(run.turnId);
-      if (
-        turn !== undefined &&
-        (turn.status === 'running' || turn.status === 'needs-approval')
-      ) {
+      if (turn !== undefined && (turn.status === 'running' || turn.status === 'needs-approval')) {
         repos.turns.finish(run.turnId, 'interrupted', nowIso());
         persistAssistant(threadId, run.turnId, 'interrupted');
       }

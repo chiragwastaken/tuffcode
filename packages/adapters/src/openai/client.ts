@@ -22,6 +22,8 @@ export interface ChatMessage {
 export interface ChatRequestBody {
   model: string;
   messages: ChatMessage[];
+  /** Per-turn output cap; overrides the client config when set. */
+  maxTokens?: number;
   /** Settings allowlist for this turn; unset offers every harness tool. */
   toolAllowlist?: string[];
   /** Offer the `subagent` delegation tool for this turn. */
@@ -117,13 +119,14 @@ export function toOpenAITools(
 
 function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record<string, unknown> {
   const tools = toOpenAITools(request.toolAllowlist, { subagent: request.subagentTool === true });
+  const maxTokens = request.maxTokens ?? config.maxTokens;
   return {
     model: request.model,
     messages: request.messages,
     ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
     stream: true,
     stream_options: { include_usage: true },
-    ...(config.maxTokens !== undefined ? { max_tokens: config.maxTokens } : {}),
+    ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
   };
 }
@@ -171,9 +174,7 @@ export class OpenAIClient implements ChatStreamer {
     options: OpenAIClientOptions,
   ) {
     this.fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
-    this.sleep =
-      options.sleep ??
-      ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     this.logger = options.logger;
   }
 

@@ -115,7 +115,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           {
             model: ctx.model,
             messages,
-            max_tokens: options.maxTokens,
+            max_tokens: ctx.maxOutputTokens ?? options.maxTokens,
             ...(system.length > 0 ? { system } : {}),
             ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
             ...(deps.spawnSubagent !== undefined && ctx.permissionMode !== 'read-only'
@@ -438,4 +438,101 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
   }
 
   yield { type: 'turn.finished', turnId, reason };
+}
+
+/** Kept short: the summary is a fact sheet, not prose the model should imitate. */
+export const COMPACTION_SYSTEM_PROMPT =
+  'You compress conversation history for another model. Reply with a compact factual ' +
+  'summary: decisions made, files and symbols touched, tool results that still matter, ' +
+  'and any open questions. No preamble, no markdown headings.';
+
+const MAX_TRANSCRIPT_CHARS = 60_000;
+
+export interface CompactHistoryOptions {
+  client: MessagesStreamer;
+  messages: AnthropicMessage[];
+  model: string;
+  maxTokens: number;
+  deps: AdapterDeps;
+  signal: AbortSignal;
+}
+
+function renderAnthropicMessage(message: AnthropicMessage): string {
+  if (typeof message.content === 'string') return `[${message.role}] ${message.content}`;
+  const blocks = message.content.map((block) => {
+    if (block.type === 'text') return block.text;
+    if (block.type === 'tool_use') {
+      return `tool_use ${block.name}(${JSON.stringify(block.input)})`;
+    }
+    return `tool_result ${block.tool_use_id}: ${block.content}${block.is_error === true ? ' (error)' : ''}`;
+  });
+  return `[${message.role}] ${blocks.join(LF)}`;
+}
+
+function isToolResultMessage(message: AnthropicMessage | undefined): boolean {
+  return (
+    message !== undefined &&
+    Array.isArray(message.content) &&
+    message.content.every((block) => block.type === 'tool_result')
+  );
+}
+
+/**
+ * Folds every message except the last two into one system message using the same
+ * client. A tool result cannot outlive its `tool_use` block, so the keep window
+ * widens past leading tool-result rows instead of orphaning them.
+ */
+export async function compactHistory(options: CompactHistoryOptions): Promise<{ removed: number }> {
+  const { messages, deps } = options;
+  if (messages.length <= 2 || options.model.trim().length === 0) return { removed: 0 };
+  let start = messages.length - 2;
+  while (start > 0 && isToolResultMessage(messages[start])) start -= 1;
+  if (start <= 0) return { removed: 0 };
+
+  const older = messages.slice(0, start);
+  const keep = messages.slice(start);
+  let transcript = older.map(renderAnthropicMessage).join(LF + LF);
+  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+    transcript = '[earlier history omitted]' + LF + transcript.slice(-MAX_TRANSCRIPT_CHARS);
+  }
+
+  try {
+    const stream = await options.client.stream(
+      {
+        model: options.model,
+        max_tokens: options.maxTokens,
+        messages: [{ role: 'user', content: transcript }],
+        system: COMPACTION_SYSTEM_PROMPT,
+        toolAllowlist: [],
+      },
+      options.signal,
+    );
+    const parts: string[] = [];
+    for await (const event of streamAnthropicSse(stream, {
+      signal: options.signal,
+      logger: deps.logger,
+    })) {
+      const record = asRecord(event.data);
+      if (record === null) continue;
+      const type = typeof record.type === 'string' ? record.type : event.event;
+      if (type !== 'content_block_delta') continue;
+      const delta = asRecord(record.delta);
+      if (delta === null || delta.type !== 'text_delta' || typeof delta.text !== 'string') {
+        continue;
+      }
+      parts.push(delta.text);
+    }
+    const summary = parts.join('').trim();
+    if (summary.length === 0) return { removed: 0 };
+    messages.splice(
+      0,
+      messages.length,
+      { role: 'system', content: `Summary of the earlier conversation:${LF}${summary}` },
+      ...keep,
+    );
+    return { removed: older.length };
+  } catch (error) {
+    deps.logger.warn('anthropic compaction failed', { reason: errorMessage(error) });
+    return { removed: 0 };
+  }
 }
