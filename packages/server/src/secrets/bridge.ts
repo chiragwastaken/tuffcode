@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { newId } from '@tuffcode/shared';
+import { unwrapPortMessage } from '../ipc.js';
 
 /**
  * The Electron main-process side of the secret bridge. `utilityProcess.parentPort`
@@ -73,7 +74,8 @@ export function createSecretBridge(
   }
 
   function onMessage(message: unknown): void {
-    const parsed = SecretResultSchema.safeParse(message);
+    // Electron's utility process wraps the payload in a MessageEvent; Node does not.
+    const parsed = SecretResultSchema.safeParse(unwrapPortMessage(message));
     if (!parsed.success) return;
     const result = parsed.data;
     const entry = pending.get(result.id);

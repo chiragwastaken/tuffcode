@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isShutdownMessage } from './ipc.js';
 import { startServer } from './server.js';
 import type { SecretPort } from './secrets/bridge.js';
 
@@ -39,15 +40,6 @@ function getParentPort(): SecretPort | undefined {
   }
   if (!('on' in candidate) || typeof candidate.on !== 'function') return undefined;
   return candidate as SecretPort;
-}
-
-function isShutdownMessage(message: unknown): boolean {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    'type' in message &&
-    message.type === 'shutdown'
-  );
 }
 
 function isEntryPoint(): boolean {

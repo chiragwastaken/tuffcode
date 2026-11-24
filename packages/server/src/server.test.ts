@@ -27,7 +27,8 @@ function createFakePort(): FakePort {
       if (event === 'message') listeners.push(listener);
     },
     reply: (message) => {
-      for (const listener of listeners) listener(message);
+      // Electron's utility process delivers parentPort payloads as a MessageEvent.
+      for (const listener of listeners) listener(new MessageEvent('message', { data: message }));
     },
   };
 }
