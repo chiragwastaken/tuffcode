@@ -1,0 +1,72 @@
+# electron-builder configuration (spec section 12, D15).
+# Run from apps/desktop: `pnpm build:win`.
+appId: net.tuffcode.app
+productName: Tuffcode
+copyright: Copyright (c) 2026 Tuffcode
+
+directories:
+  buildResources: resources
+  output: dist
+
+# electron-builder validates dependency versions as semver and cannot parse
+# pnpm's `catalog:` protocol, so mirror the catalog pins it checks here. These
+# values only land in the packaged package.json metadata; modules still come
+# from the workspace install.
+extraMetadata:
+  description: Tuffcode desktop application
+  author: Tuffcode
+  dependencies:
+    electron-updater: 6.8.11
+
+# Single NSIS installer per release; latest.yml and the blockmap are generated
+# next to it by electron-builder.
+artifactName: Tuffcode-Setup-${version}.exe
+
+files:
+  - out/**/*
+  - '!**/*.pdb'
+
+asar: true
+# node-pty ships native prebuilds that cannot be loaded from inside the asar.
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+
+extraResources:
+  # Utility-process server bundle: resolved as resources/server/server.js.
+  - from: ../../packages/server/dist
+    to: server
+  # The bundle is ESM; without this package.json the installed copy is treated
+  # as CommonJS and fails with "Cannot use import statement outside a module".
+  - from: ../../packages/server/package.json
+    to: server/package.json
+  # Renderer build: loaded from resources/web/index.html when packaged.
+  - from: ../../apps/web/dist
+    to: web
+  # node-pty is external in the server bundle, so it must sit next to it for
+  # Node resolution from resources/server/server.js.
+  - from: ../../packages/server/node_modules/node-pty
+    to: server/node_modules/node-pty
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+  # Signing is driven by the environment: electron-builder uses CSC_LINK and
+  # CSC_KEY_PASSWORD when set and skips signing when they are absent.
+  signAndEditExecutable: true
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Tuffcode
+
+publish:
+  provider: github
+  owner: tuffcode-net
+  repo: tuffcode
+  releaseType: release
