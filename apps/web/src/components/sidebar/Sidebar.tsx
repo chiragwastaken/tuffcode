@@ -21,6 +21,8 @@ import {
   filterGroups,
   groupThreadsByProject,
   needsVirtualization,
+  readCollapsedProjects,
+  writeCollapsedProjects,
 } from './sidebar-model';
 
 export function Sidebar() {
@@ -37,7 +39,9 @@ export function Sidebar() {
   const { addProject, adding } = useAddProject();
 
   const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() =>
+    readCollapsedProjects(typeof window === 'undefined' ? null : window.localStorage),
+  );
   const [creatingProjectId, setCreatingProjectId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
   const searchRef = useRef<HTMLElement>(null);
@@ -101,6 +105,7 @@ export function Sidebar() {
       const next = new Set(previous);
       if (next.has(projectId)) next.delete(projectId);
       else next.add(projectId);
+      writeCollapsedProjects(typeof window === 'undefined' ? null : window.localStorage, next);
       return next;
     });
   }, []);
@@ -189,7 +194,7 @@ export function Sidebar() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleSearchKeyDown}
-            placeholder="Search threads"
+            placeholder="Search projects and threads"
             aria-label="Search projects and threads"
             spellCheck={false}
             autoComplete="off"

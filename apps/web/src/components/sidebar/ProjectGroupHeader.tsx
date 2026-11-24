@@ -1,11 +1,11 @@
 import type { Project } from '@tuffcode/contracts';
 import { IconButton, cn } from '@tuffcode/ui';
-import { ChevronRight, Folder, FolderOpen, Plus, Trash2 } from 'lucide-react';
+import { Folder, FolderOpen, Plus, Trash2 } from 'lucide-react';
 
 const revealOnHover = cn(
-  'opacity-0 pointer-events-none transition-opacity duration-150',
-  'group-hover/project:pointer-events-auto group-hover/project:opacity-100',
-  'focus-visible:pointer-events-auto focus-visible:opacity-100',
+  'opacity-0 transition-opacity duration-150',
+  'group-hover/project:opacity-100',
+  'focus-visible:opacity-100',
 );
 
 const compactIcon = 'size-6 [&_svg]:size-3';
@@ -20,7 +20,7 @@ export interface ProjectGroupHeaderProps {
   onRemove: (project: Project) => void;
 }
 
-/** 30px project row: folder, name, branch, thread count, and its actions. */
+/** 30px project row: folder, name, branch, thread count, and hover actions. */
 export function ProjectGroupHeader({
   project,
   threadCount,
@@ -36,6 +36,7 @@ export function ProjectGroupHeader({
     <div className="group/project flex h-[30px] items-center gap-0.5 border-t border-sidebar-border px-1">
       <button
         type="button"
+        data-testid="project-toggle"
         aria-expanded={!collapsed}
         onClick={() => onToggle(project.id)}
         title={project.path}
@@ -45,14 +46,6 @@ export function ProjectGroupHeader({
           'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
         )}
       >
-        <ChevronRight
-          aria-hidden="true"
-          strokeWidth={1.75}
-          className={cn(
-            'size-3 shrink-0 text-sidebar-muted-foreground transition-transform duration-150',
-            collapsed ? null : 'rotate-90',
-          )}
-        />
         <FolderIcon
           aria-hidden="true"
           strokeWidth={1.75}
@@ -70,11 +63,10 @@ export function ProjectGroupHeader({
         >
           {project.defaultBranch}
         </span>
+        <span className="ml-auto shrink-0 pr-1 text-2xs tabular-nums text-sidebar-muted-foreground">
+          {threadCount}
+        </span>
       </button>
-
-      <span className="shrink-0 px-1 text-2xs tabular-nums text-sidebar-muted-foreground">
-        {threadCount}
-      </span>
 
       <IconButton
         data-testid="sidebar-new-thread"
@@ -83,7 +75,7 @@ export function ProjectGroupHeader({
         size="sm"
         disabled={creating}
         onClick={() => onNewThread(project.id)}
-        className={compactIcon}
+        className={cn(compactIcon, revealOnHover)}
       />
       <IconButton
         icon={Trash2}
