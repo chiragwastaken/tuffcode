@@ -49,7 +49,10 @@ export function ProjectGroupHeader({
             collapsed ? null : 'rotate-90',
           )}
         />
-        <span className="truncate text-2xs font-medium tracking-wide uppercase">
+        <span
+          data-testid="project-name"
+          className="truncate text-2xs font-medium tracking-wide uppercase"
+        >
           {project.name}
         </span>
       </button>

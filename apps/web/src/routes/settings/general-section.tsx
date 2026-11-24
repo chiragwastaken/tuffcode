@@ -141,6 +141,7 @@ export function GeneralSection() {
             >
               <Input
                 id="general-shell"
+                data-testid="settings-shell"
                 value={draft.shell}
                 onChange={(event) => update('shell', event.target.value)}
                 placeholder="pwsh.exe"
@@ -211,7 +212,12 @@ export function GeneralSection() {
               <Button variant="ghost" onClick={reset} disabled={!dirty || saving}>
                 Reset
               </Button>
-              <Button type="submit" variant="primary" disabled={!dirty || invalid || saving}>
+              <Button
+                data-testid="settings-save"
+                type="submit"
+                variant="primary"
+                disabled={!dirty || invalid || saving}
+              >
                 {saving ? <Spinner size="sm" /> : null}
                 Save changes
               </Button>

@@ -36,7 +36,7 @@ export function UserBubble({ item }: { item: UserItem }) {
 
 export function AssistantMessage({ item, theme }: { item: AssistantItem; theme: MarkdownTheme }) {
   return (
-    <div className="text-sm text-foreground">
+    <div data-testid="assistant-message" className="text-sm text-foreground">
       <Markdown content={item.text} theme={theme} />
       {item.streaming ? (
         <span
@@ -94,6 +94,7 @@ export function ToolRow({ item }: { item: ToolItem }) {
 
   return (
     <div
+      data-testid="tool-row"
       className={cn(
         'rounded-md border bg-surface-raised/40',
         item.isError ? 'border-error/40' : 'border-border/70',
@@ -153,6 +154,7 @@ export function ToolRow({ item }: { item: ToolItem }) {
           <div>
             <p className="text-2xs tracking-wide text-muted-foreground uppercase">Output</p>
             <pre
+              data-testid="tool-output"
               className={cn(
                 'mt-1 max-h-64 overflow-auto rounded-sm bg-background/60 p-2 font-mono text-2xs leading-5 whitespace-pre-wrap',
                 item.isError ? 'text-error-foreground' : 'text-muted-foreground',

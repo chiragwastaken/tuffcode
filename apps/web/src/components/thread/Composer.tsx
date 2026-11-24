@@ -344,6 +344,7 @@ export function Composer({ thread }: ComposerProps) {
 
           <textarea
             ref={textareaRef}
+            data-testid="composer-input"
             rows={1}
             value={input}
             aria-label="Message"
@@ -423,7 +424,13 @@ export function Composer({ thread }: ComposerProps) {
                   Stop
                 </Button>
               ) : (
-                <Button size="sm" variant="primary" disabled={!canSend} onClick={() => void send()}>
+                <Button
+                  data-testid="composer-send"
+                  size="sm"
+                  variant="primary"
+                  disabled={!canSend}
+                  onClick={() => void send()}
+                >
                   {sending ? <Spinner size="sm" label="Sending" /> : <ArrowUp strokeWidth={1.75} />}
                   Send
                 </Button>

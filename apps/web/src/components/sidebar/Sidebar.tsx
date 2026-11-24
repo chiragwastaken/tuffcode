@@ -218,6 +218,7 @@ export function Sidebar() {
 
         <div className="flex items-center gap-1">
           <Button
+            data-testid="sidebar-new-thread"
             variant="secondary"
             size="sm"
             className="min-w-0 flex-1 justify-start"
@@ -230,6 +231,7 @@ export function Sidebar() {
             <span className="truncate">New thread</span>
           </Button>
           <IconButton
+            data-testid="sidebar-add-project"
             icon={FolderPlus}
             label="Add project"
             size="sm"

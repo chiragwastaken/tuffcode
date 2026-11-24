@@ -25,7 +25,10 @@ export function AppShell() {
   const inspectorThreadId = threadMatch === false ? null : threadMatch.threadId;
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+    <div
+      data-testid="app-shell"
+      className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
+    >
       <header className="drag-region flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border px-2">
         <div className="no-drag flex items-center gap-1">
           <IconButton
@@ -52,6 +55,8 @@ export function AppShell() {
             onClick={() => setInspectorOpen((open) => !open)}
           />
           <span
+            data-testid="connection-status"
+            data-status={connection}
             className="flex items-center gap-1.5 text-2xs text-muted-foreground"
             title={meta.label}
           >

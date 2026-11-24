@@ -59,6 +59,7 @@ export function ApprovalCard({ item, threadId }: ApprovalCardProps) {
 
   return (
     <div
+      data-testid="approval-card"
       className={cn(
         'rounded-lg border p-3',
         item.decision === 'deny'
@@ -95,6 +96,7 @@ export function ApprovalCard({ item, threadId }: ApprovalCardProps) {
           {CHOICES.map(({ choice, label, variant }) => (
             <Button
               key={choice}
+              data-testid={'approval-' + choice}
               size="sm"
               variant={variant}
               disabled={pending !== null}
