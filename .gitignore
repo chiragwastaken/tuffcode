@@ -32,3 +32,5 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 spec-ui.md
+WORKFLOW.md
+WHAT-HAPPENED-TILL-NOW.md
