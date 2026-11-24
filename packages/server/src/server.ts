@@ -12,6 +12,7 @@ import {
 import { createResolveCommand } from './adapters/resolveCommand.js';
 import { ensureToken, verifyToken } from './auth.js';
 import { createCommandHandlers } from './commands/handlers.js';
+import { createCouncil } from './council/service.js';
 import { closeDb, migrate, openDb } from './db/index.js';
 import { createRepos, type Repos } from './db/repos/index.js';
 import { createWarningLog, type DiagnosticsInput } from './diagnostics.js';
@@ -123,6 +124,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       createAdapterForProvider(provider, adapterDeps, secret, options.adapterOverrides ?? {}),
   });
   runner.recoverOrphanedRuns();
+  const council = createCouncil({ repos, bus, runner, logger });
 
   const diagnostics: DiagnosticsInput = {
     version,
@@ -157,6 +159,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     brain: { repos },
     commands,
     diagnostics,
+    council,
     featureHandlers: [
       createTerminalHandlers(terminals),
       ...(options.featureHandlers ?? []),
@@ -168,6 +171,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    await council.dispose();
     await runner.disposeAll();
     secrets.dispose();
     await terminals.disposeAll();
