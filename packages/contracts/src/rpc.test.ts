@@ -160,6 +160,7 @@ const task: Task = {
   threadId: 't1',
   title: 'Write entities',
   brief: 'TASK: write entities',
+  dependsOn: [],
   state: 'running',
   authorProvider: 'claude',
   authorModel: 'claude-opus-4-5',

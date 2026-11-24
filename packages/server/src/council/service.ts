@@ -255,6 +255,7 @@ export function createCouncil(deps: CouncilDeps): Council {
         goalId: goal.id,
         title: planTask.title,
         brief: planTask.brief,
+        dependsOn: planTask.dependsOn,
         state: 'queued',
         authorProvider: thread.providerId,
         authorModel: thread.modelId,

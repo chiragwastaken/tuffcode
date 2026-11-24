@@ -11,6 +11,7 @@ function task(id: string, state: TaskState): Task {
     threadId: 't1',
     title: id,
     brief: '',
+    dependsOn: [],
     state,
     authorProvider: 'p1',
     authorModel: 'm1',
