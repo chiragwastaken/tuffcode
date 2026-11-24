@@ -24,6 +24,8 @@ import {
   ReviewSchema,
   SeqSchema,
   SkillSchema,
+  SubagentSpecSchema,
+  SubagentViewSchema,
   TaskSchema,
   ThreadSchema,
 } from './entities.js';
@@ -307,6 +309,17 @@ export const methods = {
     params: z.object({ providerId: IdSchema }),
     result: ModelSchema.array(),
   },
+  'providers.models': {
+    params: z.object({
+      providerId: IdSchema,
+      refresh: z.boolean().optional(),
+    }),
+    result: z.object({
+      models: ModelSchema.array(),
+      source: z.enum(['sdk', 'api', 'manual', 'cache']),
+      error: z.string().optional(),
+    }),
+  },
   'settings.get': {
     params: EmptyObjectSchema,
     result: SettingsSchema,
@@ -314,6 +327,22 @@ export const methods = {
   'settings.set': {
     params: z.object({ patch: SettingsPatchSchema }),
     result: SettingsSchema,
+  },
+  'prompt.preview': {
+    params: z.object({
+      threadId: IdSchema,
+      message: z.string(),
+    }),
+    result: z.object({
+      sections: z
+        .object({
+          name: z.string(),
+          text: z.string(),
+          tokens: z.number().int().nonnegative(),
+        })
+        .array(),
+      total: z.number().int().nonnegative(),
+    }),
   },
   'brain.list': {
     params: z.object({
@@ -351,6 +380,48 @@ export const methods = {
     }),
     result: BrainSliceSchema,
   },
+  'brain.graph': {
+    params: z.object({
+      projectId: IdSchema.optional(),
+      limit: z.number().int().positive().optional(),
+    }),
+    result: z.object({
+      nodes: z
+        .object({
+          id: IdSchema,
+          kind: BrainKindSchema,
+          label: z.string(),
+          importance: z.number().min(0).max(1),
+          degree: z.number().int().nonnegative(),
+        })
+        .array(),
+      edges: z
+        .object({
+          from: IdSchema,
+          to: IdSchema,
+          relation: z.string().min(1),
+        })
+        .array(),
+    }),
+  },
+  'memory.search': {
+    params: z.object({
+      projectId: IdSchema.optional(),
+      query: z.string().min(1),
+      limit: z.number().int().positive().optional(),
+    }),
+    result: z.object({
+      entries: z
+        .object({
+          id: IdSchema,
+          kind: BrainKindSchema,
+          text: z.string(),
+          score: z.number().nonnegative(),
+          reason: z.string(),
+        })
+        .array(),
+    }),
+  },
   'council.start': {
     params: z.object({
       threadId: IdSchema,
@@ -370,6 +441,21 @@ export const methods = {
       tasks: TaskSchema.array(),
       reviews: ReviewSchema.array(),
     }),
+  },
+  'subagents.spawn': {
+    params: z.object({
+      threadId: IdSchema,
+      spec: SubagentSpecSchema,
+    }),
+    result: z.object({ childId: IdSchema }),
+  },
+  'subagents.cancel': {
+    params: z.object({ childId: IdSchema }),
+    result: EmptyObjectSchema,
+  },
+  'subagents.list': {
+    params: z.object({ threadId: IdSchema }),
+    result: SubagentViewSchema.array(),
   },
   'commands.list': {
     params: projectIdParam,

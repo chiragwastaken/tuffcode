@@ -99,6 +99,18 @@ export type DiffFileStatus = z.infer<typeof DiffFileStatusSchema>;
 export const ReviewCommentSideSchema = z.enum(['old', 'new']);
 export type ReviewCommentSide = z.infer<typeof ReviewCommentSideSchema>;
 
+export const SubagentTypeSchema = z.enum([
+  'explorer',
+  'reviewer',
+  'notetaker',
+  'worker',
+  'planner',
+]);
+export type SubagentType = z.infer<typeof SubagentTypeSchema>;
+
+export const SubagentStatusSchema = z.enum(['queued', 'running', 'done', 'failed', 'cancelled']);
+export type SubagentStatus = z.infer<typeof SubagentStatusSchema>;
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: z.string(),
@@ -192,6 +204,30 @@ export const ModelSchema = z.object({
   isDefault: z.boolean(),
 });
 export type Model = z.infer<typeof ModelSchema>;
+
+export const SubagentSpecSchema = z.object({
+  type: SubagentTypeSchema,
+  task: z.string().min(1),
+  model: z.string().optional(),
+  providerId: IdSchema.optional(),
+  worktree: z.boolean().optional(),
+  budgetTokens: z.number().int().positive().optional(),
+});
+export type SubagentSpec = z.infer<typeof SubagentSpecSchema>;
+
+export const SubagentViewSchema = z.object({
+  childId: IdSchema,
+  threadId: IdSchema,
+  type: SubagentTypeSchema,
+  model: z.string(),
+  providerId: IdSchema,
+  status: SubagentStatusSchema,
+  task: z.string(),
+  summary: z.string().optional(),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema,
+});
+export type SubagentView = z.infer<typeof SubagentViewSchema>;
 
 export const BrainEntrySchema = z.object({
   id: IdSchema,
