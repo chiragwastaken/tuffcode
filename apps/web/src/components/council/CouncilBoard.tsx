@@ -401,8 +401,8 @@ export function CouncilBoard({
             <Network aria-hidden="true" className="size-5 text-muted-foreground" />
             <p className="text-xs font-medium text-foreground">No council goal yet</p>
             <p className="text-2xs leading-4 text-muted-foreground">
-              Write a goal above. The board fills in with the plan, the workers, each review and the
-              final report.
+              Start a council goal from the thread composer. The board fills in with the plan, the
+              workers, each review and the final report.
             </p>
           </div>
         </div>

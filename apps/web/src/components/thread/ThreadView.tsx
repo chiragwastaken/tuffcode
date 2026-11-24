@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import type { ExecutionMode, Thread, ThreadEventRow } from '@tuffcode/contracts';
 import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
-import { FolderOpen, GitBranch, MessagesSquare } from 'lucide-react';
+import { FolderOpen, GitBranch, MessagesSquare, Users, Wrench } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../store/app-store';
@@ -23,8 +23,8 @@ import { useThreadStream } from './use-thread-stream';
 const EMPTY_EVENTS: readonly ThreadEventRow[] = [];
 
 const THREAD_MODES: readonly SegmentedOption<'work' | 'council'>[] = [
-  { value: 'work', label: 'Work' },
-  { value: 'council', label: 'Council' },
+  { value: 'work', label: 'Work', icon: Wrench },
+  { value: 'council', label: 'Council', icon: Users },
 ];
 
 function focusComposer(): void {
@@ -126,10 +126,10 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="@container sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
-        <div className="flex min-w-0 items-center gap-2">
+      <header className="@container sticky top-0 z-20 flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           {projectName ? (
-            <span className="hidden min-w-0 items-center gap-1.5 text-2xs text-muted-foreground @min-[44rem]:flex">
+            <span className="hidden min-w-0 shrink items-center gap-1.5 text-2xs text-muted-foreground @min-[44rem]:flex">
               <FolderOpen aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
               <span className="max-w-40 truncate" title={projectName}>
                 {projectName}
@@ -146,20 +146,24 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
           ) : null}
           <span
             data-testid="thread-title"
-            className="min-w-0 truncate text-sm font-medium"
+            className="min-w-0 flex-1 truncate text-sm font-medium"
             title={title}
           >
             {title}
           </span>
           {thread ? (
-            <span data-testid="thread-status" data-status={thread.status} className="inline-flex">
+            <span
+              data-testid="thread-status"
+              data-status={thread.status}
+              className="inline-flex shrink-0"
+            >
               <StatusChip status={thread.status} />
             </span>
           ) : null}
         </div>
 
-        <div className="flex justify-center">
-          {thread ? (
+        {thread ? (
+          <div className="flex shrink-0 items-center">
             <SegmentedControl
               ariaLabel="Thread mode"
               testId="thread-mode-switch"
@@ -169,20 +173,18 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
               disabled={switchingMode}
               onValueChange={(mode) => void setThreadMode(mode)}
             />
-          ) : null}
-        </div>
+          </div>
+        ) : null}
 
-        <div className="flex min-w-0 items-center justify-end gap-2">
-          {thread?.branch ? (
-            <span
-              className="flex min-w-0 items-center gap-1 font-mono text-2xs text-muted-foreground"
-              title={thread.branch}
-            >
-              <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
-              <span className="truncate">{thread.branch}</span>
-            </span>
-          ) : null}
-        </div>
+        {thread?.branch ? (
+          <span
+            className="hidden min-w-0 shrink-0 items-center gap-1 font-mono text-2xs text-muted-foreground min-[1500px]:flex"
+            title={thread.branch}
+          >
+            <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+            <span className="max-w-56 truncate">{thread.branch}</span>
+          </span>
+        ) : null}
       </header>
 
       <div

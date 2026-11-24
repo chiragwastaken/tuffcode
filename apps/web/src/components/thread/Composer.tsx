@@ -66,7 +66,7 @@ import { useProjectPalette } from './use-project-palette';
 type ComposerMode = Extract<ExecutionMode, 'work' | 'plan'>;
 
 const MODE_OPTIONS: readonly SegmentedOption<ComposerMode>[] = [
-  { value: 'work', label: 'Work' },
+  { value: 'work', label: 'Build' },
   { value: 'plan', label: 'Plan' },
 ];
 

@@ -15,6 +15,8 @@ the project uses semantic versioning.
 - Subagent types: explorer, reviewer, notetaker, worker, planner, each with its own prompt.
 - Per-type model and fallback model in settings, concurrency cap, isolated worktrees for workers.
 - Work and Council switch in the thread topbar; Council starts from one goal box.
+- The inspector council tab follows that goal: board, status, cancel and details, plus a single
+  switch button in work mode instead of a second goal form.
 
 ### Slash commands
 - Composer slash commands execute real services through one `commands.run` RPC: the model
@@ -24,6 +26,10 @@ the project uses semantic versioning.
 
 ### Composer and timeline
 - Composer controls split left (mode, model) and right (attach, permission, send).
+- The composer execution switch reads Build and Plan, so it cannot be confused with the topbar's
+  Work and Council switch.
+- The thread header gives the title the full row: the branch label hides under 1500px and the mode
+  switch keeps an icon and a 12px label.
 - Timeline renders reasoning, prose, grouped tool calls and the final answer, with copy, retry,
   edit and right-click actions.
 - Split panes with draggable splitters and persisted layout.
