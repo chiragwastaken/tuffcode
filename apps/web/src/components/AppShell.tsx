@@ -46,7 +46,9 @@ export function AppShell() {
     thread === undefined
       ? undefined
       : projects.find((project) => project.id === thread.projectId)?.name;
-  const showInspector = visibility.inspector && inspectorThreadId !== null;
+  const hasThread = inspectorThreadId !== null;
+  const showInspectorToggle = visibility.inspector && hasThread;
+  const inspectorVisible = showInspectorToggle && inspectorOpen;
 
   useLayoutEffect(() => {
     const element = document.documentElement;
@@ -76,7 +78,9 @@ export function AppShell() {
   useEffect(() => {
     const query = window.matchMedia(WIDE_LAYOUT_QUERY);
     const handleChange = (event: MediaQueryListEvent): void => {
-      if (event.matches) setInspectorOpen(true);
+      // Wide shows the column, narrow closes the sheet so it never covers the
+      // thread uninvited.
+      setInspectorOpen(event.matches);
     };
     query.addEventListener('change', handleChange);
     return () => query.removeEventListener('change', handleChange);
@@ -91,13 +95,16 @@ export function AppShell() {
         className="drag-region flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
         style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1.5rem)' }}
       >
-        <div className="no-drag flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           {visibility.backToWorkspace ? (
             <Link
               to="/"
               aria-label="Back to workspace"
               title="Back to workspace"
-              className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'shrink-0')}
+              className={cn(
+                buttonVariants({ variant: 'ghost', size: 'icon-sm' }),
+                'no-drag shrink-0',
+              )}
             >
               <ArrowLeft strokeWidth={1.75} />
             </Link>
@@ -107,7 +114,7 @@ export function AppShell() {
               label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
               size="sm"
               aria-pressed={sidebarOpen}
-              className="shrink-0"
+              className="no-drag shrink-0"
               onClick={() => setSidebarOpen((open) => !open)}
             />
           )}
@@ -120,7 +127,7 @@ export function AppShell() {
             <nav
               aria-label="Breadcrumb"
               data-testid="header-breadcrumb"
-              className="flex min-w-0 items-center gap-1.5 text-xs"
+              className="no-drag flex min-w-0 items-center gap-1.5 text-xs"
             >
               <span
                 className="min-w-0 max-w-40 truncate text-muted-foreground"
@@ -139,7 +146,7 @@ export function AppShell() {
         </div>
 
         <div className="no-drag flex shrink-0 items-center gap-1">
-          {showInspector ? (
+          {showInspectorToggle ? (
             <IconButton
               icon={PanelRight}
               label={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
@@ -231,23 +238,29 @@ export function AppShell() {
           <Outlet />
         </main>
 
-        {showInspector && inspectorOpen ? (
+        {hasThread ? (
           <>
-            <button
-              type="button"
-              aria-label="Close inspector"
-              data-testid="inspector-backdrop"
-              className="fixed inset-x-0 bottom-0 top-[var(--topbar-height)] z-30 bg-black/40 xl:hidden"
-              onClick={() => setInspectorOpen(false)}
-            />
+            {inspectorVisible ? (
+              <button
+                type="button"
+                aria-label="Close inspector"
+                data-testid="inspector-backdrop"
+                className="fixed inset-x-0 bottom-0 top-[var(--topbar-height)] z-30 bg-black/40 xl:hidden"
+                onClick={() => setInspectorOpen(false)}
+              />
+            ) : null}
             <aside
               aria-label="Inspector"
+              data-panel=""
               data-slot="right-panel"
+              data-state={inspectorVisible ? 'open' : 'closed'}
               className={cn(
-                'z-40 flex min-h-0 flex-col border-border bg-background',
+                'z-40 min-h-0 flex-col border-border bg-background',
                 'max-xl:fixed max-xl:top-[var(--topbar-height)] max-xl:right-0 max-xl:bottom-0',
                 'max-xl:w-[min(26rem,92vw)] max-xl:border-l max-xl:shadow-2xl',
                 'xl:static xl:w-[var(--right-panel-width)] xl:max-w-[var(--right-panel-max-width)] xl:shrink-0 xl:border-l',
+                // Kept mounted while hidden so the terminal and tab choice survive.
+                inspectorVisible ? 'flex' : 'hidden',
               )}
             >
               <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-3 xl:hidden">
