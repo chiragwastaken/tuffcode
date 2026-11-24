@@ -1,0 +1,214 @@
+/**
+ * Embedded migrations. The schema lives in TypeScript strings so the bundled server
+ * never reads `.sql` files at runtime (D5). Versions are append-only and applied in
+ * ascending order inside a transaction by `migrate`.
+ */
+
+export interface Migration {
+  readonly version: number;
+  readonly name: string;
+  readonly sql: string;
+}
+
+const INIT_SQL = `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+
+CREATE TABLE projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL UNIQUE,
+  default_branch TEXT NOT NULL DEFAULT 'main',
+  created_at TEXT NOT NULL,
+  last_opened_at TEXT
+);
+
+CREATE TABLE threads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_thread_id TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  execution_mode TEXT NOT NULL CHECK (execution_mode IN ('plan','work','council')),
+  permission_mode TEXT NOT NULL CHECK (permission_mode IN ('read-only','ask','accept-edits','full-auto')),
+  status TEXT NOT NULL CHECK (status IN ('idle','running','needs-approval','ready-to-review','failed','merged','closed')),
+  worktree_path TEXT,
+  branch TEXT,
+  base_branch TEXT,
+  pr_url TEXT,
+  last_seq INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_threads_project ON threads(project_id, updated_at DESC);
+
+CREATE TABLE events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (thread_id, seq)
+);
+CREATE INDEX idx_events_thread ON events(thread_id, seq);
+
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user','assistant','system','tool')),
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_messages_thread ON messages(thread_id, created_at);
+
+CREATE TABLE checkpoints (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  ref TEXT NOT NULL,
+  label TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE approvals (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  input TEXT NOT NULL,
+  decision TEXT NOT NULL DEFAULT 'pending' CHECK (decision IN ('pending','allow','allow-thread','deny')),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+
+CREATE TABLE providers (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('claude','codex','acp','opencode','openai-compatible')),
+  label TEXT NOT NULL,
+  config TEXT NOT NULL,
+  secret_ref TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE provider_models (
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  context_window INTEGER,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider_id, model_id)
+);
+
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE review_comments (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  side TEXT NOT NULL CHECK (side IN ('old','new')),
+  body TEXT NOT NULL,
+  resolved INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE goals (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  autonomy TEXT NOT NULL CHECK (autonomy IN ('manual','auto')),
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  reported_at TEXT
+);
+
+CREATE TABLE tasks (
+  id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  thread_id TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  brief TEXT NOT NULL,
+  state TEXT NOT NULL,
+  author_provider TEXT NOT NULL,
+  author_model TEXT NOT NULL,
+  reviewer_provider TEXT,
+  reviewer_model TEXT,
+  critical INTEGER NOT NULL DEFAULT 0,
+  round INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE reviews (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  verdict TEXT NOT NULL CHECK (verdict IN ('pass','changes-requested','escalate')),
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE escalations (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  answer TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+
+CREATE TABLE brain_entries (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('identity','preference','rule','project','memory','working-note')),
+  scope TEXT NOT NULL,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '',
+  applies_to TEXT,
+  importance REAL NOT NULL DEFAULT 0.5,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  source_quote TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX idx_brain_scope ON brain_entries(scope, kind, active);
+CREATE VIRTUAL TABLE brain_fts USING fts5(text, tags, content='brain_entries', content_rowid='rowid');
+
+CREATE TRIGGER brain_entries_ai AFTER INSERT ON brain_entries BEGIN
+  INSERT INTO brain_fts(rowid, text, tags) VALUES (new.rowid, new.text, new.tags);
+END;
+CREATE TRIGGER brain_entries_ad AFTER DELETE ON brain_entries BEGIN
+  INSERT INTO brain_fts(brain_fts, rowid, text, tags) VALUES ('delete', old.rowid, old.text, old.tags);
+END;
+CREATE TRIGGER brain_entries_au AFTER UPDATE ON brain_entries BEGIN
+  INSERT INTO brain_fts(brain_fts, rowid, text, tags) VALUES ('delete', old.rowid, old.text, old.tags);
+  INSERT INTO brain_fts(rowid, text, tags) VALUES (new.rowid, new.text, new.tags);
+END;
+
+CREATE TABLE terminal_sessions (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  cwd TEXT NOT NULL,
+  shell TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    name: 'init',
+    sql: INIT_SQL,
+  },
+];

@@ -1,0 +1,121 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+import type { Project, ProviderView, Thread } from '@tuffcode/contracts';
+import { migrate, openDb } from './db/index.js';
+import { createRepos, type Repos } from './db/repos/index.js';
+import { addProject } from './projects.js';
+import { createThread } from './threads.js';
+
+export interface TempEnv {
+  root: string;
+  home: string;
+  localAppData: string;
+  dispose(): void;
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+/**
+ * Isolated `TUFFCODE_HOME` and `LOCALAPPDATA` under a fresh temp directory, so the
+ * database, token, server.json and worktrees never touch the developer's real state.
+ */
+export function createTempEnv(): TempEnv {
+  const root = mkdtempSync(join(tmpdir(), 'tuffcode-server-'));
+  const home = join(root, 'home');
+  const localAppData = join(root, 'local');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(localAppData, { recursive: true });
+  const previousHome = process.env.TUFFCODE_HOME;
+  const previousLocal = process.env.LOCALAPPDATA;
+  process.env.TUFFCODE_HOME = home;
+  process.env.LOCALAPPDATA = localAppData;
+  return {
+    root,
+    home,
+    localAppData,
+    dispose: () => {
+      restoreEnv('TUFFCODE_HOME', previousHome);
+      restoreEnv('LOCALAPPDATA', previousLocal);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+export interface TestContext {
+  env: TempEnv;
+  db: DatabaseSync;
+  repos: Repos;
+  dispose(): void;
+}
+
+export function createTestContext(): TestContext {
+  const env = createTempEnv();
+  const db = openDb(join(env.root, 'tuffcode.db'));
+  migrate(db);
+  return {
+    env,
+    db,
+    repos: createRepos(db),
+    dispose: () => {
+      db.close();
+      env.dispose();
+    },
+  };
+}
+
+export function git(cwd: string, args: string[]): string {
+  return execFileSync('git', ['-c', 'core.longpaths=true', ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+/** Real repository with one commit on `main` and local identity configured. */
+export function initRepo(path: string, branch = 'main'): string {
+  mkdirSync(path, { recursive: true });
+  git(path, ['init', '-b', branch]);
+  git(path, ['config', 'user.email', 'tuffcode@example.com']);
+  git(path, ['config', 'user.name', 'Tuffcode Test']);
+  git(path, ['config', 'commit.gpgsign', 'false']);
+  git(path, ['config', 'core.autocrlf', 'false']);
+  writeFileSync(join(path, 'README.md'), '# demo\n');
+  git(path, ['add', '-A']);
+  git(path, ['commit', '-m', 'init']);
+  return path;
+}
+
+export function initBareRepo(path: string): string {
+  mkdirSync(path, { recursive: true });
+  git(path, ['init', '--bare', '--initial-branch=main']);
+  return path;
+}
+
+export function addTestProvider(repos: Repos, id = 'prv_test'): ProviderView {
+  return repos.providers.upsert({ id, kind: 'claude', label: 'Test provider', config: {} });
+}
+
+export interface ProjectThread {
+  project: Project;
+  thread: Thread;
+}
+
+/** Project plus a provisioned thread, the setup every git test needs. */
+export async function createProjectThread(repos: Repos, repoPath: string): Promise<ProjectThread> {
+  addTestProvider(repos);
+  const project = await addProject(repos, repoPath);
+  const thread = await createThread(repos, {
+    projectId: project.id,
+    providerId: 'prv_test',
+    modelId: 'model-x',
+    executionMode: 'work',
+    permissionMode: 'ask',
+  });
+  return { project, thread };
+}
