@@ -4,6 +4,8 @@ import { Check, Undo2 } from 'lucide-react';
 
 export interface CommentListProps {
   comments: readonly ReviewComment[];
+  /** Files present in the current diff; only those can be jumped to. */
+  knownPaths: ReadonlySet<string>;
   busyId: string | null;
   onResolve: (comment: ReviewComment) => void;
   onSelectFile: (path: string) => void;
@@ -23,6 +25,7 @@ function sortComments(comments: readonly ReviewComment[]): ReviewComment[] {
 /** Thread review comments, newest first per file, with a resolve toggle. */
 export function CommentList({
   comments,
+  knownPaths,
   busyId,
   onResolve,
   onSelectFile,
@@ -38,41 +41,57 @@ export function CommentList({
 
   return (
     <ul aria-label="Review comments" className={cn('divide-y divide-border', className)}>
-      {sortComments(comments).map((comment) => (
-        <li key={comment.id} className="flex items-start gap-2 px-3 py-2">
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <button
-              type="button"
-              title={comment.filePath}
-              onClick={() => onSelectFile(comment.filePath)}
-              className={cn(
-                'flex min-w-0 items-center gap-1 self-start rounded-sm text-2xs text-muted-foreground',
-                'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-                'hover:text-foreground',
+      {sortComments(comments).map((comment) => {
+        const jumpable = knownPaths.has(comment.filePath);
+        const anchor = (
+          <>
+            <span className="truncate font-mono">{comment.filePath}</span>
+            <span className="shrink-0 tabular-nums">:{comment.line}</span>
+            <span className="shrink-0">{comment.side === 'old' ? 'old' : 'new'}</span>
+          </>
+        );
+        const anchorClassName =
+          'flex min-w-0 items-center gap-1 self-start rounded-sm text-2xs text-muted-foreground';
+        return (
+          <li key={comment.id} className="flex items-start gap-2 px-3 py-2">
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              {jumpable ? (
+                <button
+                  type="button"
+                  title={comment.filePath}
+                  onClick={() => onSelectFile(comment.filePath)}
+                  className={cn(
+                    anchorClassName,
+                    'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                    'hover:text-foreground',
+                  )}
+                >
+                  {anchor}
+                </button>
+              ) : (
+                <span className={anchorClassName} title={`${comment.filePath} is not in this diff`}>
+                  {anchor}
+                </span>
               )}
-            >
-              <span className="truncate font-mono">{comment.filePath}</span>
-              <span className="shrink-0 tabular-nums">:{comment.line}</span>
-              <span className="shrink-0">{comment.side === 'old' ? 'old' : 'new'}</span>
-            </button>
-            <p
-              className={cn(
-                'text-xs leading-5 break-words whitespace-pre-wrap',
-                comment.resolved ? 'text-muted-foreground line-through' : 'text-foreground',
-              )}
-            >
-              {comment.body}
-            </p>
-          </div>
-          <IconButton
-            icon={comment.resolved ? Undo2 : Check}
-            label={comment.resolved ? 'Reopen comment' : 'Resolve comment'}
-            size="sm"
-            disabled={busyId === comment.id}
-            onClick={() => onResolve(comment)}
-          />
-        </li>
-      ))}
+              <p
+                className={cn(
+                  'text-xs leading-5 break-words whitespace-pre-wrap',
+                  comment.resolved ? 'text-muted-foreground line-through' : 'text-foreground',
+                )}
+              >
+                {comment.body}
+              </p>
+            </div>
+            <IconButton
+              icon={comment.resolved ? Undo2 : Check}
+              label={comment.resolved ? 'Reopen comment' : 'Resolve comment'}
+              size="sm"
+              disabled={busyId === comment.id}
+              onClick={() => onResolve(comment)}
+            />
+          </li>
+        );
+      })}
     </ul>
   );
 }

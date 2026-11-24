@@ -40,6 +40,14 @@ interface CommentAnchor {
   side: ReviewCommentSide;
 }
 
+function noPreviewDescription(file: DiffFile): string {
+  if (file.binary) return 'This file is binary, so there is no text diff to render.';
+  if (file.patch === null) {
+    return 'This patch is too large to render. Open the file in the editor instead.';
+  }
+  return 'This change has no text hunks to render.';
+}
+
 /**
  * Review panel for one thread: changed files grouped by directory, the selected
  * file through the design system diff viewer, inline comments, and a checkpoint
@@ -392,14 +400,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
                 onLineComment={handleLineComment}
               />
             ) : selectedFile ? (
-              <EmptyState
-                title="No preview"
-                description={
-                  selectedFile.binary
-                    ? 'This file is binary, so there is no text diff to render.'
-                    : 'This patch is too large to render. Open the file in the editor instead.'
-                }
-              />
+              <EmptyState title="No preview" description={noPreviewDescription(selectedFile)} />
             ) : (
               <EmptyState
                 icon={FileDiff}
@@ -436,6 +437,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
         <ScrollArea className="min-h-0 flex-1">
           <CommentList
             comments={comments}
+            knownPaths={new Set(files.map((file) => file.path))}
             busyId={resolvingId}
             onResolve={(comment) => {
               void handleResolve(comment);
