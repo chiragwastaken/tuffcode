@@ -44,12 +44,12 @@ describe('brain preview formatting', () => {
     expect(formatTokenCount(Number.NaN)).toBe('0 tokens');
   });
 
-  it('summarizes the always, retrieved and token counts', () => {
+  it('summarizes the injected entry count and token cost', () => {
     const slice = { always: [makeEntry()], retrieved: [makeEntry({ id: 'brn_2' })], tokens: 840 };
 
-    expect(summarizeBrainSlice(slice)).toBe('1 always, 1 retrieved, 840 tokens');
+    expect(summarizeBrainSlice(slice)).toBe('2 entries · 840 tokens');
     expect(summarizeBrainSlice({ always: [], retrieved: [], tokens: 0 })).toBe(
-      '0 always, 0 retrieved, 0 tokens',
+      '0 entries · 0 tokens',
     );
   });
 

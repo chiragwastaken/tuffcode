@@ -4,7 +4,6 @@ import {
   DiffViewer,
   EmptyState,
   IconButton,
-  ScrollArea,
   Select,
   Spinner,
   Textarea,
@@ -12,7 +11,7 @@ import {
   type DiffLineComment,
 } from '@tuffcode/ui';
 import { FileDiff, MessageSquarePlus, RefreshCw, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { CommentList } from './CommentList';
 import { FileTree } from './FileTree';
@@ -371,9 +370,9 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
           />
         ) : null}
 
-        <ScrollArea className="min-h-0 min-w-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {selectedFile ? (
-            <div className="sticky top-0 z-10 flex h-9 items-center gap-2 border-b border-border bg-background px-3">
+            <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
               <span
                 className="truncate font-mono text-xs text-foreground"
                 title={selectedFile.path}
@@ -400,9 +399,19 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
             </div>
           ) : null}
 
-          <div className="p-3">
-            {selectedFile && sides ? (
+          {selectedFile && sides ? (
+            <div
+              className="min-h-0 flex-1 p-3"
+              style={
+                {
+                  '--diffs-overflow-override': 'hidden',
+                  '--diffs-scrollbar-gutter-override': '0px',
+                } as CSSProperties
+              }
+            >
               <DiffViewer
+                className="h-full min-h-0 [&>div]:h-full [&>div]:overflow-y-auto"
+                hideFileHeader
                 files={[
                   {
                     path: selectedFile.path,
@@ -412,30 +421,38 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
                 ]}
                 onLineComment={handleLineComment}
               />
-            ) : selectedFile ? (
-              <EmptyState title="No preview" description={noPreviewDescription(selectedFile)} />
-            ) : loading ? (
-              <div className="flex items-center justify-center py-10">
-                <Spinner label="Loading diff" />
-              </div>
-            ) : error ? null : (
+            </div>
+          ) : selectedFile ? (
+            <div className="flex min-h-0 flex-1 items-center px-3">
               <EmptyState
-                icon={FileDiff}
-                title="No changes"
-                description={
+                variant="inline"
+                title={noPreviewDescription(selectedFile)}
+                className="w-full"
+              />
+            </div>
+          ) : loading ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center">
+              <Spinner label="Loading diff" />
+            </div>
+          ) : error ? null : (
+            <div className="flex min-h-0 flex-1 items-center px-3">
+              <EmptyState
+                variant="inline"
+                title={
                   checkpointId === null
-                    ? 'The worktree matches HEAD. Edits made by the agent will show up here.'
-                    : 'Nothing changed between this checkpoint and the worktree.'
+                    ? 'No changes; the worktree matches HEAD.'
+                    : 'Nothing changed since this checkpoint.'
                 }
                 action={
                   <Button size="sm" variant="secondary" onClick={reload}>
                     Refresh
                   </Button>
                 }
+                className="w-full"
               />
-            )}
-          </div>
-        </ScrollArea>
+            </div>
+          )}
+        </div>
       </div>
 
       <section

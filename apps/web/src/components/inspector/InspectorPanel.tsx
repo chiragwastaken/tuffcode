@@ -1,4 +1,5 @@
-import { EmptyState, TabsList, TabsPanel, TabsRoot, TabsTab } from '@tuffcode/ui';
+import { EmptyState, IconButton, TabsList, TabsPanel, TabsRoot, TabsTab } from '@tuffcode/ui';
+import { PanelRightClose } from 'lucide-react';
 import { useEffect, useReducer, useState } from 'react';
 import { useAppStore } from '../../store/app-store';
 import { DiffPanel } from '../diff/DiffPanel';
@@ -18,6 +19,8 @@ import {
 export interface InspectorPanelProps {
   /** The open thread, or null on settings and empty workspace routes. */
   threadId: string | null;
+  /** Hides the inspector column. The collapse control renders only when provided. */
+  onCollapse?: () => void;
 }
 
 /**
@@ -25,7 +28,7 @@ export interface InspectorPanelProps {
  * choice is remembered per thread for the session, and new threads inherit the
  * last tab used anywhere.
  */
-export function InspectorPanel({ threadId }: InspectorPanelProps) {
+export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
   const [tabs, dispatch] = useReducer(inspectorTabsReducer, initialInspectorTabs);
   const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
   const activeTab = tabForThread(tabs, threadId);
@@ -33,15 +36,11 @@ export function InspectorPanel({ threadId }: InspectorPanelProps) {
   if (threadId === null) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-[var(--row-height)] shrink-0 items-center border-b border-border px-3">
-          <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-            Inspector
-          </span>
-        </div>
-        <div className="flex flex-1 items-center justify-center p-4">
+        <InspectorHeader title="Inspector" onCollapse={onCollapse} />
+        <div className="flex flex-1 items-center justify-center px-3">
           <EmptyState
-            title="No thread open"
-            description="Open a thread to inspect its diff, terminal, brain context and council goals."
+            variant="inline"
+            title="Open a thread to inspect its diff, terminal, brain and council."
             className="w-full"
           />
         </div>
@@ -57,20 +56,7 @@ export function InspectorPanel({ threadId }: InspectorPanelProps) {
       }}
       className="flex h-full min-h-0 flex-col"
     >
-      <div className="flex h-[var(--row-height)] shrink-0 items-center border-b border-border px-2">
-        <TabsList aria-label="Inspector sections" className="w-full">
-          {INSPECTOR_TABS.map((tab) => (
-            <TabsTab
-              key={tab}
-              value={tab}
-              data-testid={`inspector-tab-${tab}`}
-              className="flex-1 justify-center"
-            >
-              {INSPECTOR_TAB_LABEL[tab]}
-            </TabsTab>
-          ))}
-        </TabsList>
-      </div>
+      <InspectorHeader title={thread?.title ?? 'Inspector'} showTabs onCollapse={onCollapse} />
 
       <InspectorTabs
         key={threadId}
@@ -79,6 +65,54 @@ export function InspectorPanel({ threadId }: InspectorPanelProps) {
         activeTab={activeTab}
       />
     </TabsRoot>
+  );
+}
+
+interface InspectorHeaderProps {
+  /** Thread title, or the section name when no thread is open. */
+  title: string;
+  /** Renders the section tabs; only valid inside the panel's `TabsRoot`. */
+  showTabs?: boolean;
+  onCollapse?: () => void;
+}
+
+/**
+ * One header for every inspector state: the thread title, the section tabs and a
+ * collapse control. Tabs render inside the panel's `TabsRoot`.
+ */
+function InspectorHeader({ title, showTabs = false, onCollapse }: InspectorHeaderProps) {
+  return (
+    <div
+      data-testid="inspector-header"
+      className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border pr-2 pl-3"
+    >
+      <span
+        data-testid="inspector-title"
+        title={title}
+        className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+      >
+        {title}
+      </span>
+      {showTabs ? (
+        <TabsList aria-label="Inspector sections" className="shrink-0">
+          {INSPECTOR_TABS.map((tab) => (
+            <TabsTab key={tab} value={tab} data-testid={`inspector-tab-${tab}`} className="px-2">
+              {INSPECTOR_TAB_LABEL[tab]}
+            </TabsTab>
+          ))}
+        </TabsList>
+      ) : null}
+      {onCollapse ? (
+        <IconButton
+          icon={PanelRightClose}
+          label="Collapse inspector"
+          size="sm"
+          className="shrink-0"
+          data-testid="inspector-collapse"
+          onClick={onCollapse}
+        />
+      ) : null}
+    </div>
   );
 }
 

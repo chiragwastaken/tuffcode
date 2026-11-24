@@ -1,7 +1,7 @@
 import type { GoalAutonomy, RpcResult } from '@tuffcode/contracts';
 import { Badge, Button, EmptyState, ScrollArea, Select, Spinner, Textarea } from '@tuffcode/ui';
-import { Crown, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import {
   GOAL_STATE_LABEL,
@@ -49,6 +49,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   const [reloadToken, setReloadToken] = useState(0);
 
   const [goalText, setGoalText] = useState('');
+  const goalRef = useRef<HTMLTextAreaElement | null>(null);
   const [autonomy, setAutonomy] = useState<GoalAutonomy>('manual');
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -156,6 +157,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
               Goal
             </label>
             <Textarea
+              ref={goalRef}
               id="council-goal"
               rows={4}
               placeholder="What should the council ship?"
@@ -196,9 +198,13 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
 
           <div className="px-3 pb-3">
             <EmptyState
-              icon={Crown}
-              title="No council goal running"
-              description="A goal splits into tasks, each with an author and a reviewer. Start one to watch it here."
+              variant="inline"
+              title="No council goal running."
+              action={
+                <Button size="sm" variant="secondary" onClick={() => goalRef.current?.focus()}>
+                  Write a goal
+                </Button>
+              }
               className="w-full"
             />
           </div>
