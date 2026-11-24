@@ -1,0 +1,9 @@
+[
+  {
+    "type": "system",
+    "subtype": "worker_shutting_down",
+    "reason": "host_exit",
+    "uuid": "uuid-shutdown-06",
+    "session_id": "sess_06"
+  }
+]

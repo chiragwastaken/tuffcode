@@ -1,0 +1,34 @@
+[
+  {
+    "type": "assistant",
+    "message": {
+      "id": "msg_05",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-4-5",
+      "content": [],
+      "stop_reason": null,
+      "usage": { "input_tokens": 30, "output_tokens": 0 }
+    },
+    "parent_tool_use_id": null,
+    "error": "rate_limit",
+    "uuid": "uuid-asst-05",
+    "session_id": "sess_05"
+  },
+  {
+    "type": "result",
+    "subtype": "error_during_execution",
+    "duration_ms": 500,
+    "duration_api_ms": 400,
+    "is_error": true,
+    "num_turns": 1,
+    "stop_reason": null,
+    "total_cost_usd": 0,
+    "usage": { "input_tokens": 30, "output_tokens": 0 },
+    "modelUsage": {},
+    "permission_denials": [],
+    "errors": ["API rate limit reached"],
+    "uuid": "uuid-result-05",
+    "session_id": "sess_05"
+  }
+]
