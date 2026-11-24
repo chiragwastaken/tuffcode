@@ -1,5 +1,5 @@
 import { Markdown, Spinner, cn, focusRing, type MarkdownTheme } from '@tuffcode/ui';
-import { Check, ChevronRight, Copy, Info, TriangleAlert, Wrench, X } from 'lucide-react';
+import { Check, ChevronRight, Copy, Info, RotateCcw, TriangleAlert, Wrench, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   formatToolInput,
@@ -13,23 +13,62 @@ import {
   type UserItem,
 } from './grouping';
 
-export function UserBubble({ item }: { item: UserItem }) {
+export function UserBubble({
+  item,
+  onRetry,
+}: {
+  item: UserItem;
+  onRetry?: (item: UserItem) => void;
+}) {
+  const failed = item.status === 'failed';
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] rounded-2xl bg-message-surface px-3.5 py-2 text-sm leading-6 break-words whitespace-pre-wrap text-foreground">
-        {item.text}
-        {item.attachments.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {item.attachments.map((attachment, index) => (
-              <span
-                key={`${attachment.path}-${index}`}
-                className="rounded-sm border border-border px-1.5 py-0.5 font-mono text-2xs text-muted-foreground"
-                title={attachment.path}
-              >
-                {attachment.name}
-              </span>
-            ))}
-          </div>
+      <div className="flex max-w-[85%] flex-col items-end gap-1">
+        <div
+          data-testid={failed ? 'user-message-failed' : 'user-message'}
+          data-status={item.status}
+          className={cn(
+            'rounded-2xl px-3.5 py-2 text-sm leading-6 break-words whitespace-pre-wrap text-foreground',
+            failed ? 'bg-error-surface/60' : 'bg-message-surface',
+            item.status === 'pending' && 'opacity-70',
+          )}
+        >
+          {item.text}
+          {item.attachments.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {item.attachments.map((attachment, index) => (
+                <span
+                  key={`${attachment.path}-${index}`}
+                  className="rounded-sm border border-border px-1.5 py-0.5 font-mono text-2xs text-muted-foreground"
+                  title={attachment.path}
+                >
+                  {attachment.name}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        {failed ? (
+          <span className="flex items-center gap-1.5 text-2xs text-error-foreground">
+            <span>Not sent.</span>
+            <button
+              type="button"
+              data-testid="user-message-retry"
+              onClick={() => onRetry?.(item)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 font-medium hover:bg-accent',
+                focusRing,
+              )}
+            >
+              <RotateCcw aria-hidden="true" strokeWidth={1.75} className="size-3" />
+              Retry
+            </button>
+          </span>
+        ) : item.status === 'pending' ? (
+          <span className="flex items-center gap-1 text-2xs text-muted-foreground">
+            <Spinner size="sm" label="Sending" />
+            Sending
+          </span>
         ) : null}
       </div>
     </div>

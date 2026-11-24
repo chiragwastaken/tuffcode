@@ -25,6 +25,9 @@ test('adds a project, points a provider at the mock, and streams a reply', async
   expect(title.length).toBeGreaterThan(0);
 
   await sendMessage(page, 'Say hello to the e2e suite');
+  await expect(
+    page.getByTestId('user-message').filter({ hasText: 'Say hello to the e2e suite' }),
+  ).toBeVisible();
   await expectAssistantText(page, MOCK_TEXT);
   await expect(page.getByTestId('thread-status')).toHaveAttribute('data-status', 'ready-to-review');
   expect(mock.requests).toBeGreaterThan(0);
