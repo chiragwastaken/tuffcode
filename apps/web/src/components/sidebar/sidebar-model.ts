@@ -1,32 +1,9 @@
-import type { Project, Thread, ThreadStatus } from '@tuffcode/contracts';
-import { STATUS_LABEL, type StatusTone } from '@tuffcode/ui';
+import type { Project, Thread } from '@tuffcode/contracts';
 
 /** A project plus the threads that belong to it, newest first. */
 export interface ProjectThreadGroup {
   project: Project;
   threads: Thread[];
-}
-
-/** Statuses loud enough to earn a badge next to the row title. */
-const BADGE_TONE: Partial<Record<ThreadStatus, StatusTone>> = {
-  running: 'running',
-  'needs-approval': 'warning',
-  'ready-to-review': 'success',
-  failed: 'error',
-};
-
-export interface ThreadStatusBadge {
-  label: string;
-  tone: StatusTone;
-}
-
-/**
- * Maps a thread status onto the badge shown in the rail, or null for quiet
- * statuses that only need the status dot.
- */
-export function threadStatusBadge(status: ThreadStatus): ThreadStatusBadge | null {
-  const tone = BADGE_TONE[status];
-  return tone ? { label: STATUS_LABEL[status], tone } : null;
 }
 
 /** Groups threads under their project, keeping the caller's project order. */
@@ -127,9 +104,9 @@ export function sidebarItemKey(item: SidebarItem): string {
 }
 
 export const SIDEBAR_ITEM_HEIGHT: Record<SidebarItem['kind'], number> = {
-  project: 32,
-  thread: 36,
-  empty: 32,
+  project: 30,
+  thread: 34,
+  empty: 30,
 };
 
 export function sidebarItemHeight(item: SidebarItem): number {

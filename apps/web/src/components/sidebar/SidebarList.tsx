@@ -102,7 +102,7 @@ function SidebarItemView({ item, actions }: { item: SidebarItem; actions: Sideba
       );
     case 'empty':
       return (
-        <p className="flex h-8 items-center px-3 text-xs text-sidebar-muted-foreground">
+        <p className="flex h-[30px] items-center px-3 text-xs text-sidebar-muted-foreground">
           No threads yet
         </p>
       );

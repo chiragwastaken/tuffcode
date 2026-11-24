@@ -4,7 +4,7 @@ import { ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
-import { formatToolInput, type ApprovalItem } from './grouping';
+import { toolInputText, type ApprovalItem } from './grouping';
 import { setApprovalDecision } from './local-messages';
 
 const DECISION_LABEL: Record<ApprovalChoice, string> = {
@@ -55,7 +55,7 @@ export function ApprovalCard({ item, threadId }: ApprovalCardProps) {
     }
   }
 
-  const input = formatToolInput(item.input);
+  const input = toolInputText(item.input);
 
   return (
     <div
@@ -86,7 +86,10 @@ export function ApprovalCard({ item, threadId }: ApprovalCardProps) {
       </div>
 
       {input ? (
-        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-background/60 p-2 font-mono text-2xs leading-5 whitespace-pre-wrap text-muted-foreground">
+        <pre
+          data-testid="approval-input"
+          className="mt-2 max-h-40 overflow-auto rounded-md border border-border/60 bg-background/60 px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap text-foreground"
+        >
           {input}
         </pre>
       ) : null}

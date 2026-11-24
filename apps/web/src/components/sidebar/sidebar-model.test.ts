@@ -7,7 +7,6 @@ import {
   groupThreadsByProject,
   needsVirtualization,
   sidebarItemKey,
-  threadStatusBadge,
   type ProjectThreadGroup,
 } from './sidebar-model';
 
@@ -143,27 +142,6 @@ describe('filterGroups', () => {
 
   it('returns no groups when nothing matches', () => {
     expect(filterGroups(groups, 'zzz')).toEqual([]);
-  });
-});
-
-describe('threadStatusBadge', () => {
-  it('labels the four live statuses with their design tones', () => {
-    expect(threadStatusBadge('running')).toEqual({ label: 'Running', tone: 'running' });
-    expect(threadStatusBadge('needs-approval')).toEqual({
-      label: 'Needs approval',
-      tone: 'warning',
-    });
-    expect(threadStatusBadge('ready-to-review')).toEqual({
-      label: 'Ready to review',
-      tone: 'success',
-    });
-    expect(threadStatusBadge('failed')).toEqual({ label: 'Failed', tone: 'error' });
-  });
-
-  it('omits badges for quiet statuses', () => {
-    expect(threadStatusBadge('idle')).toBeNull();
-    expect(threadStatusBadge('merged')).toBeNull();
-    expect(threadStatusBadge('closed')).toBeNull();
   });
 });
 
