@@ -35,6 +35,7 @@ const IMPLEMENTED = [
   'projects.list',
   'projects.refresh',
   'projects.remove',
+  'prompt.preview',
   'providers.list',
   'providers.login',
   'providers.loginCancel',

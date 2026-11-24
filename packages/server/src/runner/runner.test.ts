@@ -7,9 +7,11 @@ import type {
   ThreadStatus,
   TurnContext,
 } from '@tuffcode/contracts';
+import { BASE_SYSTEM_PROMPT } from '@tuffcode/prompt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderRecord } from '../db/repos/index.js';
 import { createEventBus, type EventBus } from '../events.js';
+import { planPrompt } from '../prompt/service.js';
 import { createSecretBridge } from '../secrets/bridge.js';
 import { createTestContext, silentLogger, type TestContext } from '../test-support.js';
 import { createRunner, INTERRUPTED_MARKER, recordTurnStart, type Runner } from './runner.js';
@@ -561,8 +563,57 @@ describe('thread runner', () => {
 
     const ctx = f.adapter.sends[0]?.ctx;
     expect(ctx?.systemPrompt).toContain('always run pnpm');
-    expect(ctx?.brainSlice).toContain('sharedtoken memory');
-    expect(ctx?.brainSlice).not.toContain('always run pnpm');
+    expect(ctx?.systemPrompt).toContain('sharedtoken memory');
+    expect(ctx?.brainSlice).toBe('');
+    f.adapter.end();
+  });
+
+  it('assembles base, custom instructions, brain, context, then the user message', async () => {
+    const f = setup();
+    f.ctx.repos.settings.patch({ customInstructions: 'Prefer pnpm.\r\nNever force push.' });
+    const rule = f.ctx.repos.brain.upsert({
+      kind: 'rule',
+      scope: 'global',
+      text: 'pin tool versions',
+      appliesTo: 'all',
+    });
+    const memory = f.ctx.repos.brain.upsert({
+      kind: 'memory',
+      scope: 'global',
+      text: 'promptparity marker',
+    });
+    const message = 'promptparity run the suite';
+    await f.runner.send('thr_a', message);
+
+    const ctx = f.adapter.sends[0]?.ctx;
+    const system = ctx?.systemPrompt ?? '';
+    const thread = f.ctx.repos.threads.get('thr_a');
+    const project = f.ctx.repos.projects.get('prj_a');
+    if (thread === undefined || project === undefined) throw new Error('fixture is incomplete');
+
+    const plan = planPrompt(f.ctx.repos, {
+      thread,
+      project,
+      message,
+      settings: f.ctx.repos.settings.get(),
+    });
+    expect(system).toBe(plan.assembly.systemPrompt);
+    expect(ctx?.brainSlice).toBe('');
+    expect(system.startsWith(BASE_SYSTEM_PROMPT)).toBe(true);
+
+    const custom = system.indexOf('## Custom instructions');
+    const brain = system.indexOf('pin tool versions');
+    const retrieved = system.indexOf('promptparity marker');
+    const context = system.indexOf('<context>');
+    expect(custom).toBeGreaterThan(0);
+    expect(custom).toBeLessThan(brain);
+    expect(brain).toBeLessThan(retrieved);
+    expect(retrieved).toBeLessThan(context);
+    expect(system).toContain('Prefer pnpm.\nNever force push.');
+    expect(system).not.toContain(message);
+
+    expect(f.ctx.repos.brain.get(rule.id)?.useCount).toBe(1);
+    expect(f.ctx.repos.brain.get(memory.id)?.useCount).toBe(1);
     f.adapter.end();
   });
 
