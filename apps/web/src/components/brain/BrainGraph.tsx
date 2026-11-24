@@ -2,11 +2,13 @@ import { Button } from '@tuffcode/ui';
 import { useMemo, useRef, useState } from 'react';
 import { useElementSize } from '../../hooks/use-element-size';
 import {
+  RESTING_LABEL_MAX,
   drawableEdges,
   highlightedNodeIds,
   labelPlacement,
   layoutBrainGraph,
   nextNodeInDirection,
+  topLabelNodeIds,
   type BrainGraphEdge,
   type BrainGraphNode,
   type GraphDirection,
@@ -75,6 +77,7 @@ export function BrainGraph({
   const tabbableId =
     selectedId !== null && nodeIds.has(selectedId) ? selectedId : (layout.nodes[0]?.id ?? null);
   const hasVisibleSelection = selectedId !== null && nodeIds.has(selectedId);
+  const labeledIds = useMemo(() => topLabelNodeIds(layout.nodes), [layout]);
 
   const showSkeleton = loading && nodes.length === 0;
   const showEmpty = !loading && error === null && nodes.length === 0;
@@ -132,8 +135,13 @@ export function BrainGraph({
               const isHighlighted = highlighted.has(node.id);
               const dimmed = hasVisibleSelection && !isHighlighted;
               const isFocused = focusedId === node.id;
-              const placement = labelPlacement(node, layout.width);
-              const showLabel = hoveredId === node.id || isSelected;
+              const isActive = hoveredId === node.id || isSelected;
+              const showLabel = isActive || labeledIds.has(node.id);
+              const placement = labelPlacement(
+                node,
+                layout.width,
+                isActive ? undefined : RESTING_LABEL_MAX,
+              );
               return (
                 <g
                   key={node.id}
@@ -211,6 +219,7 @@ export function BrainGraph({
                       fontSize={11}
                       fontWeight={500}
                       fill="var(--foreground)"
+                      fillOpacity={isActive ? 1 : 0.78}
                       stroke="var(--card)"
                       strokeWidth={3}
                       paintOrder="stroke"
@@ -218,9 +227,8 @@ export function BrainGraph({
                     >
                       {placement.label}
                     </text>
-                  ) : (
-                    <title>{node.label}</title>
-                  )}
+                  ) : null}
+                  <title>{node.label}</title>
                 </g>
               );
             })}

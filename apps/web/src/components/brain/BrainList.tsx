@@ -152,7 +152,7 @@ export function BrainList({
             </span>
             {row.reason === undefined ? null : (
               <span
-                className="line-clamp-2 text-2xs leading-4 break-words text-muted-foreground"
+                className="block truncate text-2xs leading-4 text-muted-foreground"
                 title={row.reason}
               >
                 {row.reason}
