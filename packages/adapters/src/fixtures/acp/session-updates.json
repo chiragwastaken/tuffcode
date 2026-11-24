@@ -1,0 +1,59 @@
+[
+  {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": { "type": "text", "text": "Checking the worktree layout." }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": { "type": "text", "text": "I will update the config." }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": { "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call-1",
+    "title": "Read package.json",
+    "name": "read",
+    "kind": "read",
+    "status": "pending",
+    "rawInput": { "path": "package.json" }
+  },
+  {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call-1",
+    "status": "in_progress",
+    "content": [
+      { "type": "content", "content": { "type": "text", "text": "{\"name\":\"tuffcode\"}" } }
+    ]
+  },
+  {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call-1",
+    "status": "completed"
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call-2",
+    "title": "Run tests",
+    "kind": "execute",
+    "status": "completed",
+    "rawOutput": "1 passed"
+  },
+  {
+    "sessionUpdate": "plan",
+    "entries": [
+      { "content": "Read files", "priority": "high", "status": "completed" },
+      { "content": "Apply edit", "priority": "high", "status": "in_progress" }
+    ]
+  },
+  {
+    "sessionUpdate": "usage_update",
+    "used": 1200,
+    "size": 200000,
+    "cost": { "amount": 0.012, "currency": "USD" }
+  },
+  { "sessionUpdate": "available_commands_update", "availableCommands": [] },
+  { "sessionUpdate": "plan_removed", "planId": "default" }
+]
