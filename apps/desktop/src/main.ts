@@ -26,8 +26,7 @@ import {
   applyThemeChrome,
   readPersistedTheme,
   resolveTheme,
-  TITLE_BAR_HEIGHT,
-  themeChrome,
+  windowChromeOptions,
   type ResolvedTheme,
 } from './theme';
 import { setupUpdater } from './updater';
@@ -59,20 +58,16 @@ function rendererIndexFile(): string {
 }
 
 function createWindow(theme: ResolvedTheme): BrowserWindow {
-  const chrome = themeChrome(theme);
+  const { backgroundColor, titleBarOverlay } = windowChromeOptions(theme);
   const window = new BrowserWindow({
     width: 1100,
     height: 780,
     minWidth: 400,
     minHeight: 360,
-    backgroundColor: chrome.backgroundColor,
+    backgroundColor,
     show: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: chrome.overlayColor,
-      symbolColor: chrome.symbolColor,
-      height: TITLE_BAR_HEIGHT,
-    },
+    titleBarOverlay,
     webPreferences: {
       preload: join(currentDir, '../preload/preload.cjs'),
       sandbox: true,
@@ -118,10 +113,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.on(SET_THEME_CHANNEL, (event, theme: unknown) => {
     if (!isTheme(theme)) return;
-    // Resolve against the OS before pinning `themeSource`, so `system` uses the real
-    // preference rather than the value a previous call installed.
+    // `shouldUseDarkColors` follows `themeSource`, so ask for `system` before resolving.
+    nativeTheme.themeSource = theme;
     const resolved = resolveTheme(theme, nativeTheme.shouldUseDarkColors);
-    nativeTheme.themeSource = resolved;
     const target =
       BrowserWindow.getFocusedWindow() ?? BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
     if (target === null || target.isDestroyed()) return;
