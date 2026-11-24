@@ -14,10 +14,15 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import {
+  CONTEXT_BAR_MIN_WIDTH_PX,
+  CONTEXT_BAR_TONE_CLASS,
   CONTEXT_METER_TONE_CLASS,
+  barWidthPercent,
+  contextBarTone,
   contextMeterTone,
   contextTooltip,
   formatPercent,
+  formatSegmentPercent,
   formatTokenCount,
   segmentPercent,
   usagePercent,
@@ -95,7 +100,12 @@ export function ContextMeter({ threadId, threshold }: ContextMeterProps) {
 
   const percent = usagePercent(usage);
   const tone = contextMeterTone(percent, threshold);
+  const barTone = contextBarTone(percent, threshold);
   const warning = tone === 'warning';
+  const barStyle = {
+    width: `${barWidthPercent(percent)}%`,
+    minWidth: percent > 0 ? `${CONTEXT_BAR_MIN_WIDTH_PX}px` : undefined,
+  };
 
   async function compactNow(): Promise<void> {
     if (compacting) return;
@@ -133,9 +143,9 @@ export function ContextMeter({ threadId, threshold }: ContextMeterProps) {
                 <span
                   className={cn(
                     'absolute inset-y-0 left-0 rounded-full',
-                    warning ? 'bg-warning' : 'bg-primary',
+                    CONTEXT_BAR_TONE_CLASS[barTone],
                   )}
-                  style={{ width: `${percent * 100}%` }}
+                  style={barStyle}
                 />
               </span>
               <span className="font-medium">{formatPercent(percent)}</span>
@@ -158,8 +168,8 @@ export function ContextMeter({ threadId, threshold }: ContextMeterProps) {
 
         <div aria-hidden="true" className="mt-1.5 h-1 overflow-hidden rounded-full bg-border">
           <div
-            className={cn('h-full rounded-full', warning ? 'bg-warning' : 'bg-primary')}
-            style={{ width: `${percent * 100}%` }}
+            className={cn('h-full rounded-full', CONTEXT_BAR_TONE_CLASS[barTone])}
+            style={barStyle}
           />
         </div>
 
@@ -177,7 +187,7 @@ export function ContextMeter({ threadId, threshold }: ContextMeterProps) {
                   {formatTokenCount(segment.tokens)}
                 </span>
                 <span className="w-9 text-right tabular-nums text-muted-foreground">
-                  {formatPercent(segmentPercent(segment.tokens, usage.maxTokens))}
+                  {formatSegmentPercent(segmentPercent(segment.tokens, usage.maxTokens))}
                 </span>
               </li>
             ))}

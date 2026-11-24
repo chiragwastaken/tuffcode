@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CONTEXT_BAR_MIN_WIDTH_PX,
+  CONTEXT_BAR_TONE_CLASS,
   CONTEXT_METER_TONE_CLASS,
+  barWidthPercent,
+  contextBarTone,
   contextMeterTone,
   contextTooltip,
   formatPercent,
+  formatSegmentPercent,
   formatTokenCount,
   isContextWarning,
   segmentPercent,
@@ -84,5 +89,32 @@ describe('context tooltip and segments', () => {
     expect(segmentPercent(20_000, 200_000)).toBeCloseTo(0.1);
     expect(segmentPercent(300_000, 200_000)).toBe(1);
     expect(segmentPercent(10, 0)).toBe(0);
+  });
+
+  it('keeps one decimal for segments below 10%', () => {
+    expect(formatSegmentPercent(segmentPercent(130, 33_000))).toBe('0.4%');
+    expect(formatSegmentPercent(segmentPercent(49, 33_000))).toBe('0.1%');
+    expect(formatSegmentPercent(segmentPercent(750, 33_000))).toBe('2.3%');
+    expect(formatSegmentPercent(segmentPercent(20_000, 200_000))).toBe('10%');
+    expect(formatSegmentPercent(segmentPercent(0, 33_000))).toBe('0%');
+    expect(formatSegmentPercent(0.0001)).toBe('<0.1%');
+  });
+});
+
+describe('context bar fill', () => {
+  it('picks a subdued tone for a nearly empty window', () => {
+    expect(contextBarTone(0.04, 0.8)).toBe('low');
+    expect(contextBarTone(0.21, 0.8)).toBe('default');
+    expect(contextBarTone(0.8, 0.8)).toBe('warning');
+    expect(CONTEXT_BAR_TONE_CLASS.low).toContain('bg-muted-foreground');
+    expect(CONTEXT_BAR_TONE_CLASS.default).toContain('bg-primary');
+    expect(CONTEXT_BAR_TONE_CLASS.warning).toContain('bg-warning');
+  });
+
+  it('maps the share to a clamped fill width', () => {
+    expect(barWidthPercent(0.04)).toBeCloseTo(4);
+    expect(barWidthPercent(1.4)).toBe(100);
+    expect(barWidthPercent(Number.NaN)).toBe(0);
+    expect(CONTEXT_BAR_MIN_WIDTH_PX).toBeGreaterThan(0);
   });
 });
