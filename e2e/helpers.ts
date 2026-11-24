@@ -87,9 +87,17 @@ export async function openSettingsSection(
 }
 
 export async function setPermissionMode(page: Page, label: string): Promise<void> {
-  await page.getByLabel('Permission mode').click();
-  await page.getByRole('option', { name: label, exact: true }).click();
-  await expect(page.getByLabel('Permission mode')).toContainText(label);
+  // The composer shows a segmented control when it has room and a menu button
+  // below 720px, so drive whichever one is mounted.
+  const control = page.getByTestId('permission-select');
+  const segment = control.getByRole('radio', { name: label, exact: true });
+  if ((await segment.count()) > 0) {
+    await segment.click();
+  } else {
+    await control.click();
+    await page.getByRole('menuitemradio', { name: label, exact: true }).click();
+  }
+  await expect(control).toContainText(label);
 }
 
 export async function expectAssistantText(page: Page, text: string): Promise<void> {

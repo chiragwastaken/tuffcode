@@ -2,7 +2,6 @@ import type {
   Attachment,
   Command,
   ExecutionMode,
-  Model,
   PermissionMode,
   Skill,
   Thread,
@@ -11,14 +10,17 @@ import {
   Button,
   IconButton,
   Kbd,
-  Select,
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
   Spinner,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
+  buttonVariants,
   cn,
 } from '@tuffcode/ui';
-import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
+import { ArrowUp, Check, Paperclip, SlidersHorizontal, Square, X } from 'lucide-react';
 import {
   useEffect,
   useLayoutEffect,
@@ -27,10 +29,16 @@ import {
   useState,
   type ChangeEvent,
   type KeyboardEvent,
+  type RefObject,
 } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { CouncilGoal } from '../council/CouncilGoal';
+import { CouncilStatusStrip } from '../council/CouncilStatusStrip';
+import { councilSummary } from '../council/council-goal';
+import { useCouncilGoal } from '../council/use-council-goal';
+import { ModelPicker } from '../models/ModelPicker';
 import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './attachments';
 import {
   addLocalUserMessage,
@@ -38,21 +46,37 @@ import {
   nextLocalUserMessageId,
   resolveLocalUserMessage,
 } from './local-messages';
+import { SegmentedControl, type SegmentedOption } from './SegmentedControl';
 import { filterPalette, parseTrigger, triggerInsert, type PaletteKind } from './slash';
 import { useProjectPalette } from './use-project-palette';
 
-const MODE_OPTIONS: { value: ExecutionMode; label: string }[] = [
-  { value: 'plan', label: 'Plan' },
+/** The composer's own mode control; Council is chosen in the topbar switch. */
+type ComposerMode = Extract<ExecutionMode, 'work' | 'plan'>;
+
+const MODE_OPTIONS: readonly SegmentedOption<ComposerMode>[] = [
   { value: 'work', label: 'Work' },
-  { value: 'council', label: 'Council' },
+  { value: 'plan', label: 'Plan' },
 ];
 
-const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
-  { value: 'read-only', label: 'Read only' },
-  { value: 'ask', label: 'Ask' },
-  { value: 'accept-edits', label: 'Accept edits' },
-  { value: 'full-auto', label: 'Full auto' },
+const PERMISSION_LABEL: Record<PermissionMode, string> = {
+  'read-only': 'Read only',
+  ask: 'Ask',
+  'accept-edits': 'Auto edits',
+  'full-auto': 'Full auto',
+};
+
+/** The three everyday permission modes; read-only joins them only when it is set. */
+const PERMISSION_SEGMENTS: readonly PermissionMode[] = ['ask', 'accept-edits', 'full-auto'];
+
+const PERMISSION_MENU: readonly { value: PermissionMode; label: string }[] = [
+  { value: 'read-only', label: PERMISSION_LABEL['read-only'] },
+  { value: 'ask', label: PERMISSION_LABEL.ask },
+  { value: 'accept-edits', label: PERMISSION_LABEL['accept-edits'] },
+  { value: 'full-auto', label: PERMISSION_LABEL['full-auto'] },
 ];
+
+/** Below this the permission control becomes a menu button instead of shrinking. */
+const COMPACT_WIDTH = 720;
 
 const MAX_TEXTAREA_HEIGHT = 200;
 
@@ -60,46 +84,60 @@ export interface ComposerProps {
   thread: Thread | undefined;
 }
 
+/** The composer's own width decides the layout, not the window's. */
+function useContainerWidth(ref: RefObject<HTMLDivElement | null>): number {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    setWidth(element.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setWidth(entry.contentRect.width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return width;
+}
+
 export function Composer({ thread }: ComposerProps) {
   const rpc = useRpc();
   const connection = useAppStore((state) => state.connection);
+  const providers = useAppStore((state) => state.providers);
   const upsertThread = useAppStore((state) => state.upsertThread);
 
   const [input, setInput] = useState('');
+  const [goalInput, setGoalInput] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [models, setModels] = useState<Model[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const width = useContainerWidth(rootRef);
+  const compact = width > 0 && width < COMPACT_WIDTH;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [fileBridge] = useState(hasFilePathBridge);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
 
-  const providerId = thread?.providerId;
-  const modelId = thread?.modelId;
+  const councilMode = thread?.executionMode === 'council';
+  const council = useCouncilGoal(councilMode ? thread?.id : undefined);
+  const summary = useMemo(
+    () => (council.status === null ? null : councilSummary(council.status)),
+    [council.status],
+  );
 
-  useEffect(() => {
-    if (!providerId) {
-      setModels([]);
-      return;
-    }
-    let cancelled = false;
-    rpc.request('models.list', { providerId }).then(
-      (list) => {
-        if (!cancelled) setModels(list);
-      },
-      () => {
-        if (!cancelled) setModels([]);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [providerId, rpc]);
+  const provider = useMemo(
+    () => providers.find((entry) => entry.id === thread?.providerId),
+    [providers, thread?.providerId],
+  );
 
   const trigger = parseTrigger(input);
   const triggerKind = trigger?.kind ?? null;
@@ -131,19 +169,20 @@ export function Composer({ thread }: ComposerProps) {
     if (!element) return;
     element.style.height = 'auto';
     element.style.height = `${Math.min(element.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
-  }, [input]);
-
-  const modelOptions = useMemo(() => {
-    const options = models.map((model) => ({ value: model.modelId, label: model.label }));
-    if (modelId && !options.some((option) => option.value === modelId)) {
-      options.unshift({ value: modelId, label: modelId });
-    }
-    return options;
-  }, [modelId, models]);
+  }, [input, councilMode]);
 
   const running = thread?.status === 'running';
-  const canSend =
-    thread !== undefined && connection === 'open' && !sending && input.trim().length > 0;
+  const connected = connection === 'open';
+  const canSend = thread !== undefined && connected && !sending && input.trim().length > 0;
+  const canSendGoal =
+    thread !== undefined && connected && !council.starting && goalInput.trim().length > 0;
+
+  const permissionSegments = useMemo<readonly SegmentedOption<PermissionMode>[]>(() => {
+    const values = PERMISSION_SEGMENTS.includes(thread?.permissionMode ?? 'ask')
+      ? PERMISSION_SEGMENTS
+      : [thread?.permissionMode ?? 'ask', ...PERMISSION_SEGMENTS];
+    return values.map((value) => ({ value, label: PERMISSION_LABEL[value] }));
+  }, [thread?.permissionMode]);
 
   async function applyUpdate(
     patch: Partial<Pick<Thread, 'modelId' | 'executionMode' | 'permissionMode'>>,
@@ -190,6 +229,11 @@ export function Composer({ thread }: ComposerProps) {
     } finally {
       setSending(false);
     }
+  }
+
+  async function sendGoal(): Promise<void> {
+    if (!canSendGoal) return;
+    if (await council.start(goalInput)) setGoalInput('');
   }
 
   async function stop(): Promise<void> {
@@ -244,7 +288,9 @@ export function Composer({ thread }: ComposerProps) {
       }
     }
 
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+    // Enter sends, Shift+Enter adds a line, and the modifier form always sends.
+    const sends = event.key === 'Enter' && (!event.shiftKey || event.metaKey || event.ctrlKey);
+    if (sends) {
       event.preventDefault();
       void send();
     }
@@ -285,9 +331,19 @@ export function Composer({ thread }: ComposerProps) {
     skill: 'Skills',
   };
 
+  const attachLabel = fileBridge ? 'Attach files' : 'Attach a folder';
+
   return (
-    <div className="shrink-0 border-t border-border px-3 py-3">
+    <div ref={rootRef} className="shrink-0 border-t border-border px-3 py-3">
       <div className="relative mx-auto w-full max-w-[var(--chat-content-max-width)]">
+        {councilMode ? (
+          <CouncilStatusStrip
+            summary={summary}
+            goalText={council.status?.goal.text}
+            error={council.error}
+          />
+        ) : null}
+
         {paletteOpen && triggerKind ? (
           <div
             ref={paletteRef}
@@ -361,137 +417,222 @@ export function Composer({ thread }: ComposerProps) {
         ) : null}
 
         <div className="rounded-xl border border-border bg-message-surface/80 p-3 backdrop-blur-md transition-colors duration-150 focus-within:border-ring/50 focus-within:ring-1 focus-within:ring-ring/40 focus-within:ring-inset">
-          {attachments.length > 0 ? (
-            <div className="mb-1 flex flex-wrap gap-1.5 px-1">
-              {attachments.map((attachment, index) => (
-                <span
-                  key={`${attachment.path}-${index}`}
-                  className="inline-flex max-w-60 items-center gap-1 rounded-sm border border-border bg-background/40 px-1.5 py-0.5 text-2xs text-muted-foreground"
-                  title={attachment.path}
-                >
-                  <Paperclip aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0" />
-                  <span className="truncate">{attachment.name}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${attachment.name}`}
-                    className="rounded-sm text-muted-foreground hover:text-foreground"
-                    onClick={() =>
-                      setAttachments((current) =>
-                        current.filter((entry) => entry.path !== attachment.path),
-                      )
-                    }
-                  >
-                    <X aria-hidden="true" strokeWidth={1.75} className="size-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          ) : null}
+          {councilMode ? (
+            <CouncilGoal
+              value={goalInput}
+              onChange={setGoalInput}
+              onSend={() => void sendGoal()}
+              starting={council.starting}
+              canSend={canSendGoal}
+              disabled={!thread}
+            />
+          ) : (
+            <>
+              {attachments.length > 0 ? (
+                <div className="mb-1 flex flex-wrap gap-1.5 px-1">
+                  {attachments.map((attachment, index) => (
+                    <span
+                      key={`${attachment.path}-${index}`}
+                      className="inline-flex max-w-60 items-center gap-1 rounded-sm border border-border bg-background/40 px-1.5 py-0.5 text-2xs text-muted-foreground"
+                      title={attachment.path}
+                    >
+                      <Paperclip
+                        aria-hidden="true"
+                        strokeWidth={1.75}
+                        className="size-3 shrink-0"
+                      />
+                      <span className="truncate">{attachment.name}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${attachment.name}`}
+                        className="rounded-sm text-muted-foreground hover:text-foreground"
+                        onClick={() =>
+                          setAttachments((current) =>
+                            current.filter((entry) => entry.path !== attachment.path),
+                          )
+                        }
+                      >
+                        <X aria-hidden="true" strokeWidth={1.75} className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
 
-          <textarea
-            ref={textareaRef}
-            data-testid="composer-input"
-            rows={1}
-            value={input}
-            aria-label="Message"
-            placeholder={
-              thread
-                ? 'Ask for a change. Enter sends, Shift+Enter adds a line.'
-                : 'Select a thread to start.'
-            }
-            disabled={!thread}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={handleKeyDown}
-            className="max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-64"
-          />
-
-          <div className="flex flex-wrap items-center gap-1.5 pt-2">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <IconButton
-                    icon={Paperclip}
-                    label={fileBridge ? 'Attach files' : 'Attach folder'}
-                    size="sm"
-                    disabled={!thread || sending}
-                    onClick={() => void attach()}
-                  />
+              <textarea
+                ref={textareaRef}
+                data-testid="composer-input"
+                rows={1}
+                value={input}
+                aria-label="Message"
+                placeholder={
+                  thread
+                    ? 'Ask for a change. Enter sends, Shift+Enter adds a line.'
+                    : 'Select a thread to start.'
                 }
+                disabled={!thread}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
+                className="max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-64"
               />
-              <TooltipContent>{fileBridge ? 'Attach files' : 'Attach a folder'}</TooltipContent>
-            </Tooltip>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFiles}
-            />
 
-            <Select
-              aria-label="Model"
-              value={modelId ?? null}
-              options={modelOptions}
-              placeholder="Model"
-              disabled={!thread || updating || modelOptions.length === 0}
-              onValueChange={(value) => {
-                if (value && value !== modelId) void applyUpdate({ modelId: value });
-              }}
-              className="h-7 w-auto min-w-28 max-w-52 rounded-md border-border/60 bg-secondary px-2 text-2xs hover:bg-accent"
-            />
-            <Select
-              aria-label="Execution mode"
-              value={thread?.executionMode ?? null}
-              options={MODE_OPTIONS}
-              disabled={!thread || updating}
-              onValueChange={(value) => {
-                const next = MODE_OPTIONS.find((option) => option.value === value);
-                if (next && next.value !== thread?.executionMode) {
-                  void applyUpdate({ executionMode: next.value });
-                }
-              }}
-              className="h-7 w-auto min-w-20 rounded-md border-border/60 bg-secondary px-2 text-2xs hover:bg-accent"
-            />
-            <Select
-              aria-label="Permission mode"
-              value={thread?.permissionMode ?? null}
-              options={PERMISSION_OPTIONS}
-              disabled={!thread || updating}
-              onValueChange={(value) => {
-                const next = PERMISSION_OPTIONS.find((option) => option.value === value);
-                if (next && next.value !== thread?.permissionMode) {
-                  void applyUpdate({ permissionMode: next.value });
-                }
-              }}
-              className="h-7 w-auto min-w-24 rounded-md border-border/60 bg-secondary px-2 text-2xs hover:bg-accent"
-            />
+              <div className="flex items-center gap-1.5 pt-2">
+                <SegmentedControl
+                  ariaLabel="Execution mode"
+                  testId="mode-select"
+                  value={thread?.executionMode === 'plan' ? 'plan' : thread ? 'work' : null}
+                  options={MODE_OPTIONS}
+                  disabled={!thread || updating}
+                  onValueChange={(value) => {
+                    if (value !== thread?.executionMode) void applyUpdate({ executionMode: value });
+                  }}
+                />
 
-            <div className="ml-auto flex items-center gap-2">
-              {running ? (
-                <Button size="sm" variant="outline" disabled={stopping} onClick={() => void stop()}>
-                  {stopping ? (
-                    <Spinner size="sm" label="Stopping" />
+                <div data-testid="model-picker-trigger" className="min-w-0">
+                  <ModelPicker
+                    provider={provider}
+                    value={thread?.modelId ?? null}
+                    disabled={!thread || updating}
+                    onSelect={(modelId) => {
+                      if (modelId !== thread?.modelId) void applyUpdate({ modelId });
+                    }}
+                    className="max-w-52 min-w-0"
+                  />
+                </div>
+
+                <div className="ml-auto flex items-center gap-1.5">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <IconButton
+                          icon={Paperclip}
+                          label={attachLabel}
+                          size="sm"
+                          disabled={!thread || sending}
+                          onClick={() => void attach()}
+                        />
+                      }
+                    />
+                    <TooltipContent>{attachLabel}</TooltipContent>
+                  </Tooltip>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFiles}
+                  />
+
+                  {compact ? (
+                    <PermissionMenu
+                      value={thread?.permissionMode ?? null}
+                      disabled={!thread || updating}
+                      onValueChange={(value) => {
+                        if (value !== thread?.permissionMode) {
+                          void applyUpdate({ permissionMode: value });
+                        }
+                      }}
+                    />
                   ) : (
-                    <Square strokeWidth={1.75} />
+                    <SegmentedControl
+                      ariaLabel="Permission mode"
+                      testId="permission-select"
+                      value={thread?.permissionMode ?? null}
+                      options={permissionSegments}
+                      disabled={!thread || updating}
+                      onValueChange={(value) => {
+                        if (value !== thread?.permissionMode) {
+                          void applyUpdate({ permissionMode: value });
+                        }
+                      }}
+                    />
                   )}
-                  Stop
-                </Button>
-              ) : (
-                <Button
-                  data-testid="composer-send"
-                  size="sm"
-                  variant="primary"
-                  disabled={!canSend}
-                  onClick={() => void send()}
-                >
-                  {sending ? <Spinner size="sm" label="Sending" /> : <ArrowUp strokeWidth={1.75} />}
-                  Send
-                </Button>
-              )}
-            </div>
-          </div>
+
+                  {running ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={stopping}
+                      onClick={() => void stop()}
+                    >
+                      {stopping ? (
+                        <Spinner size="sm" label="Stopping" />
+                      ) : (
+                        <Square strokeWidth={1.75} />
+                      )}
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      data-testid="composer-send"
+                      size="sm"
+                      variant="primary"
+                      disabled={!canSend}
+                      onClick={() => void send()}
+                    >
+                      {sending ? (
+                        <Spinner size="sm" label="Sending" />
+                      ) : (
+                        <ArrowUp strokeWidth={1.75} />
+                      )}
+                      Send
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+interface PermissionMenuProps {
+  value: PermissionMode | null;
+  disabled: boolean;
+  onValueChange: (value: PermissionMode) => void;
+}
+
+/** The permission control below 720px: a menu button that never truncates. */
+function PermissionMenu({ value, disabled, onValueChange }: PermissionMenuProps) {
+  return (
+    <PopoverRoot>
+      <PopoverTrigger
+        disabled={disabled}
+        aria-label="Permission mode"
+        title={value ? `Permission: ${PERMISSION_LABEL[value]}` : 'Permission mode'}
+        data-testid="permission-select"
+        className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'gap-1.5 px-2 text-2xs')}
+      >
+        <SlidersHorizontal aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+        <span className="whitespace-nowrap">{value ? PERMISSION_LABEL[value] : 'Permission'}</span>
+      </PopoverTrigger>
+      <PopoverContent align="end" side="top" className="w-44 p-1">
+        <ul aria-label="Permission mode">
+          {PERMISSION_MENU.map((option) => (
+            <li key={option.value}>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={option.value === value}
+                onClick={() => onValueChange(option.value)}
+                className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-foreground hover:bg-accent"
+              >
+                <Check
+                  aria-hidden="true"
+                  strokeWidth={2}
+                  className={cn(
+                    'size-3.5 shrink-0',
+                    option.value === value ? 'text-primary' : 'opacity-0',
+                  )}
+                />
+                {option.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
