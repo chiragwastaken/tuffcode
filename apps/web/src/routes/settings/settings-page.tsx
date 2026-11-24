@@ -8,6 +8,7 @@ import {
   Keyboard,
   Palette,
   RefreshCw,
+  ScrollText,
   Server,
   ShieldCheck,
   SquareTerminal,
@@ -26,6 +27,7 @@ import { AgentsSection } from './agents-section';
 import { AppearanceSection } from './appearance-section';
 import { BrainSection } from './brain-section';
 import { CapabilitiesSection } from './capabilities-section';
+import { CustomPromptSection } from './custom-prompt-section';
 import { DiagnosticsSection } from './diagnostics-section';
 import { KeybindingsSection } from './keybindings-section';
 import { ModelsSection } from '../../components/settings/models-section';
@@ -38,6 +40,7 @@ const SECTION_ICON: Record<SettingsSection, LucideIcon> = {
   appearance: Palette,
   providers: Server,
   models: Boxes,
+  instructions: ScrollText,
   agents: Wrench,
   permissions: ShieldCheck,
   terminal: SquareTerminal,
@@ -57,6 +60,8 @@ function renderSection(section: SettingsSection) {
       return <ProvidersSection />;
     case 'models':
       return <ModelsSection />;
+    case 'instructions':
+      return <CustomPromptSection />;
     case 'agents':
       return <AgentsSection />;
     case 'permissions':
