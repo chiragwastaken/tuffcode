@@ -31,12 +31,12 @@ export function applyTheme(
   theme: ThemePreference,
   target: HTMLElement = document.documentElement,
 ): void {
+  const resolved = resolveTheme(theme, window.matchMedia('(prefers-color-scheme: light)').matches);
   target.classList.add('no-transitions');
-  target.dataset.theme = resolveTheme(
-    theme,
-    window.matchMedia('(prefers-color-scheme: light)').matches,
-  );
-  window.tuffcode.setTheme(theme);
+  target.dataset.theme = resolved;
+  // The preload forwards the resolved theme to the main process, which repaints the
+  // native title bar overlay and window background.
+  window.tuffcode.setTheme(resolved);
   requestAnimationFrame(() => {
     target.classList.remove('no-transitions');
   });
