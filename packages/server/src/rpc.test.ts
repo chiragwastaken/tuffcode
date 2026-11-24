@@ -1,4 +1,4 @@
-import type { AdapterSession, ServerEvent } from '@tuffcode/contracts';
+import type { AdapterSession, Message, ServerEvent } from '@tuffcode/contracts';
 import { AdapterUnavailableError, RPC_METHODS } from '@tuffcode/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCommandHandlers } from './commands/handlers.js';
@@ -26,6 +26,7 @@ const IMPLEMENTED = [
   'git.commit',
   'git.pr',
   'git.push',
+  'messages.list',
   'models.list',
   'projects.add',
   'projects.list',
@@ -251,6 +252,66 @@ describe('rpc registry', () => {
     expect(response.ok).toBe(true);
     expect(ctx.repos.settings.get().theme).toBe('light');
     expect(events.some((event) => event.type === 'settings.updated')).toBe(true);
+  });
+
+  it('lists thread messages in order and rejects an unknown thread', async () => {
+    const { ctx, handlers } = fixture();
+    ctx.repos.projects.add({
+      id: 'prj_a',
+      name: 'alpha',
+      path: ctx.env.root,
+      defaultBranch: 'main',
+      createdAt: new Date().toISOString(),
+    });
+    ctx.repos.threads.create({
+      id: 'thr_a',
+      projectId: 'prj_a',
+      parentThreadId: null,
+      title: 'thread',
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      status: 'idle',
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    ctx.repos.messages.add({
+      id: 'msg_2',
+      threadId: 'thr_a',
+      role: 'assistant',
+      content: 'second',
+      createdAt: '2026-11-24T10:00:02.000Z',
+    });
+    ctx.repos.messages.add({
+      id: 'msg_1',
+      threadId: 'thr_a',
+      role: 'user',
+      content: 'first',
+      createdAt: '2026-11-24T10:00:01.000Z',
+    });
+
+    const listed = await dispatch(handlers, {
+      id: 'list',
+      method: 'messages.list',
+      params: { threadId: 'thr_a' },
+    });
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      const messages = listed.result as Message[];
+      expect(messages.map((message) => message.id)).toEqual(['msg_1', 'msg_2']);
+    }
+
+    const missing = await dispatch(handlers, {
+      id: 'missing',
+      method: 'messages.list',
+      params: { threadId: 'thr_missing' },
+    });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.error.code).toBe('not-found');
   });
 
   it('returns a turn id from threads.send while the run is still in flight', async () => {

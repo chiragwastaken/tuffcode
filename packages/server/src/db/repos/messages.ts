@@ -12,6 +12,11 @@ export interface AddMessageInput {
 
 export interface MessagesRepo {
   add(input: AddMessageInput): Message;
+  /**
+   * Inserts unless a row with the same id already exists. Turn-derived message ids
+   * make a replayed insert a no-op instead of a duplicate.
+   */
+  addIfAbsent(input: AddMessageInput): Message;
   list(threadId: string, limit?: number): Message[];
 }
 
@@ -31,17 +36,28 @@ export function createMessagesRepo(db: DatabaseSync): MessagesRepo {
   const insert = db.prepare(
     'INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
   );
+  const insertIgnore = db.prepare(
+    'INSERT OR IGNORE INTO messages (id, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+  );
   const selectOne = db.prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = ?`);
   const selectByThread = db.prepare(
     `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?`,
   );
 
+  function readBack(id: string): Message {
+    const row = selectOne.get(id);
+    if (row === undefined) throw new Error('message insert did not persist');
+    return mapMessage(asRow(row));
+  }
+
   return {
     add: (input) => {
       insert.run(input.id, input.threadId, input.role, input.content, input.createdAt);
-      const row = selectOne.get(input.id);
-      if (row === undefined) throw new Error('message insert did not persist');
-      return mapMessage(asRow(row));
+      return readBack(input.id);
+    },
+    addIfAbsent: (input) => {
+      insertIgnore.run(input.id, input.threadId, input.role, input.content, input.createdAt);
+      return readBack(input.id);
     },
     list: (threadId, limit = 500) =>
       selectByThread

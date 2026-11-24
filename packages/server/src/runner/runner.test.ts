@@ -12,7 +12,7 @@ import type { ProviderRecord } from '../db/repos/index.js';
 import { createEventBus, type EventBus } from '../events.js';
 import { createSecretBridge } from '../secrets/bridge.js';
 import { createTestContext, silentLogger, type TestContext } from '../test-support.js';
-import { createRunner, type Runner } from './runner.js';
+import { createRunner, INTERRUPTED_MARKER, recordTurnStart, type Runner } from './runner.js';
 
 const ISO = '2026-11-24T10:00:00.000Z';
 
@@ -250,6 +250,65 @@ describe('thread runner', () => {
     const messages = f.ctx.repos.messages.list('thr_a');
     expect(messages.map((message) => message.role)).toEqual(['user', 'assistant']);
     expect(messages[1]?.content).toBe('hello world');
+  });
+
+  it('persists exactly one user row per turn and one assistant row when it completes', async () => {
+    const f = setup();
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    const sent = f.ctx.repos.messages.list('thr_a');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ id: `msg_${turnId}_user`, role: 'user', content: 'hello' });
+
+    f.adapter.push(
+      { type: 'text.delta', turnId, text: 'a' },
+      { type: 'text.delta', turnId, text: 'b' },
+      { type: 'turn.finished', turnId, reason: 'complete' },
+    );
+    await ended;
+
+    const stored = f.ctx.repos.messages.list('thr_a');
+    expect(stored.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(stored[1]).toMatchObject({ id: `msg_${turnId}_assistant`, content: 'ab' });
+  });
+
+  it('does not duplicate the user row when the turn start is replayed', async () => {
+    const f = setup();
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+    f.adapter.end();
+
+    recordTurnStart(f.ctx.repos, {
+      threadId: 'thr_a',
+      turnId,
+      text: 'hello',
+      injectedIds: [],
+      createdAt: ISO,
+    });
+
+    expect(f.ctx.repos.messages.list('thr_a')).toHaveLength(1);
+  });
+
+  it('stores streamed text with a marker when the turn is interrupted', async () => {
+    const f = setup();
+    const { turnId } = await f.runner.send('thr_a', 'long job');
+    const delta = waitFor(
+      f.bus,
+      (event) => event.type === 'thread.event' && event.payload.type === 'text.delta',
+    );
+    f.adapter.push({ type: 'text.delta', turnId, text: 'partial answer' });
+    await delta;
+
+    await f.runner.interrupt('thr_a');
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    const stored = f.ctx.repos.messages.list('thr_a');
+    expect(stored.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(stored[1]).toMatchObject({
+      id: `msg_${turnId}_assistant`,
+      content: `partial answer${INTERRUPTED_MARKER}`,
+    });
+    expect(f.turnStatus(turnId)).toBe('interrupted');
   });
 
   it('rejects a concurrent send and a blank message', async () => {
