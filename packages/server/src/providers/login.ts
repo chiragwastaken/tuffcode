@@ -75,7 +75,10 @@ function defaultSpawnPty(
     useConptyDll: true,
   });
   return {
-    pid: pty.pid,
+    // ConPTY assigns the real pid asynchronously, so read it when cancel asks for it.
+    get pid() {
+      return pty.pid;
+    },
     onData: (listener) => {
       pty.onData(listener);
     },

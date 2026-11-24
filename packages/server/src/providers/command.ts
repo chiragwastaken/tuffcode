@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { extname } from 'node:path';
 import type { ResolveCommand } from '../adapters/resolveCommand.js';
 
 export interface CommandResult {
@@ -82,6 +83,23 @@ export function configuredCommand(value: unknown): string | null {
   return null;
 }
 
+const WINDOWS_EXECUTABLE_SUFFIXES = ['.exe', '.cmd', '.bat', '.com'] as const;
+
+/**
+ * `where` lists the extensionless npm shim before `codex.cmd`, and CreateProcess cannot
+ * start that shim. Prefer the real executable that sits next to it.
+ */
+export function executableCandidate(
+  file: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== 'win32' || extname(file).length > 0) return file;
+  for (const suffix of WINDOWS_EXECUTABLE_SUFFIXES) {
+    if (existsSync(`${file}${suffix}`)) return `${file}${suffix}`;
+  }
+  return file;
+}
+
 /**
  * Resolves the vendor CLI a provider should use: an explicit path is checked on disk,
  * an explicit name or the default name goes through PATH lookup. `null` means the CLI
@@ -91,10 +109,11 @@ export async function resolveCliPath(
   resolveCommand: ResolveCommand,
   configured: string | null,
   name: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<string | null> {
-  if (configured === null) return resolveCommand(name);
-  if (configured.includes('/') || configured.includes('\\')) {
+  if (configured !== null && (configured.includes('/') || configured.includes('\\'))) {
     return existsSync(configured) ? configured : null;
   }
-  return resolveCommand(configured);
+  const resolved = await resolveCommand(configured ?? name);
+  return resolved === null ? null : executableCandidate(resolved, platform);
 }
