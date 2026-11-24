@@ -3,6 +3,37 @@
 All notable changes to Tuffcode are documented here. The format follows Keep a Changelog, and
 the project uses semantic versioning.
 
+## [0.1.1] - 2026-11-24
+
+### Shell and settings
+
+- Redesigned shell with a caption-safe titlebar and a connection popover that shows status,
+  port, and version.
+- Full-width settings with 12 sections: Appearance, Providers, Models, Agents and tools,
+  Permissions, Terminal, Brain, Updates, Diagnostics, Keybindings, Capabilities, and About.
+- Capabilities matrix in settings, comparing this build with the tools it replaces.
+- Tool settings persist, including enabled tools, the maximum tool iterations, and the shell.
+
+### Providers and sign-in
+
+- Provider gallery with one-click Claude and ChatGPT sign-in.
+- Preset API providers: Anthropic API, OpenAI, OpenRouter, DeepSeek, Kimi, Groq, Mistral, xAI,
+  Together, and Gemini.
+- Local providers for Ollama, LM Studio, and vLLM.
+- Native Anthropic Messages adapter.
+- Provider login runs in a PTY with live output.
+
+### Review and threads
+
+- Review comments save, list, and resolve from the diff panel.
+- Reopened threads show persisted user and assistant messages.
+- Diff gutters show real file line numbers, and the file tree collapses.
+
+### Fixes
+
+- Unwrapped Electron `MessageEvent` payloads on `parentPort`, which unblocked keyed provider
+  saves and graceful shutdown.
+
 ## [0.1.0] - 2026-11-24
 
 First release.
