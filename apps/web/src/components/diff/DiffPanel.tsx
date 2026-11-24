@@ -315,6 +315,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
             id="diff-comment-body"
             rows={2}
             autoFocus
+            aria-label="Review comment"
             value={draftBody}
             onChange={(event) => {
               setDraftBody(event.target.value);
@@ -358,7 +359,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
           />
         ) : null}
 
-        <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="pb-3">
+        <ScrollArea className="min-h-0 min-w-0 flex-1">
           {selectedFile ? (
             <div className="sticky top-0 z-10 flex h-9 items-center gap-2 border-b border-border bg-background px-3">
               <span
