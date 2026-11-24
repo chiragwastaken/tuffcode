@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const file = 'apps/desktop/package.json';
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            pkg.version = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      # electron-builder publishes the release and its assets (exe, latest.yml,
+      # blockmap) through the GitHub provider configured in
+      # apps/desktop/electron-builder.yml. Signing uses CSC_LINK when the
+      # repository secret exists and is skipped when it is empty.
+      - name: Build and publish installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: pnpm --filter @tuffcode/desktop run build:win:publish
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tuffcode-windows-${{ github.ref_name }}
+          path: |
+            apps/desktop/dist/Tuffcode-Setup-*.exe
+            apps/desktop/dist/latest.yml
+            apps/desktop/dist/*.blockmap
+          if-no-files-found: error
+
+      - name: Verify release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'

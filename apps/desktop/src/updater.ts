@@ -1,6 +1,10 @@
 import { app } from 'electron';
-import { autoUpdater } from 'electron-updater';
+// electron-updater is CommonJS; Node's ESM loader cannot see its named exports,
+// so import the module object and destructure it at runtime.
+import electronUpdater from 'electron-updater';
 import type { Logger } from '@tuffcode/shared';
+
+const { autoUpdater } = electronUpdater;
 
 export const UPDATER_ENV_FLAG = 'TUFFCODE_ENABLE_UPDATES';
 
