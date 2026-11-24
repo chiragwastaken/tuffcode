@@ -133,6 +133,20 @@ function isUnknownCouncilMethod(cause: unknown): boolean {
   );
 }
 
+const PERMANENT_FAILURE_CODES: Partial<Record<string, true>> = {
+  'bad-request': true,
+  'not-found': true,
+  'permission-denied': true,
+  unauthorized: true,
+};
+
+/** Errors that retrying the same goal id cannot fix; polling stops until the user asks. */
+export function isPermanentCouncilFailure(cause: unknown): boolean {
+  if (typeof cause !== 'object' || cause === null) return false;
+  const { code } = cause as { code?: unknown };
+  return typeof code === 'string' && PERMANENT_FAILURE_CODES[code] === true;
+}
+
 export function councilErrorMessage(cause: unknown): string {
   if (isUnknownCouncilMethod(cause)) {
     return 'This server does not run council goals yet. Everything else in the inspector still works.';

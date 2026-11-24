@@ -13,6 +13,7 @@ import {
   councilErrorMessage,
   countFinishedTasks,
   isGoalTerminal,
+  isPermanentCouncilFailure,
 } from './council-model';
 import { forgetCouncilGoal, rememberCouncilGoal, rememberedCouncilGoal } from './council-goals';
 
@@ -44,6 +45,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   const [status, setStatus] = useState<CouncilStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollingStopped, setPollingStopped] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   const [goalText, setGoalText] = useState('');
@@ -60,8 +62,12 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
       const next = await rpc.request('council.status', { goalId });
       setStatus(next);
       setError(null);
+      setPollingStopped(false);
     } catch (cause) {
       setError(councilErrorMessage(cause));
+      // A stale or forbidden goal id will never recover by polling; Retry or a
+      // new goal is the only way forward.
+      if (isPermanentCouncilFailure(cause)) setPollingStopped(true);
     } finally {
       setLoading(false);
     }
@@ -78,11 +84,11 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
 
   const goalState = status?.goal.state;
   useEffect(() => {
-    if (goalId === null) return;
+    if (goalId === null || pollingStopped) return;
     if (goalState !== undefined && isGoalTerminal(goalState)) return;
     const timer = setInterval(() => void load(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [goalId, goalState, load]);
+  }, [goalId, goalState, load, pollingStopped]);
 
   async function handleStart(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -124,8 +130,14 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     setGoalId(null);
     setStatus(null);
     setError(null);
+    setPollingStopped(false);
     setCancelError(null);
     setStartError(null);
+  }
+
+  function retry(): void {
+    setPollingStopped(false);
+    setReloadToken((token) => token + 1);
   }
 
   if (goalId === null) {
@@ -216,7 +228,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
                 {error}
               </p>
               <div className="flex gap-1.5">
-                <Button size="sm" variant="outline" onClick={() => setReloadToken((t) => t + 1)}>
+                <Button size="sm" variant="outline" onClick={retry}>
                   Retry
                 </Button>
                 <Button size="sm" variant="ghost" onClick={handleNewGoal}>
@@ -244,12 +256,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
               {countFinishedTasks(status.tasks)}/{status.tasks.length} tasks finished
             </span>
             <div className="ml-auto flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={loading}
-                onClick={() => setReloadToken((token) => token + 1)}
-              >
+              <Button size="sm" variant="ghost" disabled={loading} onClick={retry}>
                 <RefreshCw strokeWidth={1.75} />
                 Refresh
               </Button>

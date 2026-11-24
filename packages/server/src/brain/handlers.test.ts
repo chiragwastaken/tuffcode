@@ -128,6 +128,27 @@ describe('brain RPC handlers', () => {
     expect(moved.projectId).toBeNull();
   });
 
+  it('keeps the source quote when an upsert omits it', () => {
+    const learned = store.upsert({
+      kind: 'rule',
+      scope: 'global',
+      text: 'never use npm',
+      sourceQuote: 'the user said: never use npm',
+    });
+
+    const toggled = handlers['brain.upsert']({
+      id: learned.id,
+      kind: learned.kind,
+      scope: learned.scope,
+      text: learned.text,
+      importance: learned.importance,
+      active: false,
+    });
+
+    expect(toggled.active).toBe(false);
+    expect(toggled.sourceQuote).toBe('the user said: never use npm');
+  });
+
   it('previews exactly what the turn runner would inject', () => {
     store.upsert({ kind: 'rule', scope: 'global', text: 'never use npm', appliesTo: 'all' });
     store.upsert({ kind: 'rule', scope: 'global', text: 'plan first', appliesTo: 'plan' });

@@ -100,7 +100,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
        applies_to = excluded.applies_to,
        importance = excluded.importance,
        active = excluded.active,
-       source_quote = excluded.source_quote,
+       source_quote = CASE WHEN ? = 1 THEN brain_entries.source_quote ELSE excluded.source_quote END,
        updated_at = excluded.updated_at`,
   );
   const removeRow = db.prepare('DELETE FROM brain_entries WHERE id = ?');
@@ -159,6 +159,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
         now,
         now,
         input.projectId === undefined ? 1 : 0,
+        input.sourceQuote === undefined ? 1 : 0,
       );
       const entry = get(id);
       if (entry === undefined) throw new Error('brain entry insert did not persist');
