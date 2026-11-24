@@ -55,6 +55,7 @@ export function ProviderDetailFields({
         <FormField label="Label" htmlFor="provider-label" error={errors.label}>
           <Input
             id="provider-label"
+            data-testid="provider-label-input"
             value={draft.label}
             onChange={(event) => onUpdate('label', event.target.value)}
             placeholder={preset.label}
@@ -115,6 +116,7 @@ export function ProviderDetailFields({
           >
             <Input
               id="provider-base-url"
+              data-testid="provider-base-url-input"
               value={draft.baseUrl}
               onChange={(event) => onUpdate('baseUrl', event.target.value)}
               readOnly={!isFullForm && auth !== 'local'}
@@ -145,6 +147,7 @@ export function ProviderDetailFields({
               <div className="flex items-center gap-2">
                 <Input
                   id="provider-secret"
+                  data-testid="provider-secret-input"
                   type="password"
                   autoComplete="off"
                   value={draft.secret}
@@ -183,6 +186,7 @@ export function ProviderDetailFields({
               ) : (
                 <Input
                   id="provider-model"
+                  data-testid="provider-model-input"
                   value={draft.model}
                   onChange={(event) => onUpdate('model', event.target.value)}
                   placeholder="model-id"
