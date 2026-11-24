@@ -205,10 +205,28 @@ CREATE TABLE terminal_sessions (
 );
 `;
 
+const TURNS_SQL = `
+CREATE TABLE turns (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('running','needs-approval','complete','interrupted','failed')),
+  injected_ids TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX idx_turns_thread ON turns(thread_id, created_at);
+CREATE INDEX idx_turns_status ON turns(status);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
     name: 'init',
     sql: INIT_SQL,
+  },
+  {
+    version: 2,
+    name: 'turns',
+    sql: TURNS_SQL,
   },
 ];

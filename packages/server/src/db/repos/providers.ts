@@ -90,7 +90,7 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
     'INSERT INTO providers (id, kind, label, config, secret_ref, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const update = db.prepare(
-    'UPDATE providers SET kind = ?, label = ?, config = ?, enabled = ?, secret_ref = COALESCE(?, secret_ref), updated_at = ? WHERE id = ?',
+    'UPDATE providers SET kind = ?, label = ?, config = ?, enabled = ?, secret_ref = CASE WHEN ? = 1 THEN secret_ref ELSE ? END, updated_at = ? WHERE id = ?',
   );
   const removeRow = db.prepare('DELETE FROM providers WHERE id = ?');
   const selectModels = db.prepare(
@@ -146,6 +146,7 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
         input.label,
         JSON.stringify(input.config),
         input.enabled === false ? 0 : 1,
+        input.secretRef === undefined ? 1 : 0,
         input.secretRef ?? null,
         now,
         existing.id,

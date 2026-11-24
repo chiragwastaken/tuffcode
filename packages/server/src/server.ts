@@ -3,13 +3,25 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { dbPath as defaultDbPath, serverJsonPath } from '@tuffcode/shared';
+import { createLogger, dbPath as defaultDbPath, logsDir, serverJsonPath, type Logger } from '@tuffcode/shared';
+import {
+  createAdapterDeps,
+  createAdapterForProvider,
+  type AdapterFactoryOverrides,
+} from './adapters/factory.js';
+import { createResolveCommand } from './adapters/resolveCommand.js';
 import { ensureToken, verifyToken } from './auth.js';
+import { createCommandHandlers } from './commands/handlers.js';
 import { closeDb, migrate, openDb } from './db/index.js';
 import { createRepos, type Repos } from './db/repos/index.js';
+import { createWarningLog, type DiagnosticsInput } from './diagnostics.js';
 import { createEventBus, type EventBus } from './events.js';
 import { createHttpServer as createHttpSurface } from './http.js';
+import { createProvidersService, type ProvidersService } from './providers/service.js';
 import { createRpcHandlers, type RpcHandlers } from './rpc.js';
+import { createRunner, type Runner } from './runner/runner.js';
+import { createSecretBridge, type SecretPort, type Secrets } from './secrets/bridge.js';
+import { createSkillHandlers } from './skills/handlers.js';
 import { attachWebSocket, type AttachedWebSocket } from './ws.js';
 
 export interface ServerJson {
@@ -24,6 +36,12 @@ export interface StartServerOptions {
   dbFile?: string;
   port?: number;
   writeServerJson?: boolean;
+  /** Electron's utilityProcess message port for the safeStorage bridge. */
+  parentPort?: SecretPort;
+  /** Handler maps owned by other slices, merged into the registry. */
+  featureHandlers?: readonly RpcHandlers[];
+  adapterOverrides?: AdapterFactoryOverrides;
+  logger?: Logger;
 }
 
 export interface RunningServer {
@@ -35,26 +53,29 @@ export interface RunningServer {
   bus: EventBus;
   handlers: RpcHandlers;
   httpServer: Server;
+  runner: Runner;
+  providers: ProvidersService;
+  secrets: Secrets;
   close(): Promise<void>;
 }
 
 function listen(server: Server, port: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => {
-      server.off('error', reject);
-      resolve();
-    });
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  server.once('error', reject);
+  server.listen(port, '127.0.0.1', () => {
+    server.off('error', reject);
+    resolve();
   });
+  return promise;
 }
 
 function closeHttp(server: Server): Promise<void> {
   if (!server.listening) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
+  const { promise, resolve } = Promise.withResolvers<void>();
+  server.close(() => {
+    resolve();
   });
+  return promise;
 }
 
 /** Writes `~/.tuffcode/server.json` with mode 0600 for the Electron main process. */
@@ -66,8 +87,8 @@ export function writeServerJson(info: ServerJson): void {
 
 /**
  * Boots the Node-side core: database plus migrations, token, HTTP surface, WS
- * transport, RPC registry, and the `server.json` handshake. Binds 127.0.0.1 on an
- * OS-assigned port unless one is supplied.
+ * transport, provider registry, secret bridge, thread runner, and the RPC registry.
+ * Binds 127.0.0.1 on an OS-assigned port unless one is supplied.
  */
 export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
   const version = options.version ?? process.env.TUFFCODE_APP_VERSION ?? '0.0.0';
@@ -78,19 +99,73 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const bus = createEventBus();
   const token = ensureToken();
   const startedAt = Date.now();
+
+  const logger = options.logger ?? createLogger({ dir: logsDir(), channel: 'server' });
+  const adapterLogger = createLogger({ dir: logsDir(), channel: 'adapter' });
+  const secrets = createSecretBridge(options.parentPort);
+  const resolveCommand = createResolveCommand();
+  const warnings = createWarningLog();
+  bus.subscribe((event) => {
+    if (event.type === 'server.warning') warnings.push(event.payload.message);
+  });
+
+  const providers = createProvidersService({ repos, bus, secrets, resolveCommand });
+  const adapterDeps = createAdapterDeps({ logger: adapterLogger, resolveCommand });
+  const runner = createRunner({
+    repos,
+    bus,
+    logger,
+    secrets,
+    settings: () => repos.settings.get(),
+    createAdapter: (provider, secret) =>
+      createAdapterForProvider(provider, adapterDeps, secret, options.adapterOverrides ?? {}),
+  });
+  runner.recoverOrphanedRuns();
+
+  const diagnostics: DiagnosticsInput = {
+    version,
+    startedAt,
+    dbPath: file,
+    repos,
+    runner,
+    warnings: () => warnings.list(),
+    secretBridgeAvailable: secrets.available,
+  };
+
+  const commands: RpcHandlers = new Map([
+    ...createCommandHandlers({ repos, bus }),
+    ...createSkillHandlers({ repos, bus }),
+  ]);
+
   const httpServer = createHttpSurface({ version, startedAt });
-  const handlers = createRpcHandlers({ repos, bus, version, startedAt, dbPath: file });
+  const handlers = createRpcHandlers({
+    repos,
+    bus,
+    version,
+    startedAt,
+    dbPath: file,
+    runner,
+    providers,
+    brain: { repos },
+    commands,
+    diagnostics,
+    featureHandlers: options.featureHandlers ?? [],
+  });
   const ws: AttachedWebSocket = attachWebSocket(httpServer, { handlers, bus, verifyToken });
 
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    await runner.disposeAll();
+    secrets.dispose();
     await ws.close();
     httpServer.closeIdleConnections();
     httpServer.closeAllConnections();
     await closeHttp(httpServer);
     closeDb(db);
+    await adapterLogger.close().catch(() => undefined);
+    if (options.logger === undefined) await logger.close().catch(() => undefined);
   };
 
   try {
@@ -115,5 +190,18 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     }
   }
 
-  return { port, token, dbPath: file, db, repos, bus, handlers, httpServer, close };
+  return {
+    port,
+    token,
+    dbPath: file,
+    db,
+    repos,
+    bus,
+    handlers,
+    httpServer,
+    runner,
+    providers,
+    secrets,
+    close,
+  };
 }

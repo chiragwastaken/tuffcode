@@ -12,7 +12,10 @@ import {
   type ThreadEventRow,
 } from '@tuffcode/contracts';
 import type { z } from 'zod';
+import { createBrainRpcHandlers, type BrainHandlerDeps } from './brain/handlers.js';
 import type { Repos } from './db/repos/index.js';
+import type { DiagnosticsInput } from './diagnostics.js';
+import { createDiagnosticsHandlers } from './diagnostics.js';
 import { RpcError } from './errors.js';
 import type { EventBus } from './events.js';
 import {
@@ -25,6 +28,10 @@ import {
   revertCheckpoint,
 } from './git/index.js';
 import { addProject, listProjects, refreshProject, removeProject } from './projects.js';
+import { createProviderHandlers } from './providers/rpc.js';
+import type { ProvidersService } from './providers/service.js';
+import { createRunnerHandlers } from './runner/rpc.js';
+import type { Runner } from './runner/runner.js';
 import { createThread, deleteThread, getThread, listThreads, updateThread } from './threads.js';
 
 export interface RpcDeps {
@@ -33,6 +40,12 @@ export interface RpcDeps {
   version: string;
   startedAt: number;
   dbPath: string;
+  runner: Runner;
+  providers: ProvidersService;
+  brain: BrainHandlerDeps;
+  commands: RpcHandlers;
+  diagnostics: DiagnosticsInput;
+  featureHandlers: readonly RpcHandlers[];
 }
 
 export type RpcHandler = (params: unknown) => unknown | Promise<unknown>;
@@ -68,6 +81,16 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
     handlers.set(method, (params) => handler(params as RpcParams<M>));
   }
 
+  /** Feature maps merge here; a duplicate is a startup bug, never last-wins. */
+  function register(map: RpcHandlers): void {
+    for (const [method, handler] of map) {
+      if (handlers.has(method)) {
+        throw new Error(`duplicate RPC method registration: ${method}`);
+      }
+      handlers.set(method, handler);
+    }
+  }
+
   function emitThread(thread: Thread): void {
     deps.bus.emit({ kind: 'event', type: 'thread.updated', threadId: thread.id, payload: thread });
   }
@@ -100,6 +123,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
     return thread;
   });
   define('threads.delete', async ({ id, removeWorktree }) => {
+    await deps.runner.disposeThread(id);
     await deleteThread(deps.repos, id, removeWorktree ?? false);
     return {};
   });
@@ -143,6 +167,13 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
     emitThread(getThread(deps.repos, threadId));
     return result;
   });
+
+  register(createRunnerHandlers({ runner: deps.runner }));
+  register(createProviderHandlers({ providers: deps.providers }));
+  register(createBrainRpcHandlers(deps.brain));
+  register(deps.commands);
+  register(createDiagnosticsHandlers(deps.diagnostics));
+  for (const feature of deps.featureHandlers) register(feature);
 
   return handlers;
 }

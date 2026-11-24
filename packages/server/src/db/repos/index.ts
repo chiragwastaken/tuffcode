@@ -9,6 +9,7 @@ import { createProjectsRepo, type ProjectsRepo } from './projects.js';
 import { createProvidersRepo, type ProvidersRepo } from './providers.js';
 import { createSettingsRepo, type SettingsRepo } from './settings.js';
 import { createThreadsRepo, type ThreadsRepo } from './threads.js';
+import { createTurnsRepo, type TurnsRepo } from './turns.js';
 
 export interface Repos {
   projects: ProjectsRepo;
@@ -20,6 +21,7 @@ export interface Repos {
   providers: ProvidersRepo;
   brain: BrainRepo;
   council: CouncilRepo;
+  turns: TurnsRepo;
   settings: SettingsRepo;
 }
 
@@ -35,6 +37,7 @@ export function createRepos(db: DatabaseSync): Repos {
     providers: createProvidersRepo(db),
     brain: createBrainRepo(db),
     council: createCouncilRepo(db),
+    turns: createTurnsRepo(db),
     settings: createSettingsRepo(db),
   };
 }
@@ -61,5 +64,6 @@ export type {
 } from './providers.js';
 export type { SettingsRepo } from './settings.js';
 export type { CreateThreadInput, ThreadsRepo, UpdateThreadInput } from './threads.js';
+export type { CreateTurnInput, TurnRecord, TurnsRepo, TurnStatus } from './turns.js';
 export { toFtsQuery } from './brain.js';
 export { toProviderView } from './providers.js';

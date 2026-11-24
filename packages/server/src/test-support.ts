@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Project, ProviderView, Thread } from '@tuffcode/contracts';
+import type { Logger } from '@tuffcode/shared';
 import { migrate, openDb } from './db/index.js';
 import { createRepos, type Repos } from './db/repos/index.js';
 import { addProject } from './projects.js';
@@ -45,6 +46,20 @@ export function createTempEnv(): TempEnv {
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+/** A logger that writes nowhere; runner and service tests use it by default. */
+export function silentLogger(): Logger {
+  const logger: Logger = {
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    child: () => logger,
+    flush: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  };
+  return logger;
 }
 
 export interface TestContext {

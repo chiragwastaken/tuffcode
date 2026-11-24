@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { startServer } from './server.js';
+import type { SecretPort } from './secrets/bridge.js';
 
 export * from './db/index.js';
 export * from './db/repos/index.js';
@@ -13,18 +14,23 @@ export * from './rpc.js';
 export * from './projects.js';
 export * from './threads.js';
 export * from './git/index.js';
+export * from './adapters/factory.js';
+export * from './adapters/resolveCommand.js';
+export * from './brain/service.js';
+export * from './diagnostics.js';
+export * from './providers/config.js';
+export * from './providers/service.js';
+export * from './providers/rpc.js';
+export * from './runner/runner.js';
+export * from './runner/rpc.js';
+export * from './secrets/bridge.js';
 export * from './server.js';
-
-interface ParentPort {
-  postMessage(message: unknown): void;
-  on(event: 'message', listener: (message: unknown) => void): void;
-}
 
 /**
  * Electron's utilityProcess adds `parentPort` to the child process; Node's own types
  * do not declare it, so the value is checked at the boundary before use.
  */
-function getParentPort(): ParentPort | undefined {
+function getParentPort(): SecretPort | undefined {
   const electronProcess = process as unknown as { parentPort?: unknown };
   const candidate = electronProcess.parentPort;
   if (typeof candidate !== 'object' || candidate === null) return undefined;
@@ -32,7 +38,7 @@ function getParentPort(): ParentPort | undefined {
     return undefined;
   }
   if (!('on' in candidate) || typeof candidate.on !== 'function') return undefined;
-  return candidate as ParentPort;
+  return candidate as SecretPort;
 }
 
 function isShutdownMessage(message: unknown): boolean {
@@ -55,8 +61,8 @@ function isEntryPoint(): boolean {
 }
 
 async function main(): Promise<void> {
-  const running = await startServer();
   const parentPort = getParentPort();
+  const running = await startServer(parentPort === undefined ? {} : { parentPort });
   // Electron's MessagePort has no targetOrigin; the lint rule targets window.postMessage.
   // oxlint-disable-next-line unicorn/require-post-message-target-origin
   parentPort?.postMessage({ type: 'ready', port: running.port });
