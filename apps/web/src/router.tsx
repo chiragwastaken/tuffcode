@@ -3,7 +3,7 @@ import { EmptyState } from '@tuffcode/ui';
 import { useEffect } from 'react';
 import { AppShell } from './components/AppShell';
 import { EmptyWorkspace } from './components/EmptyWorkspace';
-import { ThreadPlaceholder } from './components/thread/ThreadPlaceholder';
+import { ThreadView } from './components/thread/ThreadView';
 import { useAppStore } from './store/app-store';
 
 function WorkspaceIndex() {
@@ -38,7 +38,7 @@ function WorkspaceIndex() {
   );
 }
 
-function ThreadView() {
+function ThreadRoute() {
   const { projectId, threadId } = threadRoute.useParams();
   const thread = useAppStore((state) => state.threads[threadId]);
   const projectName = useAppStore(
@@ -50,7 +50,7 @@ function ThreadView() {
     setActiveThread(threadId);
   }, [setActiveThread, threadId]);
 
-  return <ThreadPlaceholder threadId={threadId} thread={thread} projectName={projectName} />;
+  return <ThreadView threadId={threadId} thread={thread} projectName={projectName} />;
 }
 
 function SettingsView() {
@@ -96,7 +96,7 @@ const indexRoute = createRoute({
 const threadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/project/$projectId/thread/$threadId',
-  component: ThreadView,
+  component: ThreadRoute,
 });
 
 const settingsRoute = createRoute({

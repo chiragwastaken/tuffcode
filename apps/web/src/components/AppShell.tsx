@@ -79,7 +79,20 @@ export function AppShell() {
           aria-label="Inspector"
           data-slot="right-panel"
           className="hidden w-[var(--right-panel-width)] max-w-[var(--right-panel-max-width)] shrink-0 border-l border-border xl:block"
-        />
+        >
+          <div className="flex h-full flex-col">
+            <div className="flex h-[var(--row-height)] shrink-0 items-center border-b border-border px-3">
+              <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+                Inspector
+              </span>
+            </div>
+            <div className="flex flex-1 items-center justify-center p-4">
+              <p className="max-w-56 text-center text-xs leading-5 text-muted-foreground">
+                Diff, terminal, and brain panels arrive in later slices.
+              </p>
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   );
