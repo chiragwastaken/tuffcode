@@ -569,12 +569,16 @@ describe('council caps', () => {
     }
   });
 
-  it('never runs more than eight workers at once', async () => {
+  // Nine tasks is the smallest plan that must queue behind the eight-worker cap.
+  // Workers block on a manual gate, so the only wall-clock risk is CI starvation
+  // (one vitest worker per file on a shared runner); the timeout is headroom, not
+  // a wait. The gate opens only after eight workers are observed running.
+  it('never runs more than eight workers at once', { timeout: 15_000 }, async () => {
     const harness = createHarness();
     const gate = makeGate();
     harness.ports.handler = async (input, title) => {
       if (title.startsWith('Plan:')) {
-        const tasks = Array.from({ length: 10 }, (_, index) =>
+        const tasks = Array.from({ length: 9 }, (_, index) =>
           planTask(`Task ${index}`, [`src/${index}.ts`]),
         );
         return result(input, planJson(tasks));
