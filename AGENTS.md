@@ -59,33 +59,20 @@ Run the narrowest check that covers your change, then `pnpm check` before a PR.
 - Preserve existing line endings. New files are LF unless the target tree demands CRLF.
 - `os.homedir()` reads `USERPROFILE` on Windows, not `HOME`. Tests must set both.
 
-## Issues
+## Issues, pull requests, releases
 
-Every issue must be workable without a conversation: Summary, Context, Scope (in and out),
-Acceptance criteria (checkable), and Verification (commands or steps). Bugs add steps to
-reproduce, expected, actual with evidence, and version. Performance issues add a measurement
-table with measured value, budget, and status. Features add the problem, the simplest solution,
-and alternatives. Title prefix `bug:`, `feat:`, `perf:`, `chore:`; one `area:*` and one
-`priority:*` label. Use `.github/ISSUE_TEMPLATE/`.
-
-## Pull requests
-
-- Branch from `main` as `feat/<slice>` or `fix/<slice>`. One logical change per PR.
-- Link the issue with `Closes #N` and fill the PR template: summary, changes, evidence with
-  command tails, risk, audit path.
-- A reviewer other than the author reads the diff. Squash merge. Never force push `main`.
+- Issues must be workable without a conversation: Summary, Context, Scope, Acceptance criteria,
+  Verification. Use `.github/ISSUE_TEMPLATE/`. Title prefix `bug:`, `feat:`, `perf:`, `chore:`;
+  one `area:*` and one `priority:*` label.
+- PRs link the issue with `Closes #N`, fill the PR template (summary, changes, evidence with
+  command tails, risk, audit path), and keep one logical change. Reviewer separate from author.
+  Squash merge. Never force push `main`.
+- CI green: `pnpm check` and `pnpm test`. If Actions does not fire, record local `pnpm check`,
+  `pnpm test` and `pnpm test:e2e` tails in the PR and treat the post-merge main run as the check.
+- Releases: dated CHANGELOG section with Known issues, tag from green main, workflow uploads exe,
+  `latest.yml` and blockmap, then verify from GitHub (install, `/health` version, uninstall).
 - Never commit local material: `Chief/`, `Noticing/`, `references/`, `others/`, `decisions.md`,
   `PRD.md`, `spec.md`, `spec-ui.md`, `plan.md`, `WORKFLOW.md`, `WHAT-HAPPENED-TILL-NOW.md`,
   `.tuffcode-ops/`, `.env*`.
-- CI must be green: `pnpm check` and `pnpm test`. If Actions does not fire, record local
-  `pnpm check`, `pnpm test` and `pnpm test:e2e` tails in the PR and treat the post-merge main run
-  as the check.
 
-## Releases
-
-- `CHANGELOG.md` has a dated section for the version, grouped by area, with Known issues.
-- Tag `vX.Y.Z` from green `main`. The workflow uploads the exe, `latest.yml`, and blockmap and
-  fails when an asset is missing.
-- Verify from GitHub: download, silent install, launch with a fresh `TUFFCODE_HOME` and
-  `LOCALAPPDATA`, confirm `/health` reports the tagged version, uninstall, confirm no processes
-  or install directory remain.
+Full detail: [docs/contributing.md](./docs/contributing.md).
