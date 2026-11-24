@@ -125,9 +125,10 @@ describe('TerminalService', () => {
     expect(env.Tuffcode_Token).toBeUndefined();
   });
 
-  it('rejects input, resize, and close for an unknown terminal', () => {
+  it('rejects input, resize, and close for an unknown terminal', async () => {
     expect(errorCode(() => service.input('term_missing', 'ls\r'))).toBe('not-found');
     expect(errorCode(() => service.resize('term_missing', 100, 40))).toBe('not-found');
+    await expect(service.close('term_missing')).rejects.toMatchObject({ code: 'not-found' });
     expect(service.get('term_missing')).toBeUndefined();
   });
 
@@ -143,6 +144,26 @@ describe('TerminalService', () => {
     expect(service.get(terminalId)).toBeUndefined();
     expect(service.size).toBe(0);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'surfaces an asynchronous spawn failure as a terminal notice',
+    async () => {
+      const worktree = join(ctx.env.root, 'wt-bad-shell');
+      mkdirSync(worktree, { recursive: true });
+      addThread(ctx, 'thr_bad_shell', worktree);
+      const fake = join(ctx.env.root, 'not-a-shell.txt');
+      writeFileSync(fake, 'not executable');
+      ctx.repos.settings.patch({ shell: fake });
+
+      const { terminalId } = service.open('thr_bad_shell', 80, 24);
+      await waitForToken('shell exited before producing output');
+      const notice = events.find((event) => event.data.includes('shell exited'));
+      expect(notice?.terminalId).toBe(terminalId);
+      expect(notice?.threadId).toBe('thr_bad_shell');
+      expect(service.get(terminalId)).toBeUndefined();
+    },
+    ROUND_TRIP_TIMEOUT_MS,
+  );
 
   async function roundTrip(threadId: string, expectedShell: string): Promise<void> {
     const worktree = join(ctx.env.root, `wt-${threadId}`);

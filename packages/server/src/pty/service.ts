@@ -32,9 +32,13 @@ export interface TerminalServiceOptions {
 
 interface Session extends TerminalSessionInfo {
   pty: IPty;
+  exited: Promise<void>;
+  closing: boolean;
+  producedOutput: boolean;
 }
 
-const TASKKILL_TIMEOUT_MS = 5_000;
+const KILL_TIMEOUT_MS = 2_000;
+const SHELL_EXIT_NOTICE = '\r\n[tuffcode] shell exited before producing output\r\n';
 
 /**
  * Environment for a pty: the server's own environment with every spelling of the
@@ -64,27 +68,48 @@ function worktreeCwd(worktreePath: string): string {
   return cwd;
 }
 
-/**
- * Kills the shell, then sweeps the whole process tree with `taskkill /T /F` on
- * Windows. A bare pty kill leaves grandchildren (build watchers, dev servers) alive.
- */
-function killSession(session: Session): Promise<void> {
-  try {
-    session.pty.kill();
-  } catch {
-    // Already exited; taskkill below still covers surviving children.
-  }
-  if (process.platform !== 'win32') return Promise.resolve();
+function runTaskkill(pid: number): Promise<void> {
   return new Promise<void>((resolve) => {
     execFile(
       'taskkill',
-      ['/T', '/F', '/PID', String(session.pty.pid)],
-      { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS },
+      ['/T', '/F', '/PID', String(pid)],
+      { windowsHide: true, timeout: KILL_TIMEOUT_MS },
       () => {
         resolve();
       },
     );
   });
+}
+
+/** Resolves when the pty reports its exit, bounded so shutdown cannot hang. */
+function waitForExit(session: Session): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, KILL_TIMEOUT_MS);
+    timer.unref();
+    void session.exited.then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Sweeps the process tree with `taskkill /T /F` while the shell pid still exists,
+ * then closes the pty. Killing the pty first would destroy the tree root before
+ * taskkill could find it, so grandchildren (watchers, dev servers) would survive.
+ * node-pty defers `kill` until the shell is ready, so the wait for the real exit
+ * keeps `close` honest even when the tab closes before the first prompt.
+ */
+async function killSession(session: Session): Promise<void> {
+  session.closing = true;
+  const pid = session.pty.pid;
+  if (process.platform === 'win32' && pid > 0) await runTaskkill(pid);
+  try {
+    session.pty.kill();
+  } catch {
+    // Already exited.
+  }
+  await waitForExit(session);
 }
 
 /**
@@ -133,11 +158,32 @@ export class TerminalService {
       env: terminalEnv(),
       useConptyDll: true,
     });
-    this.#sessions.set(terminalId, { terminalId, threadId, cwd, shell, pty });
+    let resolveExit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    const session: Session = {
+      terminalId,
+      threadId,
+      cwd,
+      shell,
+      pty,
+      exited,
+      closing: false,
+      producedOutput: false,
+    };
+    this.#sessions.set(terminalId, session);
     pty.onData((data) => {
+      session.producedOutput = true;
       this.#onData({ terminalId, threadId, data });
     });
     pty.onExit(() => {
+      // A spawn failure surfaces only here; tell the renderer instead of leaving a
+      // blank tab with no diagnostic.
+      if (!session.producedOutput && !session.closing) {
+        this.#onData({ terminalId, threadId, data: SHELL_EXIT_NOTICE });
+      }
+      resolveExit();
       this.#sessions.delete(terminalId);
     });
     return { terminalId };
@@ -151,7 +197,7 @@ export class TerminalService {
     this.#session(terminalId).pty.resize(cols, rows);
   }
 
-  /** Kills the pty and its process tree, then forgets the session. */
+  /** Forgets the session, then kills the pty and its process tree. */
   async close(terminalId: string): Promise<void> {
     const session = this.#session(terminalId);
     this.#sessions.delete(terminalId);
