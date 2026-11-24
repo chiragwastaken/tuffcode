@@ -7,8 +7,8 @@ import {
   isGoalTerminal,
   isPermanentCouncilFailure,
 } from '../inspector/council-model';
-import { rememberCouncilGoal, rememberedCouncilGoal } from '../inspector/council-goals';
 import { autonomyFromSettings } from './council-goal';
+import { goalIdFromLatest } from './council-goal-source';
 
 export type CouncilStatus = RpcResult<'council.status'>;
 
@@ -34,20 +34,33 @@ export function useCouncilGoal(threadId: string | undefined): UseCouncilGoalResu
   const rpc = useRpc();
   const autonomy = autonomyFromSettings(useAppStore((state) => state.settings));
 
-  const [goalId, setGoalId] = useState<string | null>(() =>
-    threadId === undefined ? null : rememberedCouncilGoal(threadId),
-  );
+  const [goalId, setGoalId] = useState<string | null>(null);
   const [status, setStatus] = useState<CouncilStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollingStopped, setPollingStopped] = useState(false);
 
+  // Reattach to the thread's newest goal after a reload instead of trusting
+  // module memory that dies with the window.
   useEffect(() => {
-    setGoalId(threadId === undefined ? null : rememberedCouncilGoal(threadId));
+    setGoalId(null);
     setStatus(null);
     setError(null);
     setPollingStopped(false);
-  }, [threadId]);
+    if (threadId === undefined) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const latest = await rpc.request('council.latest', { threadId });
+        if (!cancelled) setGoalId(goalIdFromLatest(latest, null));
+      } catch {
+        // No remembered goal is a normal state; the composer can start one.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rpc, threadId]);
 
   const load = useCallback(async (): Promise<void> => {
     if (goalId === null) return;
@@ -94,7 +107,6 @@ export function useCouncilGoal(threadId: string | undefined): UseCouncilGoalResu
           goal: text,
           autonomy,
         });
-        rememberCouncilGoal(threadId, started.goalId);
         setStatus(null);
         setPollingStopped(false);
         setGoalId(started.goalId);

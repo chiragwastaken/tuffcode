@@ -24,5 +24,8 @@ export function createCouncilHandlers(deps: CouncilHandlerDeps): RpcHandlers {
   handlers.set('council.status', (params) =>
     deps.council.status((params as RpcParams<'council.status'>).goalId),
   );
+  handlers.set('council.latest', (params) =>
+    deps.council.latest((params as RpcParams<'council.latest'>).threadId),
+  );
   return handlers;
 }
