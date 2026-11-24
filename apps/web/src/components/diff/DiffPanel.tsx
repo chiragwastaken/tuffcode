@@ -1,9 +1,4 @@
-import type {
-  Checkpoint,
-  DiffFile,
-  ReviewComment,
-  ReviewCommentSide,
-} from '@tuffcode/contracts';
+import type { Checkpoint, DiffFile, ReviewComment, ReviewCommentSide } from '@tuffcode/contracts';
 import {
   Button,
   DiffViewer,
@@ -140,9 +135,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
       .catch((caught: unknown) => {
         if (cancelled) return;
         setComments([]);
-        setCommentsError(
-          caught instanceof Error ? caught.message : 'Could not load the comments.',
-        );
+        setCommentsError(caught instanceof Error ? caught.message : 'Could not load the comments.');
       });
 
     return () => {
@@ -230,9 +223,16 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
   ];
 
   return (
-    <section aria-label="Diff" className="flex h-full min-h-0 flex-col bg-background text-foreground">
+    <section
+      aria-label="Diff"
+      className="flex h-full min-h-0 flex-col bg-background text-foreground"
+    >
       <header className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border px-3">
-        <FileDiff aria-hidden="true" strokeWidth={1.75} className="size-3.5 text-muted-foreground" />
+        <FileDiff
+          aria-hidden="true"
+          strokeWidth={1.75}
+          className="size-3.5 text-muted-foreground"
+        />
         <span className="text-xs font-medium">Changes</span>
         {files.length > 0 ? (
           <span className="text-2xs tabular-nums text-muted-foreground">
@@ -353,7 +353,10 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
         <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="pb-3">
           {selectedFile ? (
             <div className="sticky top-0 z-10 flex h-9 items-center gap-2 border-b border-border bg-background px-3">
-              <span className="truncate font-mono text-xs text-foreground" title={selectedFile.path}>
+              <span
+                className="truncate font-mono text-xs text-foreground"
+                title={selectedFile.path}
+              >
                 {selectedFile.path}
               </span>
               {selectedFile.oldPath ? (
@@ -423,9 +426,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
       >
         <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-2xs text-muted-foreground">
           <MessageSquarePlus aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
-          <span>
-            {comments.length === 1 ? '1 comment' : `${comments.length} comments`}
-          </span>
+          <span>{comments.length === 1 ? '1 comment' : `${comments.length} comments`}</span>
           {commentsError ? (
             <span role="alert" className="ml-auto truncate text-error" title={commentsError}>
               {commentsError}
