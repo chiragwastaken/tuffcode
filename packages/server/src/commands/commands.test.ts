@@ -63,6 +63,7 @@ describe('slash commands', () => {
       args: 'src/app.ts',
     });
     expect(parseCommand('/review', ['review'])).toEqual({ name: 'review', args: '' });
+    expect(parseCommand('/model opus', ['review'])).toEqual({ name: 'model', args: 'opus' });
   });
 
   it('discovers project commands and skips invalid files with warnings', () => {
