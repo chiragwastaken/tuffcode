@@ -4,19 +4,47 @@ import {
   buildProviderPayload,
   headersToText,
   parseHeadersText,
+  providerDraftFromPreset,
   providerDraftFromView,
   validateProviderDraft,
   type ProviderDraft,
 } from './provider-form';
+import { presetById } from './provider-presets';
 
 function draft(overrides: Partial<ProviderDraft> = {}): ProviderDraft {
   return {
     kind: 'openai-compatible',
-    label: 'Local model',
-    baseUrl: 'http://127.0.0.1:1234/v1',
-    model: 'qwen3-coder',
+    presetId: 'openai',
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-5.1',
+    models: [
+      { id: 'gpt-5.1', label: 'gpt-5.1' },
+      { id: 'gpt-5', label: 'gpt-5' },
+    ],
+    headers: '',
+    secret: 'sk-test',
+    configDir: '',
+    command: '',
+    ...overrides,
+  };
+}
+
+function subscriptionDraft(overrides: Partial<ProviderDraft> = {}): ProviderDraft {
+  return {
+    kind: 'claude',
+    presetId: 'claude',
+    label: 'Claude',
+    baseUrl: '',
+    model: '',
+    models: [
+      { id: 'claude-opus-4-5', label: 'claude-opus-4-5' },
+      { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5' },
+    ],
     headers: '',
     secret: '',
+    configDir: '',
+    command: '',
     ...overrides,
   };
 }
@@ -26,10 +54,15 @@ const providerView: ProviderView = {
   kind: 'openai-compatible',
   label: 'Local model',
   config: {
+    preset: 'lmstudio',
     baseUrl: 'http://127.0.0.1:1234/v1',
     model: 'qwen3-coder',
+    models: [
+      { id: 'qwen3-coder', label: 'qwen3-coder', isDefault: true },
+      { id: 'gpt-oss-20b', label: 'gpt-oss-20b' },
+    ],
     headers: { 'X-Org': 'team' },
-    family: 'openai',
+    family: 'local',
   },
   enabled: true,
   hasSecret: true,
@@ -38,19 +71,27 @@ const providerView: ProviderView = {
 };
 
 describe('validateProviderDraft', () => {
-  it('accepts a complete OpenAI-compatible provider', () => {
+  it('accepts a complete API provider', () => {
     expect(validateProviderDraft(draft())).toEqual({});
   });
 
-  it('requires a label and a base URL for OpenAI-compatible providers', () => {
-    expect(validateProviderDraft(draft({ label: '   ', baseUrl: '' }))).toEqual({
+  it('requires a label, base URL, model, and key for a new API provider', () => {
+    expect(
+      validateProviderDraft(
+        draft({ label: '   ', baseUrl: '', model: '', secret: '', presetId: 'openai' }),
+      ),
+    ).toEqual({
       label: 'Label is required.',
-      baseUrl: 'Base URL is required for an OpenAI-compatible provider.',
+      baseUrl: 'Base URL is required.',
+      model: 'Choose or enter a model.',
+      secret: 'API key is required.',
     });
   });
 
-  it('lets CLI providers omit the base URL', () => {
-    expect(validateProviderDraft(draft({ kind: 'claude', baseUrl: '' }))).toEqual({});
+  it('does not require a key when editing a provider that already has one', () => {
+    expect(
+      validateProviderDraft(draft({ secret: '' }), { isNew: false, hasExistingSecret: true }),
+    ).toEqual({});
   });
 
   it('rejects malformed and non-http base URLs', () => {
@@ -60,6 +101,40 @@ describe('validateProviderDraft', () => {
     expect(validateProviderDraft(draft({ baseUrl: 'ftp://example.com' }))).toEqual({
       baseUrl: 'Base URL must use http or https.',
     });
+  });
+
+  it('lets subscription providers omit the base URL, key, and model', () => {
+    expect(validateProviderDraft(subscriptionDraft())).toEqual({});
+    expect(validateProviderDraft(subscriptionDraft({ configDir: 'C:\\claude-config' }))).toEqual(
+      {},
+    );
+  });
+
+  it('rejects a relative subscription config directory', () => {
+    expect(validateProviderDraft(subscriptionDraft({ configDir: 'relative/path' }))).toEqual({
+      configDir: 'Enter an absolute path.',
+    });
+  });
+
+  it('requires a base URL and model for local providers but no key', () => {
+    const local = subscriptionDraft({
+      kind: 'openai-compatible',
+      presetId: 'ollama',
+      label: 'Ollama',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: '',
+      secret: '',
+    });
+    expect(validateProviderDraft(local)).toEqual({ model: 'Choose or enter a model.' });
+  });
+
+  it('requires a command for a custom ACP agent but not for OpenCode', () => {
+    expect(
+      validateProviderDraft(subscriptionDraft({ kind: 'acp', presetId: 'acp', label: 'ACP' })),
+    ).toEqual({ command: 'Command is required for an ACP agent.' });
+    expect(
+      validateProviderDraft(subscriptionDraft({ kind: 'opencode', presetId: 'opencode' })),
+    ).toEqual({});
   });
 
   it('rejects headers that are not a JSON object of strings', () => {
@@ -75,6 +150,10 @@ describe('validateProviderDraft', () => {
     expect(validateProviderDraft(draft({ headers: '{"Bad Header": "x"}' }))).toEqual({
       headers: 'Invalid header name: Bad Header',
     });
+  });
+
+  it('ignores stale headers on subscription drafts', () => {
+    expect(validateProviderDraft(subscriptionDraft({ headers: 'nope' }))).toEqual({});
   });
 
   it('reports an unknown provider kind', () => {
@@ -100,18 +179,21 @@ describe('buildProviderPayload', () => {
   it('trims values and includes a provided secret', () => {
     const payload = buildProviderPayload(
       draft({
-        label: '  Local  ',
-        baseUrl: ' http://127.0.0.1:1234/v1 ',
-        model: ' qwen ',
-        secret: ' sk-local ',
+        label: '  OpenAI  ',
+        baseUrl: ' https://api.openai.com/v1 ',
+        model: ' gpt-5 ',
+        secret: ' sk-openai ',
       }),
     );
 
-    expect(payload).toEqual({
-      kind: 'openai-compatible',
-      label: 'Local',
-      config: { baseUrl: 'http://127.0.0.1:1234/v1', model: 'qwen' },
-      secret: 'sk-local',
+    expect(payload.kind).toBe('openai-compatible');
+    expect(payload.label).toBe('OpenAI');
+    expect(payload.secret).toBe('sk-openai');
+    expect(payload.config).toMatchObject({
+      preset: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-5',
+      family: 'openai',
     });
     expect(methods['providers.upsert'].params.safeParse(payload).success).toBe(true);
   });
@@ -119,16 +201,52 @@ describe('buildProviderPayload', () => {
   it('omits the secret when the write-only field is blank', () => {
     const payload = buildProviderPayload(draft({ secret: '   ' }), {
       id: 'prov-1',
-      existingConfig: { family: 'openai' },
+      existingConfig: { family: 'openai', maxTokens: 4096 },
     });
 
     expect(payload).not.toHaveProperty('secret');
     expect(payload.id).toBe('prov-1');
-    expect(payload.config).toEqual({
-      family: 'openai',
-      baseUrl: 'http://127.0.0.1:1234/v1',
-      model: 'qwen3-coder',
-    });
+    expect(payload.config).toMatchObject({ maxTokens: 4096, preset: 'openai' });
+  });
+
+  it('never sends a base URL, headers, or secret for a subscription', () => {
+    const payload = buildProviderPayload(
+      subscriptionDraft({
+        baseUrl: 'https://api.anthropic.com/v1',
+        headers: '{"Authorization":"Bearer leaked"}',
+        secret: 'sk-should-not-leak',
+      }),
+    );
+
+    expect(payload).not.toHaveProperty('secret');
+    expect(payload.config).not.toHaveProperty('baseUrl');
+    expect(payload.config).not.toHaveProperty('headers');
+    expect(payload.config.preset).toBe('claude');
+    expect(methods['providers.upsert'].params.safeParse(payload).success).toBe(true);
+  });
+
+  it('seeds the subscription model list and stores an advanced override', () => {
+    const payload = buildProviderPayload(
+      subscriptionDraft({ model: 'claude-sonnet-4-5', configDir: 'C:\\claude-config' }),
+    );
+
+    expect(payload.config.model).toBe('claude-sonnet-4-5');
+    expect(payload.config.configDir).toBe('C:\\claude-config');
+    expect(payload.config.models).toEqual([
+      { id: 'claude-opus-4-5', label: 'claude-opus-4-5', contextWindow: null, isDefault: false },
+      {
+        id: 'claude-sonnet-4-5',
+        label: 'claude-sonnet-4-5',
+        contextWindow: null,
+        isDefault: true,
+      },
+    ]);
+  });
+
+  it('uses the preset default model for seeded subscription models', () => {
+    const payload = buildProviderPayload(subscriptionDraft());
+    const models = payload.config.models as { id: string; isDefault: boolean }[];
+    expect(models.find((model) => model.isDefault)?.id).toBe('claude-opus-4-5');
   });
 
   it('preserves unrelated config keys and removes cleared fields', () => {
@@ -140,11 +258,15 @@ describe('buildProviderPayload', () => {
           model: 'old-model',
           headers: { 'X-Old': 'yes' },
           family: 'openai',
+          maxTokens: 8192,
         },
+        preset: presetById('openai'),
       },
     );
 
-    expect(payload.config).toEqual({ family: 'openai' });
+    expect(payload.config).toMatchObject({ maxTokens: 8192 });
+    expect(payload.config).not.toHaveProperty('headers');
+    expect(payload.config.model).toBeUndefined();
   });
 
   it('writes parsed headers into the config', () => {
@@ -158,6 +280,49 @@ describe('buildProviderPayload', () => {
       'Headers must be a JSON object.',
     );
   });
+
+  it('adds a typed custom model to the seeded model list', () => {
+    const payload = buildProviderPayload(
+      draft({ model: 'my-model', models: [{ id: 'gpt-5.1', label: 'gpt-5.1' }] }),
+    );
+    const models = payload.config.models as { id: string; isDefault: boolean }[];
+
+    expect(models.map((model) => model.id)).toEqual(['gpt-5.1', 'my-model']);
+    expect(models.find((model) => model.isDefault)?.id).toBe('my-model');
+  });
+
+  it('adds the ACP subcommand for an OpenCode command override', () => {
+    const payload = buildProviderPayload(
+      subscriptionDraft({
+        kind: 'opencode',
+        presetId: 'opencode',
+        label: 'OpenCode',
+        command: 'opencode',
+      }),
+    );
+
+    expect(payload.config).toMatchObject({
+      preset: 'opencode',
+      command: 'opencode',
+      args: ['acp'],
+    });
+  });
+
+  it('never stores a secret for a local endpoint', () => {
+    const payload = buildProviderPayload(
+      draft({
+        kind: 'openai-compatible',
+        presetId: 'ollama',
+        label: 'Ollama',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'qwen3-coder',
+        secret: 'unused',
+      }),
+    );
+
+    expect(payload).not.toHaveProperty('secret');
+    expect(payload.config.family).toBe('local');
+  });
 });
 
 describe('providerDraftFromView', () => {
@@ -166,22 +331,33 @@ describe('providerDraftFromView', () => {
 
     expect(result).toEqual({
       kind: 'openai-compatible',
+      presetId: 'lmstudio',
       label: 'Local model',
       baseUrl: 'http://127.0.0.1:1234/v1',
       model: 'qwen3-coder',
+      models: [
+        { id: 'qwen3-coder', label: 'qwen3-coder' },
+        { id: 'gpt-oss-20b', label: 'gpt-oss-20b' },
+      ],
       headers: '{\n  "X-Org": "team"\n}',
       secret: '',
+      configDir: '',
+      command: '',
     });
   });
 
-  it('returns an empty draft for a new provider', () => {
+  it('returns a blank draft for a new provider', () => {
     expect(providerDraftFromView(null)).toEqual({
       kind: 'claude',
+      presetId: 'claude',
       label: '',
       baseUrl: '',
       model: '',
+      models: [],
       headers: '',
       secret: '',
+      configDir: '',
+      command: '',
     });
   });
 
@@ -189,5 +365,27 @@ describe('providerDraftFromView', () => {
     expect(headersToText({ 'X-Org': 'team' })).toBe('{\n  "X-Org": "team"\n}');
     expect(headersToText(['nope'])).toBe('');
     expect(headersToText(undefined)).toBe('');
+  });
+});
+
+describe('providerDraftFromPreset', () => {
+  it('prefills the endpoint and model list from the catalog', () => {
+    const preset = presetById('openrouter')!;
+    const result = providerDraftFromPreset(preset);
+
+    expect(result.kind).toBe('openai-compatible');
+    expect(result.presetId).toBe('openrouter');
+    expect(result.label).toBe('OpenRouter');
+    expect(result.baseUrl).toBe('https://openrouter.ai/api/v1');
+    expect(result.model).toBe('openai/gpt-5.1');
+    expect(result.models.map((model) => model.id)).toContain('deepseek/deepseek-chat');
+    expect(result.secret).toBe('');
+  });
+
+  it('leaves subscription endpoints blank', () => {
+    const result = providerDraftFromPreset(presetById('claude')!);
+    expect(result.baseUrl).toBe('');
+    expect(result.secret).toBe('');
+    expect(result.kind).toBe('claude');
   });
 });
