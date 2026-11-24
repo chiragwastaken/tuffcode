@@ -1,0 +1,400 @@
+import type { AdapterDeps, AdapterEvent, ApprovalChoice, TurnContext } from '@tuffcode/contracts';
+import { TOOL_NAMES, type ToolName } from '@tuffcode/prompt';
+import { newId } from '@tuffcode/shared';
+import {
+  AnthropicRequestError,
+  type AnthropicContentBlock,
+  type AnthropicMessage,
+  type AnthropicToolResultBlock,
+  type AnthropicToolUseBlock,
+  type MessagesStreamer,
+  streamAnthropicSse,
+} from './client.js';
+import {
+  classifyTool,
+  executeTool,
+  type ToolExecResult,
+  type ToolSessionState,
+} from '../openai/tools.js';
+
+/** Mirrors the `maxToolIterations` setting default. */
+export const DEFAULT_MAX_TOOL_ITERATIONS = 40;
+const LF = String.fromCharCode(10);
+
+export interface RunTurnOptions {
+  ctx: TurnContext;
+  client: MessagesStreamer;
+  messages: AnthropicMessage[];
+  state: ToolSessionState;
+  deps: AdapterDeps;
+  signal: AbortSignal;
+  maxTokens: number;
+  requestApproval: (approvalId: string) => Promise<ApprovalChoice>;
+  maxIterations?: number;
+}
+
+interface ToolUseAccumulator {
+  id: string;
+  name: string;
+  json: string;
+}
+
+function isToolName(name: string): name is ToolName {
+  return (TOOL_NAMES as readonly string[]).includes(name);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'))
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function systemPrompt(ctx: TurnContext): string {
+  return [ctx.systemPrompt.trim(), ctx.brainSlice.trim()]
+    .filter((part) => part.length > 0)
+    .join(LF + LF);
+}
+
+/**
+ * Maps an Anthropic `stop_reason` to the turn outcome. A refusal is the only
+ * stop that means the model declined to answer; truncation and paused turns
+ * still completed from the adapter's point of view.
+ */
+export function mapStopReason(stopReason: string | null): 'complete' | 'interrupted' | 'error' {
+  return stopReason === 'refusal' ? 'error' : 'complete';
+}
+
+function parseToolArguments(json: string): {
+  args: Record<string, unknown> | null;
+  parseError: string | null;
+} {
+  if (json.length === 0) return { args: {}, parseError: null };
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return { args: parsed as Record<string, unknown>, parseError: null };
+    }
+    return { args: null, parseError: 'tool arguments must be a JSON object' };
+  } catch (error) {
+    return { args: null, parseError: 'invalid tool arguments: ' + errorMessage(error) };
+  }
+}
+
+export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEvent> {
+  const { ctx, client, messages, state, deps, signal } = options;
+  const turnId = ctx.turnId;
+  const maxIterations = options.maxIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+  const system = systemPrompt(ctx);
+  let reason: 'complete' | 'interrupted' | 'error' = 'complete';
+  let completed = false;
+
+  try {
+    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+      if (signal.aborted) {
+        reason = 'interrupted';
+        break;
+      }
+
+      let stream: ReadableStream<Uint8Array>;
+      try {
+        stream = await client.stream(
+          {
+            model: ctx.model,
+            messages,
+            max_tokens: options.maxTokens,
+            ...(system.length > 0 ? { system } : {}),
+          },
+          signal,
+        );
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) {
+          reason = 'interrupted';
+          break;
+        }
+        const retryable = error instanceof AnthropicRequestError ? error.retryable : true;
+        yield { type: 'error', message: 'anthropic: ' + errorMessage(error), retryable };
+        reason = 'error';
+        break;
+      }
+
+      const textParts: string[] = [];
+      const calls = new Map<number, ToolUseAccumulator>();
+      let stopReason: string | null = null;
+      let inputTokens: number | undefined;
+      let outputTokens: number | undefined;
+      let streamError: { message: string; retryable: boolean } | null = null;
+
+      try {
+        for await (const event of streamAnthropicSse(stream, {
+          signal,
+          logger: deps.logger,
+        })) {
+          const record = asRecord(event.data);
+          if (record === null) continue;
+          const type = typeof record.type === 'string' ? record.type : event.event;
+
+          if (type === 'message_start') {
+            const message = asRecord(record.message);
+            const usage = message === null ? null : asRecord(message.usage);
+            if (usage !== null) {
+              if (typeof usage.input_tokens === 'number') inputTokens = usage.input_tokens;
+              if (typeof usage.output_tokens === 'number') outputTokens = usage.output_tokens;
+            }
+            continue;
+          }
+
+          if (type === 'content_block_start') {
+            const block = asRecord(record.content_block);
+            if (block === null) continue;
+            const index = typeof record.index === 'number' ? record.index : calls.size;
+            if (block.type === 'tool_use') {
+              calls.set(index, {
+                id: typeof block.id === 'string' ? block.id : '',
+                name: typeof block.name === 'string' ? block.name : '',
+                json: '',
+              });
+            } else if (
+              block.type === 'text' &&
+              typeof block.text === 'string' &&
+              block.text.length > 0
+            ) {
+              textParts.push(block.text);
+              yield { type: 'text.delta', turnId, text: block.text };
+            }
+            continue;
+          }
+
+          if (type === 'content_block_delta') {
+            const delta = asRecord(record.delta);
+            if (delta === null) continue;
+            if (
+              delta.type === 'text_delta' &&
+              typeof delta.text === 'string' &&
+              delta.text.length > 0
+            ) {
+              textParts.push(delta.text);
+              yield { type: 'text.delta', turnId, text: delta.text };
+            } else if (
+              delta.type === 'thinking_delta' &&
+              typeof delta.thinking === 'string' &&
+              delta.thinking.length > 0
+            ) {
+              yield { type: 'reasoning.delta', turnId, text: delta.thinking };
+            } else if (
+              delta.type === 'input_json_delta' &&
+              typeof delta.partial_json === 'string'
+            ) {
+              const index = typeof record.index === 'number' ? record.index : 0;
+              const call = calls.get(index);
+              if (call !== undefined) call.json += delta.partial_json;
+            }
+            continue;
+          }
+
+          if (type === 'message_delta') {
+            const delta = asRecord(record.delta);
+            if (delta !== null && typeof delta.stop_reason === 'string') {
+              stopReason = delta.stop_reason;
+            }
+            const usage = asRecord(record.usage);
+            if (usage !== null && typeof usage.output_tokens === 'number') {
+              outputTokens = usage.output_tokens;
+            }
+            continue;
+          }
+
+          if (type === 'error') {
+            const error = asRecord(record.error);
+            const errorType = error !== null && typeof error.type === 'string' ? error.type : '';
+            const detail =
+              error !== null && typeof error.message === 'string' ? error.message : 'stream error';
+            streamError = {
+              message: 'anthropic: ' + detail,
+              retryable: errorType === 'overloaded_error' || errorType === 'rate_limit_error',
+            };
+            break;
+          }
+        }
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) {
+          reason = 'interrupted';
+          break;
+        }
+        yield { type: 'error', message: 'anthropic: ' + errorMessage(error), retryable: true };
+        reason = 'error';
+        break;
+      }
+
+      if (signal.aborted) {
+        reason = 'interrupted';
+        break;
+      }
+
+      if (streamError !== null) {
+        yield { type: 'error', message: streamError.message, retryable: streamError.retryable };
+        reason = 'error';
+        break;
+      }
+
+      if (inputTokens !== undefined || outputTokens !== undefined) {
+        yield {
+          type: 'usage',
+          turnId,
+          ...(inputTokens !== undefined ? { inputTokens } : {}),
+          ...(outputTokens !== undefined ? { outputTokens } : {}),
+        };
+      }
+      if (stopReason !== null) {
+        deps.logger.debug('anthropic stream finished', { turnId, stopReason });
+      }
+
+      const ordered = [...calls.entries()]
+        .toSorted((left, right) => left[0] - right[0])
+        .map(([, call]) => call);
+
+      if (ordered.length === 0) {
+        if (textParts.length > 0) {
+          messages.push({ role: 'assistant', content: textParts.join('') });
+        }
+        if (mapStopReason(stopReason) === 'error') {
+          yield {
+            type: 'error',
+            message:
+              'anthropic: model refused the request (stop_reason ' + String(stopReason) + ')',
+            retryable: false,
+          };
+          reason = 'error';
+          break;
+        }
+        completed = true;
+        break;
+      }
+
+      const assistantBlocks: AnthropicContentBlock[] = [];
+      const text = textParts.join('');
+      if (text.length > 0) assistantBlocks.push({ type: 'text', text });
+
+      const toolUseBlocks: AnthropicToolUseBlock[] = ordered.map((call) => {
+        const { args } = parseToolArguments(call.json);
+        return {
+          type: 'tool_use',
+          id: call.id.length > 0 ? call.id : newId('call'),
+          name: call.name,
+          input: args ?? {},
+        };
+      });
+      assistantBlocks.push(...toolUseBlocks);
+      messages.push({ role: 'assistant', content: assistantBlocks });
+
+      const toolResults: AnthropicToolResultBlock[] = [];
+      for (const [index, call] of ordered.entries()) {
+        const toolCallId = toolUseBlocks[index]?.id ?? newId('call');
+        if (signal.aborted) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolCallId,
+            content: '[interrupted]',
+            is_error: true,
+          });
+          continue;
+        }
+
+        const { args, parseError } = parseToolArguments(call.json);
+        yield {
+          type: 'tool.started',
+          turnId,
+          toolCallId,
+          name: call.name,
+          input: args ?? call.json,
+        };
+
+        let result: ToolExecResult;
+        if (parseError !== null) {
+          result = { output: parseError, isError: true };
+        } else if (!isToolName(call.name)) {
+          result = { output: 'unknown tool: ' + call.name, isError: true };
+        } else {
+          const decision = classifyTool(call.name, args ?? {}, ctx.permissionMode);
+          if (decision === 'deny') {
+            result = {
+              output: 'tool is not allowed in ' + ctx.permissionMode + ' mode',
+              isError: true,
+            };
+          } else if (decision === 'approve') {
+            const approvalId = newId('apr');
+            const pending = options.requestApproval(approvalId);
+            yield {
+              type: 'approval.requested',
+              turnId,
+              approvalId,
+              toolCallId,
+              name: call.name,
+              input: args,
+            };
+            const choice = await pending;
+            if (signal.aborted) {
+              result = { output: '[interrupted]', isError: true };
+            } else if (choice === 'deny') {
+              result = { output: 'denied by user', isError: true };
+            } else {
+              result = await executeTool(call.name, args ?? {}, ctx, state, deps);
+            }
+          } else {
+            result = await executeTool(call.name, args ?? {}, ctx, state, deps);
+          }
+        }
+
+        yield {
+          type: 'tool.finished',
+          turnId,
+          toolCallId,
+          output: result.output,
+          isError: result.isError,
+        };
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolCallId,
+          content: result.output,
+          ...(result.isError ? { is_error: true } : {}),
+        });
+      }
+
+      if (toolResults.length > 0) {
+        messages.push({ role: 'user', content: toolResults });
+      }
+
+      if (signal.aborted) {
+        reason = 'interrupted';
+        break;
+      }
+      deps.logger.debug('anthropic tool iteration', { turnId, iteration });
+    }
+  } catch (error) {
+    if (signal.aborted || isAbortError(error)) {
+      reason = 'interrupted';
+    } else {
+      deps.logger.warn('anthropic turn failed', { turnId });
+      yield { type: 'error', message: 'anthropic: ' + errorMessage(error), retryable: false };
+      reason = 'error';
+    }
+  }
+
+  if (!completed && reason === 'complete') {
+    reason = 'error';
+    yield {
+      type: 'error',
+      message: `anthropic: stopped after ${maxIterations} tool iterations`,
+      retryable: false,
+    };
+  }
+
+  yield { type: 'turn.finished', turnId, reason };
+}
