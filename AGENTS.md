@@ -35,6 +35,7 @@ pnpm check      # typecheck + lint + emdash scan
 pnpm test       # Vitest, unit and integration
 pnpm test:e2e   # Playwright, launches the built app
 pnpm fmt        # format with Oxfmt
+pnpm build:server # bundle the Node server to packages/server/dist/server.js
 pnpm build      # bundle main, preload, renderer
 pnpm build:win  # NSIS installer
 ```

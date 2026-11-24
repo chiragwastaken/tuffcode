@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "pnpm --filter @tuffcode/desktop dev",
     "build": "pnpm --filter @tuffcode/desktop build",
+    "build:server": "node scripts/build-server.mjs",
+    "smoke:server": "node scripts/smoke-server.mjs",
     "build:win": "pnpm build && electron-builder --win",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "oxlint .",
@@ -27,6 +29,7 @@
     "electron-builder": "catalog:",
     "electron-updater": "catalog:",
     "electron-vite": "catalog:",
+    "esbuild": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "typescript": "catalog:",

@@ -15,9 +15,14 @@ pnpm install
 pnpm dev          # Electron app with hot reload
 pnpm check        # typecheck, lint, emdash scan
 pnpm test         # unit and integration tests
+pnpm build:server # bundle the Node server to packages/server/dist/server.js
 pnpm build        # production bundles
 pnpm build:win    # NSIS installer
 ```
+
+The desktop app starts the server from `packages/server/dist/server.js`, so run
+`pnpm build:server` before launching a packaged build or `pnpm build:win`. `pnpm dev` uses
+the TypeScript sources directly and does not need it.
 
 The renderer never talks to Node directly: it sends JSON-RPC over a loopback WebSocket to a
 server running in an Electron utility process. See [AGENTS.md](./AGENTS.md) for the
