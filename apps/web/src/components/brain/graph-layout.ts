@@ -18,6 +18,8 @@ const PADDING = 18;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const MIN_DISTANCE = 0.5;
 const GRAVITY = 0.02;
+const WALL_STRENGTH = 0.35;
+const MAX_FIT_SCALE = 4;
 
 export interface BrainGraphNode {
   id: string;
@@ -72,6 +74,28 @@ const LABEL_MAX_CHARS = 44;
 const LABEL_GAP = 4;
 const LABEL_LINE_HEIGHT = 11;
 
+/** At rest only the best-connected nodes carry a label, cut to this many characters. */
+export const RESTING_LABEL_MAX = 14;
+export const RESTING_LABEL_LIMIT = 8;
+
+/**
+ * The nodes that keep a label when nothing is hovered: the best connected first,
+ * then the most important, then the lowest id. Deterministic for a stable picture.
+ */
+export function topLabelNodeIds(
+  nodes: readonly BrainGraphNode[],
+  limit: number = RESTING_LABEL_LIMIT,
+): Set<string> {
+  return new Set(
+    [...nodes]
+      .toSorted(
+        (a, b) => b.degree - a.degree || b.importance - a.importance || a.id.localeCompare(b.id),
+      )
+      .slice(0, Math.max(0, limit))
+      .map((node) => node.id),
+  );
+}
+
 export interface GraphLabelPlacement {
   label: string;
   x: number;
@@ -85,9 +109,13 @@ export interface GraphLabelPlacement {
  * top edge. The graph is often only a few hundred pixels wide, so a fixed
  * character cap alone would still clip.
  */
-export function labelPlacement(node: LayoutNode, width: number): GraphLabelPlacement {
+export function labelPlacement(
+  node: LayoutNode,
+  width: number,
+  maxChars: number = LABEL_MAX_CHARS,
+): GraphLabelPlacement {
   const budget = Math.max(8, Math.floor((width - LABEL_GAP * 2) / LABEL_CHAR_WIDTH));
-  const limit = Math.min(LABEL_MAX_CHARS, budget);
+  const limit = Math.min(maxChars, budget);
   const label =
     node.label.length > limit ? `${node.label.slice(0, Math.max(1, limit - 1))}…` : node.label;
 
@@ -283,6 +311,18 @@ export function layoutBrainGraph(
       displacementsY[index]! += (centerY - ys[index]!) * GRAVITY;
     }
 
+    // Soft walls: push back in proportion to the overshoot instead of clamping.
+    // A hard clamp piles every outward-pushed node onto the viewport edge, which
+    // collapses a narrow panel into two vertical rails.
+    for (let index = 0; index < count; index += 1) {
+      const x = xs[index]!;
+      const y = ys[index]!;
+      if (x < minX) displacementsX[index]! += (minX - x) * WALL_STRENGTH;
+      else if (x > maxX) displacementsX[index]! += (maxX - x) * WALL_STRENGTH;
+      if (y < minY) displacementsY[index]! += (minY - y) * WALL_STRENGTH;
+      else if (y > maxY) displacementsY[index]! += (maxY - y) * WALL_STRENGTH;
+    }
+
     // Linear cooling: early steps move freely, late steps only settle.
     const temperature = Math.max(0.1, temperatureStart * (1 - step / iterations));
     for (let index = 0; index < count; index += 1) {
@@ -291,10 +331,72 @@ export function layoutBrainGraph(
       const length = vectorLength(dx, dy);
       if (length > 0) {
         const scale = Math.min(length, temperature) / length;
-        xs[index] = clamp(xs[index]! + dx * scale, minX, maxX);
-        ys[index] = clamp(ys[index]! + dy * scale, minY, maxY);
+        xs[index] = xs[index]! + dx * scale;
+        ys[index] = ys[index]! + dy * scale;
       }
     }
+  }
+
+  // Fit the settled graph into the viewport with one uniform scale, so the
+  // structure is preserved and every node and its circle stay inside the panel.
+  let minPosX = Number.POSITIVE_INFINITY;
+  let maxPosX = Number.NEGATIVE_INFINITY;
+  let minPosY = Number.POSITIVE_INFINITY;
+  let maxPosY = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < count; index += 1) {
+    minPosX = Math.min(minPosX, xs[index]!);
+    maxPosX = Math.max(maxPosX, xs[index]!);
+    minPosY = Math.min(minPosY, ys[index]!);
+    maxPosY = Math.max(maxPosY, ys[index]!);
+  }
+
+  const inset = PADDING + MAX_NODE_RADIUS;
+  const usableWidth = Math.max(1, width - inset * 2);
+  const usableHeight = Math.max(1, height - inset * 2);
+  const spanX = maxPosX - minPosX;
+  const spanY = maxPosY - minPosY;
+  const fit = Math.min(
+    spanX > 1e-6 ? usableWidth / spanX : Number.POSITIVE_INFINITY,
+    spanY > 1e-6 ? usableHeight / spanY : Number.POSITIVE_INFINITY,
+  );
+  const scale = Number.isFinite(fit) ? Math.min(fit, MAX_FIT_SCALE) : 1;
+  const offsetX = inset + (usableWidth - spanX * scale) / 2 - minPosX * scale;
+  const offsetY = inset + (usableHeight - spanY * scale) / 2 - minPosY * scale;
+  const radii = capped.map((node) => nodeRadius(node.importance));
+
+  for (let index = 0; index < count; index += 1) {
+    xs[index] = xs[index]! * scale + offsetX;
+    ys[index] = ys[index]! * scale + offsetY;
+  }
+
+  // A few relaxation passes remove the rare overlapping pair the force pass leaves
+  // behind, so circles never sit on top of each other. Deterministic and bounded.
+  for (let pass = 0; pass < 8; pass += 1) {
+    let moved = false;
+    for (let a = 0; a < count; a += 1) {
+      for (let b = a + 1; b < count; b += 1) {
+        let dx = xs[a]! - xs[b]!;
+        let dy = ys[a]! - ys[b]!;
+        let distance = vectorLength(dx, dy);
+        const minimum = radii[a]! + radii[b]! + 2;
+        if (distance >= minimum) continue;
+        if (distance < 1e-6) {
+          const angle = (a * 2.399_963 + b * 1.618_034) % (Math.PI * 2);
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+        const push = (minimum - distance) / 2;
+        const unitX = dx / distance;
+        const unitY = dy / distance;
+        xs[a] = clamp(xs[a]! + unitX * push, PADDING, maxX);
+        ys[a] = clamp(ys[a]! + unitY * push, PADDING, maxY);
+        xs[b] = clamp(xs[b]! - unitX * push, PADDING, maxX);
+        ys[b] = clamp(ys[b]! - unitY * push, PADDING, maxY);
+        moved = true;
+      }
+    }
+    if (!moved) break;
   }
 
   return {
@@ -302,7 +404,7 @@ export function layoutBrainGraph(
       ...node,
       x: xs[index]!,
       y: ys[index]!,
-      radius: nodeRadius(node.importance),
+      radius: radii[index]!,
     })),
     width,
     height,

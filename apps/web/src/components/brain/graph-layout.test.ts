@@ -3,12 +3,14 @@ import {
   MAX_GRAPH_NODES,
   MAX_NODE_RADIUS,
   MIN_NODE_RADIUS,
+  RESTING_LABEL_MAX,
   capGraphNodes,
   highlightedNodeIds,
   labelPlacement,
   layoutBrainGraph,
   nextNodeInDirection,
   nodeRadius,
+  topLabelNodeIds,
   type BrainGraphEdge,
   type BrainGraphNode,
   type LayoutNode,
@@ -122,6 +124,48 @@ describe('brain graph layout', () => {
     const layout = layoutBrainGraph(many, [], { width: 600, height: 400, iterations: 4 });
     expect(layout.nodes).toHaveLength(MAX_GRAPH_NODES);
   });
+
+  it('spreads twenty nodes across the panel width without overlaps', () => {
+    const width = 387;
+    const height = 800;
+    const twenty = Array.from({ length: 20 }, (_, index) =>
+      makeNode(`spread-${String(index).padStart(2, '0')}`, {
+        importance: 0.3 + (index % 7) * 0.1,
+        degree: index % 5,
+      }),
+    );
+    const edges: BrainGraphEdge[] = Array.from({ length: 28 }, (_, index) => ({
+      from: `spread-${String(index % 20).padStart(2, '0')}`,
+      to: `spread-${String((index * 7 + 3) % 20).padStart(2, '0')}`,
+      relation: 'related',
+    }));
+
+    const layout = layoutBrainGraph(twenty, edges, { width, height });
+    expect(layout.nodes).toHaveLength(20);
+
+    const xs = layout.nodes.map((node) => node.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThanOrEqual(width * 0.6);
+
+    // A hard clamp used to pin the nodes onto two vertical rails.
+    expect(new Set(xs.map((x) => x.toFixed(1))).size).toBeGreaterThanOrEqual(12);
+
+    for (const node of layout.nodes) {
+      expect(node.x).toBeGreaterThanOrEqual(0);
+      expect(node.x).toBeLessThanOrEqual(width);
+      expect(node.y).toBeGreaterThanOrEqual(0);
+      expect(node.y).toBeLessThanOrEqual(height);
+    }
+
+    for (let a = 0; a < layout.nodes.length; a += 1) {
+      for (let b = a + 1; b < layout.nodes.length; b += 1) {
+        const first = layout.nodes[a]!;
+        const second = layout.nodes[b]!;
+        expect(Math.hypot(first.x - second.x, first.y - second.y)).toBeGreaterThanOrEqual(
+          first.radius + second.radius,
+        );
+      }
+    }
+  });
 });
 
 function placed(id: string, x: number, y: number, overrides: Partial<LayoutNode> = {}): LayoutNode {
@@ -153,6 +197,32 @@ describe('brain graph labels', () => {
   it('drops the label below a node that sits near the top edge', () => {
     expect(labelPlacement(placed('top', 120, 4), 240).y).toBeGreaterThan(0);
     expect(labelPlacement(placed('low', 120, 120), 240).y).toBeLessThan(0);
+  });
+
+  it('cuts a resting label to fourteen characters', () => {
+    const node = placed('a', 120, 200, { label: 'a very long label that will not fit' });
+    const placement = labelPlacement(node, 387, RESTING_LABEL_MAX);
+
+    expect(placement.label.length).toBeLessThanOrEqual(RESTING_LABEL_MAX);
+    expect(placement.label.endsWith('…')).toBe(true);
+  });
+
+  it('labels the eight best-connected nodes at rest', () => {
+    const nodes = Array.from({ length: 12 }, (_, index) =>
+      makeNode(`n${String(index).padStart(2, '0')}`, { degree: index }),
+    );
+
+    expect([...topLabelNodeIds(nodes)].toSorted()).toEqual([
+      'n04',
+      'n05',
+      'n06',
+      'n07',
+      'n08',
+      'n09',
+      'n10',
+      'n11',
+    ]);
+    expect(topLabelNodeIds(nodes, 3).size).toBe(3);
   });
 });
 
