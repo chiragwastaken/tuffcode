@@ -1,0 +1,213 @@
+import {
+  AdapterEventSchema,
+  methods,
+  type AdapterEvent,
+  type ClientRequest,
+  type EventRow,
+  type RpcMethod,
+  type RpcParams,
+  type RpcResult,
+  type ServerResponse,
+  type Thread,
+  type ThreadEventRow,
+} from '@tuffcode/contracts';
+import type { z } from 'zod';
+import type { Repos } from './db/repos/index.js';
+import { RpcError } from './errors.js';
+import type { EventBus } from './events.js';
+import {
+  commitThread,
+  createCheckpoint,
+  getDiff,
+  listCheckpoints,
+  openPullRequest,
+  pushThread,
+  revertCheckpoint,
+} from './git/index.js';
+import { addProject, listProjects, refreshProject, removeProject } from './projects.js';
+import { createThread, deleteThread, getThread, listThreads, updateThread } from './threads.js';
+
+export interface RpcDeps {
+  repos: Repos;
+  bus: EventBus;
+  version: string;
+  startedAt: number;
+  dbPath: string;
+}
+
+export type RpcHandler = (params: unknown) => unknown | Promise<unknown>;
+export type RpcHandlers = ReadonlyMap<string, RpcHandler>;
+
+type HandlerFor<M extends RpcMethod> = (
+  params: RpcParams<M>,
+) => RpcResult<M> | Promise<RpcResult<M>>;
+
+interface MethodDefinition {
+  readonly params: z.ZodType;
+  readonly result: z.ZodType;
+}
+
+const definitions: Record<string, MethodDefinition> = methods;
+
+function parseAdapterEvent(row: EventRow): AdapterEvent {
+  const parsed = AdapterEventSchema.safeParse(row.payload);
+  if (!parsed.success) throw new RpcError('internal', 'stored event payload is invalid');
+  return parsed.data;
+}
+
+/**
+ * The exact method set this slice implements. Later slices add their methods by
+ * extending this function; anything not registered is rejected by `dispatch`, never
+ * answered by a stub.
+ */
+export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
+  const handlers = new Map<string, RpcHandler>();
+
+  function define<M extends RpcMethod>(method: M, handler: HandlerFor<M>): void {
+    // dispatch already parsed params with the contract schema for this method.
+    handlers.set(method, (params) => handler(params as RpcParams<M>));
+  }
+
+  function emitThread(thread: Thread): void {
+    deps.bus.emit({ kind: 'event', type: 'thread.updated', threadId: thread.id, payload: thread });
+  }
+
+  define('app.health', () => ({
+    version: deps.version,
+    pid: process.pid,
+    uptimeMs: Date.now() - deps.startedAt,
+    dbPath: deps.dbPath,
+  }));
+
+  define('projects.list', () => listProjects(deps.repos));
+  define('projects.add', ({ path }) => addProject(deps.repos, path));
+  define('projects.remove', async ({ id, deleteWorktrees }) => {
+    await removeProject(deps.repos, id, deleteWorktrees ?? false);
+    return {};
+  });
+  define('projects.refresh', ({ id }) => refreshProject(deps.repos, id));
+
+  define('threads.list', ({ projectId }) => listThreads(deps.repos, projectId));
+  define('threads.create', async (params) => {
+    const thread = await createThread(deps.repos, params);
+    emitThread(thread);
+    return thread;
+  });
+  define('threads.get', ({ id }) => getThread(deps.repos, id));
+  define('threads.update', (params) => {
+    const thread = updateThread(deps.repos, params);
+    emitThread(thread);
+    return thread;
+  });
+  define('threads.delete', async ({ id, removeWorktree }) => {
+    await deleteThread(deps.repos, id, removeWorktree ?? false);
+    return {};
+  });
+  define('threads.events', ({ id, sinceSeq, limit }) => {
+    const thread = getThread(deps.repos, id);
+    const max = Math.min(limit ?? 200, 1000);
+    const rows = deps.repos.events.since(thread.id, sinceSeq ?? 0, max + 1);
+    const events: ThreadEventRow[] = rows
+      .slice(0, max)
+      .map((row) => ({ ...row, payload: parseAdapterEvent(row) }));
+    return { events, hasMore: rows.length > max };
+  });
+
+  define('settings.get', () => deps.repos.settings.get());
+  define('settings.set', ({ patch }) => {
+    const settings = deps.repos.settings.patch(patch);
+    deps.bus.emit({ kind: 'event', type: 'settings.updated', payload: settings });
+    return settings;
+  });
+
+  define('checkpoints.create', ({ threadId, label }) =>
+    createCheckpoint(deps.repos, threadId, label),
+  );
+  define('checkpoints.list', ({ threadId }) => listCheckpoints(deps.repos, threadId));
+  define('checkpoints.revert', async ({ threadId, checkpointId }) => {
+    // The revert RPC is itself the user's confirmation; the destructive git calls
+    // stay behind the domain-level confirm gate.
+    await revertCheckpoint(deps.repos, threadId, checkpointId, true);
+    return {};
+  });
+
+  define('diff.get', async ({ threadId, checkpointId }) => ({
+    files: await getDiff(deps.repos, threadId, checkpointId),
+  }));
+
+  define('git.commit', ({ threadId, message }) => commitThread(deps.repos, threadId, message));
+  define('git.push', ({ threadId }) => pushThread(deps.repos, threadId));
+  define('git.pr', async ({ threadId, title, body, draft }) => {
+    const result = await openPullRequest(deps.repos, threadId, { title, body, draft });
+    deps.repos.threads.setPrUrl(threadId, result.url);
+    emitThread(getThread(deps.repos, threadId));
+    return result;
+  });
+
+  return handlers;
+}
+
+/** Maps a thrown value to a contract error without ever exposing a stack trace. */
+export function errorResponse(id: string, error: unknown): ServerResponse {
+  if (error instanceof RpcError) {
+    return {
+      id,
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
+      },
+    };
+  }
+  return { id, ok: false, error: { code: 'internal', message: 'internal error' } };
+}
+
+/**
+ * Validates params, runs the handler, validates the result. Unknown methods and bad
+ * params are `bad-request`; a handler that returns something off-contract is
+ * `internal`, which surfaces a server bug instead of shipping malformed data.
+ */
+export async function dispatch(
+  handlers: RpcHandlers,
+  request: ClientRequest,
+): Promise<ServerResponse> {
+  const handler = handlers.get(request.method);
+  const definition = definitions[request.method];
+  if (handler === undefined || definition === undefined) {
+    return {
+      id: request.id,
+      ok: false,
+      error: { code: 'bad-request', message: `unknown method: ${request.method}` },
+    };
+  }
+  const params = definition.params.safeParse(request.params);
+  if (!params.success) {
+    return {
+      id: request.id,
+      ok: false,
+      error: {
+        code: 'bad-request',
+        message: 'invalid params',
+        details: params.error.issues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+      },
+    };
+  }
+  try {
+    const result = await handler(params.data);
+    const parsed = definition.result.safeParse(result);
+    if (!parsed.success) {
+      return {
+        id: request.id,
+        ok: false,
+        error: { code: 'internal', message: 'handler returned an invalid result' },
+      };
+    }
+    return { id: request.id, ok: true, result: parsed.data };
+  } catch (error) {
+    return errorResponse(request.id, error);
+  }
+}
