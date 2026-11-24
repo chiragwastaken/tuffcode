@@ -1,0 +1,196 @@
+import type { ThreadEventRow } from '@tuffcode/contracts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createRpcClient, reconnectDelay, type RpcSocket } from './client';
+
+class FakeSocket implements RpcSocket {
+  static instances: FakeSocket[] = [];
+
+  readyState = 0;
+  onopen: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  readonly sent: string[] = [];
+
+  constructor(
+    readonly url: string,
+    readonly protocols: string[],
+  ) {
+    FakeSocket.instances.push(this);
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = 3;
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.({});
+  }
+
+  serverClose(): void {
+    this.readyState = 3;
+    this.onclose?.({});
+  }
+
+  message(frame: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(frame) });
+  }
+}
+
+function createClient(overrides: { requestTimeoutMs?: number; jitter?: () => number } = {}) {
+  return createRpcClient({
+    url: 'ws://127.0.0.1:9999/ws',
+    token: 'test-token',
+    socketFactory: (url, protocols) => new FakeSocket(url, protocols),
+    requestTimeoutMs: overrides.requestTimeoutMs ?? 1000,
+    jitter: overrides.jitter ?? (() => 0),
+    logger: { warn: vi.fn() },
+  });
+}
+
+function lastSocket(): FakeSocket {
+  const socket = FakeSocket.instances.at(-1);
+  if (!socket) throw new Error('Expected a fake socket.');
+  return socket;
+}
+
+function sentFrame(socket: FakeSocket, index = 0): Record<string, unknown> {
+  const frame = socket.sent[index];
+  if (!frame) throw new Error(`Expected sent frame ${index}.`);
+  return JSON.parse(frame) as Record<string, unknown>;
+}
+
+afterEach(() => {
+  FakeSocket.instances = [];
+  vi.useRealTimers();
+});
+
+describe('rpc client', () => {
+  it('sends a request with the bearer subprotocol and resolves a validated result', async () => {
+    const client = createClient();
+    const socket = lastSocket();
+    expect(socket.protocols).toEqual(['tuffcode.bearer.test-token']);
+
+    socket.open();
+    const pending = client.request('app.health', {});
+    const frame = sentFrame(socket);
+    expect(frame.method).toBe('app.health');
+
+    socket.message({
+      id: frame.id,
+      ok: true,
+      result: { version: '0.1.0', pid: 42, uptimeMs: 10, dbPath: 'C:/tmp/db.sqlite' },
+    });
+
+    await expect(pending).resolves.toEqual({
+      version: '0.1.0',
+      pid: 42,
+      uptimeMs: 10,
+      dbPath: 'C:/tmp/db.sqlite',
+    });
+    client.close();
+  });
+
+  it('rejects a request that exceeds the timeout', async () => {
+    vi.useFakeTimers();
+    const client = createClient({ requestTimeoutMs: 500 });
+    lastSocket().open();
+
+    const settled = client.request('app.health', {}).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(500);
+
+    const error = await settled;
+    expect(error).toMatchObject({ name: 'RpcRequestError', code: 'internal' });
+    client.close();
+  });
+
+  it('reconnects on the deterministic exponential backoff schedule', async () => {
+    vi.useFakeTimers();
+    const client = createClient({ jitter: () => 0 });
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    const expectedDelays = [500, 1000, 2000, 4000, 8000, 10_000, 10_000];
+    for (const [index, delay] of expectedDelays.entries()) {
+      lastSocket().serverClose();
+      const count = FakeSocket.instances.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(FakeSocket.instances).toHaveLength(count);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeSocket.instances).toHaveLength(count + 1);
+      expect(index).toBeLessThan(expectedDelays.length);
+    }
+
+    client.close();
+  });
+
+  it('drops an invalid event frame and signals a protocol error', () => {
+    const statuses: string[] = [];
+    const client = createClient();
+    client.onStatus((status) => statuses.push(status));
+    const socket = lastSocket();
+    socket.open();
+
+    socket.message({ kind: 'event', type: 'not-a-real-event', payload: {} });
+
+    expect(statuses).toEqual(['open', 'protocol-error']);
+    client.close();
+  });
+
+  it('replays thread events into the store', async () => {
+    const appended: ThreadEventRow[] = [];
+    const client = createRpcClient({
+      url: 'ws://127.0.0.1:9999/ws',
+      token: 'test-token',
+      socketFactory: (url, protocols) => new FakeSocket(url, protocols),
+      requestTimeoutMs: 1000,
+      logger: { warn: vi.fn() },
+      store: {
+        getState: () => ({
+          appendEvent: (_threadId, event) => appended.push(event),
+        }),
+      },
+    });
+    const socket = lastSocket();
+    socket.open();
+
+    const event: ThreadEventRow = {
+      id: 7,
+      threadId: 'thread-1',
+      seq: 3,
+      type: 'text.delta',
+      payload: { type: 'text.delta', turnId: 'turn-1', text: 'hello' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const pending = client.replay('thread-1', 0);
+    const frame = sentFrame(socket);
+    socket.message({
+      id: frame.id,
+      ok: true,
+      result: { events: [event], hasMore: false },
+    });
+
+    await expect(pending).resolves.toEqual({ hasMore: false });
+    expect(appended).toEqual([event]);
+    client.close();
+  });
+});
+
+describe('reconnectDelay', () => {
+  it('starts at 500 ms, doubles, and caps at 10 seconds', () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map((attempt) => reconnectDelay(attempt, 0))).toEqual([
+      500, 1000, 2000, 4000, 8000, 10_000, 10_000,
+    ]);
+  });
+
+  it('adds bounded jitter without exceeding the cap', () => {
+    expect(reconnectDelay(0, 0.5)).toBe(550);
+    expect(reconnectDelay(0, 1)).toBe(600);
+    expect(reconnectDelay(20, 1)).toBe(10_000);
+  });
+});

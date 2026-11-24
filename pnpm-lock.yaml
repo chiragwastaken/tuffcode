@@ -208,6 +208,12 @@ importers:
       '@tanstack/react-virtual':
         specifier: 'catalog:'
         version: 3.14.28(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@tuffcode/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@tuffcode/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@xterm/addon-fit':
         specifier: 'catalog:'
         version: 0.11.0

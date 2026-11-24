@@ -3,9 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
@@ -16,6 +13,8 @@
     "@pierre/diffs": "catalog:",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-virtual": "catalog:",
+    "@tuffcode/contracts": "workspace:*",
+    "@tuffcode/ui": "workspace:*",
     "@xterm/addon-fit": "catalog:",
     "@xterm/addon-search": "catalog:",
     "@xterm/addon-web-links": "catalog:",
