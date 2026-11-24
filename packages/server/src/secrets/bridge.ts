@@ -31,10 +31,13 @@ export interface Secrets {
 const DEFAULT_TIMEOUT_MS = 5_000;
 const UNAVAILABLE = 'secret storage unavailable';
 
-/** The reply main sends back. Anything that does not parse is ignored. */
+/**
+ * The reply main sends back. Electron main (#57) correlates by id and omits `type`;
+ * a present `type` must still be `secret.result`, so unrelated traffic is ignored.
+ */
 const SecretResultSchema = z.object({
   id: z.string(),
-  type: z.literal('secret.result'),
+  type: z.literal('secret.result').optional(),
   ok: z.boolean(),
   value: z.string().nullish(),
   error: z.string().optional(),

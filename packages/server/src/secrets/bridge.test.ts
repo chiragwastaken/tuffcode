@@ -60,6 +60,21 @@ describe('secret bridge', () => {
     await expect(pending).resolves.toBe('sk-live');
   });
 
+  it('accepts the desktop reply shape without a type discriminator', async () => {
+    const port = createFakePort();
+    const bridge = createSecretBridge(port);
+    bridges.push(bridge);
+
+    const pending = bridge.get('provider:prv_1');
+    // apps/desktop correlates replies by id and does not echo a type.
+    port.reply({ id: lastRequest(port)['id'], ok: true, value: 'sk-from-main' });
+    await expect(pending).resolves.toBe('sk-from-main');
+
+    const missing = bridge.get('provider:prv_2');
+    port.reply({ id: lastRequest(port)['id'], ok: true });
+    await expect(missing).resolves.toBeNull();
+  });
+
   it('forwards an empty secret value on set and resolves on success', async () => {
     const port = createFakePort();
     const bridge = createSecretBridge(port);
