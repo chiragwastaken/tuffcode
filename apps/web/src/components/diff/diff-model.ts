@@ -1,4 +1,4 @@
-import type { DiffFile, DiffFileStatus, ReviewCommentSide } from '@tuffcode/contracts';
+import type { DiffFile, DiffFileStatus } from '@tuffcode/contracts';
 
 /** Select value that stands for the live working tree instead of a checkpoint. */
 export const WORKING_TREE_CHECKPOINT = 'working-tree';
@@ -155,98 +155,36 @@ export function summarizeDiff(files: readonly DiffFile[]): DiffSummary {
   return { fileCount: files.length, additions, deletions };
 }
 
-export interface PatchSides {
-  oldText: string;
-  newText: string;
-  /** File line number for each rendered old-side line, 1-based. */
-  oldLineNumbers: number[];
-  /** File line number for each rendered new-side line, 1-based. */
-  newLineNumbers: number[];
-}
-
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
-
-/**
- * Rebuilds the old and new sides of a unified patch so the design system diff
- * viewer can render them. Every rebuilt line keeps its real file line number,
- * which is what the inline comment affordance reports.
- */
-export function splitPatchSides(patch: string | null | undefined): PatchSides | null {
-  if (!patch) return null;
-
-  const oldLines: string[] = [];
-  const newLines: string[] = [];
-  const oldLineNumbers: number[] = [];
-  const newLineNumbers: number[] = [];
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
-
-  for (const raw of patch.split('\n')) {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-
-    if (line.startsWith('@@')) {
-      const match = HUNK_HEADER.exec(line);
-      if (!match) continue;
-      oldLine = Number(match[1]);
-      newLine = Number(match[3]);
-      inHunk = true;
-      continue;
-    }
-
-    if (!inHunk || line.startsWith('\\')) continue;
-
-    if (line.startsWith('+')) {
-      newLines.push(line.slice(1));
-      newLineNumbers.push(newLine);
-      newLine += 1;
-      continue;
-    }
-
-    if (line.startsWith('-')) {
-      oldLines.push(line.slice(1));
-      oldLineNumbers.push(oldLine);
-      oldLine += 1;
-      continue;
-    }
-
-    if (line.startsWith(' ')) {
-      const text = line.slice(1);
-      oldLines.push(text);
-      oldLineNumbers.push(oldLine);
-      oldLine += 1;
-      newLines.push(text);
-      newLineNumbers.push(newLine);
-      newLine += 1;
-    }
-  }
-
-  if (oldLines.length === 0 && newLines.length === 0) return null;
-
-  return {
-    oldText: oldLines.join('\n'),
-    newText: newLines.join('\n'),
-    oldLineNumbers,
-    newLineNumbers,
-  };
-}
-
-/**
- * Maps a rendered gutter line back to its real file line. The diff viewer
- * reports positions inside the rebuilt sides, and every rebuilt line carries
- * the line number it had in the file.
- */
-export function fileLineForRenderedLine(
-  sides: PatchSides | null,
-  side: ReviewCommentSide,
-  renderedLine: number,
-): number {
-  if (!sides) return renderedLine;
-  const numbers = side === 'old' ? sides.oldLineNumbers : sides.newLineNumbers;
-  return numbers[renderedLine - 1] ?? renderedLine;
-}
-
 export const MAX_COMMENT_LENGTH = 2000;
+
+/** Storage key for the diff panel's file tree visibility. */
+export const FILE_TREE_COLLAPSED_KEY = 'tuffcode.diff.file-tree-collapsed';
+
+/** The slice of `Storage` the panel needs; tests pass a plain map. */
+export interface PreferenceStore {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/** Reads the remembered file tree state; defaults to expanded. */
+export function readFileTreeCollapsed(storage: PreferenceStore | null): boolean {
+  if (!storage) return false;
+  try {
+    return storage.getItem(FILE_TREE_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers the file tree state for the next thread and the next launch. */
+export function writeFileTreeCollapsed(storage: PreferenceStore | null, collapsed: boolean): void {
+  if (!storage) return;
+  try {
+    storage.setItem(FILE_TREE_COLLAPSED_KEY, collapsed ? 'true' : 'false');
+  } catch {
+    // A disabled or full storage just forgets the preference.
+  }
+}
 
 export interface CommentDraftErrors {
   body?: string;

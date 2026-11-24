@@ -1,4 +1,4 @@
-import { MultiFileDiff } from '@pierre/diffs/react';
+import { PatchDiff } from '@pierre/diffs/react';
 import { MessageSquarePlus } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { cn } from './cn';
@@ -6,8 +6,8 @@ import { EmptyState } from './empty-state';
 
 export interface DiffFile {
   path: string;
-  oldText: string;
-  newText: string;
+  /** The file's unified patch exactly as git prints it, marker lines included. */
+  patch: string;
 }
 
 export interface DiffLineComment {
@@ -25,13 +25,21 @@ export interface DiffViewerProps {
   hideFileHeader?: boolean;
   theme?: 'dark' | 'light';
   diffStyle?: 'unified' | 'split';
+  /**
+   * `scroll` keeps one rendered row per source line and scrolls long lines
+   * horizontally, so a wrapped continuation can never take the next line's
+   * gutter number. `wrap` lets long lines flow onto extra rows.
+   */
+  overflow?: 'scroll' | 'wrap';
   className?: string;
 }
 
 /**
- * Multi-file diff built on `@pierre/diffs` React `MultiFileDiff`, one instance
- * per file. The library injects its own styles into a shadow root, so no CSS
- * import is required; fonts are pointed at the design system mono stack.
+ * Multi-file diff built on `@pierre/diffs` React `PatchDiff`, one instance per
+ * file. Rendering the patch itself keeps the hunk headers' real file line
+ * numbers in the gutter and prints `No newline at end of file` only when the
+ * patch carries it. The library injects its own styles into a shadow root, so
+ * no CSS import is required; fonts point at the design system mono stack.
  */
 export function DiffViewer({
   files,
@@ -39,6 +47,7 @@ export function DiffViewer({
   hideFileHeader = false,
   theme = 'dark',
   diffStyle = 'unified',
+  overflow = 'scroll',
   className,
 }: DiffViewerProps) {
   if (files.length === 0) {
@@ -60,15 +69,20 @@ export function DiffViewer({
             } as CSSProperties
           }
         >
-          <MultiFileDiff
-            oldFile={{ name: file.path, contents: file.oldText }}
-            newFile={{ name: file.path, contents: file.newText }}
+          <PatchDiff
+            patch={file.patch}
             options={{
               themeType: theme,
               diffStyle,
-              overflow: 'wrap',
+              overflow,
               lineDiffType: 'word-alt',
               disableFileHeader: hideFileHeader,
+              // The manager only renders the gutter utility when this is set;
+              // `renderGutterUtility` alone never reveals the button.
+              enableGutterUtility: Boolean(onLineComment),
+              // The line number paints at z-index 1 inside the gutter, which
+              // otherwise covers the comment button and swallows its clicks.
+              unsafeCSS: '[data-gutter-utility-slot]{z-index:2}',
             }}
             renderGutterUtility={
               onLineComment

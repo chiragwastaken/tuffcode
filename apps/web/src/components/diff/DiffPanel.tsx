@@ -10,7 +10,14 @@ import {
   cn,
   type DiffLineComment,
 } from '@tuffcode/ui';
-import { FileDiff, MessageSquarePlus, RefreshCw, X } from 'lucide-react';
+import {
+  FileDiff,
+  MessageSquarePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { CommentList } from './CommentList';
@@ -22,11 +29,11 @@ import {
   checkpointIdFromValue,
   checkpointValue,
   diffRequestKey,
-  fileLineForRenderedLine,
+  readFileTreeCollapsed,
   shouldApplyDiffResponse,
-  splitPatchSides,
   summarizeDiff,
   validateCommentDraft,
+  writeFileTreeCollapsed,
 } from './diff-model';
 
 export interface DiffPanelProps {
@@ -65,6 +72,9 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [treeCollapsed, setTreeCollapsed] = useState(() =>
+    readFileTreeCollapsed(typeof window === 'undefined' ? null : window.localStorage),
+  );
 
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
@@ -158,14 +168,16 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
   const knownPaths = useMemo(() => new Set(files.map((file) => file.path)), [files]);
   const summary = summarizeDiff(files);
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
-  const sides = useMemo(
-    () => (selectedFile ? splitPatchSides(selectedFile.patch) : null),
-    [selectedFile],
-  );
   const selectedMeta = selectedFile ? DIFF_STATUS_META[selectedFile.status] : null;
 
   function reload(): void {
     setReloadToken((token) => token + 1);
+  }
+
+  function toggleTree(): void {
+    const next = !treeCollapsed;
+    setTreeCollapsed(next);
+    writeFileTreeCollapsed(window.localStorage, next);
   }
 
   function handleCheckpointChange(value: string | null): void {
@@ -180,11 +192,9 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
   }
 
   function handleLineComment(comment: DiffLineComment): void {
-    setDraft({
-      path: comment.path,
-      line: fileLineForRenderedLine(sides, comment.side, comment.line),
-      side: comment.side,
-    });
+    // The viewer reads the gutter from the patch's hunk headers, so the line it
+    // reports is already the file's line.
+    setDraft({ path: comment.path, line: comment.line, side: comment.side });
     setDraftBody('');
     setDraftError(null);
   }
@@ -259,14 +269,25 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
           </span>
         ) : null}
         {loading ? <Spinner size="sm" label="Loading diff" /> : null}
-        <IconButton
-          icon={RefreshCw}
-          label="Refresh diff"
-          size="sm"
-          className="ml-auto"
-          disabled={loading}
-          onClick={reload}
-        />
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {directories.length > 0 ? (
+            <IconButton
+              icon={treeCollapsed ? PanelLeftOpen : PanelLeftClose}
+              label={treeCollapsed ? 'Show file list' : 'Hide file list'}
+              size="sm"
+              aria-pressed={!treeCollapsed}
+              data-testid="diff-tree-toggle"
+              onClick={toggleTree}
+            />
+          ) : null}
+          <IconButton
+            icon={RefreshCw}
+            label="Refresh diff"
+            size="sm"
+            disabled={loading}
+            onClick={reload}
+          />
+        </div>
       </header>
 
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -362,7 +383,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
       ) : null}
 
       <div className="flex min-h-0 flex-1">
-        {directories.length > 0 ? (
+        {directories.length > 0 && !treeCollapsed ? (
           <FileTree
             directories={directories}
             selectedPath={selectedFile?.path ?? null}
@@ -399,26 +420,23 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
             </div>
           ) : null}
 
-          {selectedFile && sides ? (
+          {selectedFile && selectedFile.patch ? (
             <div
-              className="min-h-0 flex-1 p-3"
+              className="min-h-0 flex-1 overflow-y-auto p-3"
               style={
                 {
-                  '--diffs-overflow-override': 'hidden',
+                  // Long lines scroll inside the code block; the pane owns the
+                  // vertical scroll so the card can size to its content.
+                  '--diffs-overflow-override': 'auto',
                   '--diffs-scrollbar-gutter-override': '0px',
                 } as CSSProperties
               }
             >
               <DiffViewer
-                className="h-full min-h-0 [&>div]:h-full [&>div]:overflow-y-auto"
+                className="[&>div]:min-h-20"
                 hideFileHeader
-                files={[
-                  {
-                    path: selectedFile.path,
-                    oldText: sides.oldText,
-                    newText: sides.newText,
-                  },
-                ]}
+                overflow="scroll"
+                files={[{ path: selectedFile.path, patch: selectedFile.patch }]}
                 onLineComment={handleLineComment}
               />
             </div>
