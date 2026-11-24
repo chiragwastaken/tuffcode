@@ -1,3 +1,6 @@
+import type { Logger } from '@tuffcode/shared';
+import type { SecretStore } from './secrets';
+
 export interface BootstrapInfo {
   port: number;
   token: string;
@@ -25,4 +28,156 @@ export const THEMES: readonly Theme[] = ['dark', 'light', 'system'];
 
 export function isTheme(value: unknown): value is Theme {
   return typeof value === 'string' && (THEMES as readonly string[]).includes(value);
+}
+
+/** Requests the server sends over the utilityProcess message port (D12). */
+export interface SecretGetRequest {
+  id: string;
+  type: 'secret.get';
+  key: string;
+}
+
+export interface SecretSetRequest {
+  id: string;
+  type: 'secret.set';
+  key: string;
+  value: string;
+}
+
+export type SecretRequest = SecretGetRequest | SecretSetRequest;
+
+/** Replies main sends back to the server. A set reply never carries the value. */
+export type SecretReply =
+  | { id: string; ok: true; value?: string }
+  | { id: string; ok: false; error: string };
+
+export interface SecretBridgeChild {
+  postMessage(message: unknown): void;
+}
+
+export interface SecretBridgeHost extends SecretBridgeChild {
+  on(event: 'message', listener: (message: unknown) => void): void;
+}
+
+export type SecretBridgeLogger = Pick<Logger, 'warn'>;
+
+const UNAVAILABLE_ERROR = 'OS encryption is unavailable, so Tuffcode cannot read or store secrets.';
+const UNKNOWN_TYPE_ERROR = 'Unknown secret message type.';
+const MISSING_KEY_ERROR = 'The secret request is missing its key.';
+const MISSING_VALUE_ERROR = 'The secret request is missing its value.';
+const GET_FAILED_ERROR = 'The secret could not be read.';
+const SET_FAILED_ERROR = 'The secret could not be stored.';
+
+function readId(message: unknown): string | null {
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) return null;
+  const { id } = message as Record<string, unknown>;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+function unavailableReply(
+  id: string,
+  secretStore: SecretStore,
+  logger: SecretBridgeLogger | undefined,
+): SecretReply | null {
+  let available: boolean;
+  try {
+    available = secretStore.available();
+  } catch {
+    available = false;
+  }
+  if (available) return null;
+  logger?.warn('refused a secret request because OS encryption is unavailable', { id });
+  return { id, ok: false, error: UNAVAILABLE_ERROR };
+}
+
+function resolveRequest(
+  id: string,
+  message: Record<string, unknown>,
+  secretStore: SecretStore,
+  logger: SecretBridgeLogger | undefined,
+): SecretReply {
+  const { type } = message;
+
+  if (type === 'secret.get') {
+    const { key } = message;
+    if (typeof key !== 'string' || key.length === 0) {
+      return { id, ok: false, error: MISSING_KEY_ERROR };
+    }
+
+    const unavailable = unavailableReply(id, secretStore, logger);
+    if (unavailable !== null) return unavailable;
+
+    try {
+      const value = secretStore.get(key);
+      return value === undefined ? { id, ok: true } : { id, ok: true, value };
+    } catch (error) {
+      logger?.warn('secret read failed', { id, error: errorName(error) });
+      return { id, ok: false, error: GET_FAILED_ERROR };
+    }
+  }
+
+  if (type === 'secret.set') {
+    const { key, value } = message;
+    if (typeof key !== 'string' || key.length === 0) {
+      return { id, ok: false, error: MISSING_KEY_ERROR };
+    }
+    if (typeof value !== 'string') return { id, ok: false, error: MISSING_VALUE_ERROR };
+
+    const unavailable = unavailableReply(id, secretStore, logger);
+    if (unavailable !== null) return unavailable;
+
+    try {
+      secretStore.set(key, value);
+      return { id, ok: true };
+    } catch (error) {
+      logger?.warn('secret write failed', { id, error: errorName(error) });
+      return { id, ok: false, error: SET_FAILED_ERROR };
+    }
+  }
+
+  logger?.warn('rejected an unknown secret message type', { id });
+  return { id, ok: false, error: UNKNOWN_TYPE_ERROR };
+}
+
+/**
+ * Handles one message from the server's utilityProcess. Only `secret.get` and `secret.set`
+ * are accepted; everything else is answered with `ok: false`. Values are never logged and
+ * never echoed back, and no reply is sent for a message that has no usable id.
+ */
+export function handleChildMessage(
+  child: SecretBridgeChild,
+  message: unknown,
+  secretStore: SecretStore,
+  logger?: SecretBridgeLogger,
+): SecretReply | null {
+  const id = readId(message);
+  if (id === null) {
+    logger?.warn('ignored a secret message without a usable id');
+    return null;
+  }
+
+  const reply = resolveRequest(id, message as Record<string, unknown>, secretStore, logger);
+  try {
+    // Electron's utilityProcess message port has no targetOrigin; the rule targets window.postMessage.
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin
+    child.postMessage(reply);
+  } catch (error) {
+    logger?.warn('could not reply to the server secret request', { id, error: errorName(error) });
+  }
+  return reply;
+}
+
+/** Routes messages from the spawned server process to the secret bridge. */
+export function attachSecretBridge(
+  host: SecretBridgeHost,
+  secretStore: SecretStore,
+  logger?: SecretBridgeLogger,
+): void {
+  host.on('message', (message) => {
+    handleChildMessage(host, message, secretStore, logger);
+  });
 }
