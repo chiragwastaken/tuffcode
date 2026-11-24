@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as contracts from './index.js';
 import {
   AdapterUnavailableError,
+  ProviderConfigSchema,
   type AdapterCapabilities,
   type AdapterDeps,
   type AdapterLogger,
@@ -121,6 +122,43 @@ describe('adapter session contract', () => {
     // @ts-expect-error kind must be a ProviderKind
     const invalidProvider: ProviderConfig = { ...provider, kind: 'gemini' };
     expect(invalidProvider.kind).toBe('gemini');
+  });
+
+  it('resolves the root ProviderConfig to the adapter descriptor, not the stored config record', () => {
+    const descriptor: ProviderConfig = {
+      id: 'prov-claude',
+      kind: 'claude',
+      label: 'Claude subscription',
+      config: { family: 'anthropic' },
+      secret: 'sk-ant-test',
+    };
+
+    expect(Object.keys(descriptor).toSorted()).toEqual(['config', 'id', 'kind', 'label', 'secret']);
+    expect(descriptor).toEqual({
+      id: 'prov-claude',
+      kind: 'claude',
+      label: 'Claude subscription',
+      config: { family: 'anthropic' },
+      secret: 'sk-ant-test',
+    });
+
+    // @ts-expect-error the root ProviderConfig is the adapter descriptor, not the config record
+    const storedRecord: ProviderConfig = { family: 'anthropic' };
+    expect(storedRecord).toEqual({ family: 'anthropic' });
+  });
+
+  it('parses a stored provider config row with ProviderConfigSchema', () => {
+    const storedRow = {
+      family: 'anthropic',
+      model: 'claude-opus-4-5',
+      permissionMode: 'ask',
+      allowedTools: ['bash', 'read'],
+    };
+
+    expect(ProviderConfigSchema.parse(storedRow)).toEqual(storedRow);
+    expect(ProviderConfigSchema.parse({})).toEqual({});
+    expect(ProviderConfigSchema.safeParse('not-a-row').success).toBe(false);
+    expect(ProviderConfigSchema.safeParse(['family']).success).toBe(false);
   });
 });
 
