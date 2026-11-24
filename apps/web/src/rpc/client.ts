@@ -1,0 +1,353 @@
+/* oxlint-disable unicorn/prefer-add-event-listener -- handler properties are cleared on close so late events cannot fire */
+import {
+  ClientRequestSchema,
+  RpcErrorSchema,
+  ServerEventSchema,
+  ServerResponseSchema,
+  methods,
+  type RpcErrorCode,
+  type RpcMethod,
+  type RpcParams,
+  type RpcResult,
+  type ServerEvent,
+  type ThreadEventRow,
+} from '@tuffcode/contracts';
+import { useAppStore } from '../store/app-store';
+import type { ConnectionStatus } from '../types';
+
+export const REQUEST_TIMEOUT_MS = 30_000;
+export const RECONNECT_BASE_MS = 500;
+export const RECONNECT_MAX_MS = 10_000;
+export const RECONNECT_JITTER_RATIO = 0.2;
+
+export function reconnectDelay(attempt: number, jitter: number): number {
+  const exponential = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt));
+  const boundedJitter = Math.min(1, Math.max(0, jitter));
+  const jittered = exponential + boundedJitter * exponential * RECONNECT_JITTER_RATIO;
+  return Math.min(RECONNECT_MAX_MS, Math.round(jittered));
+}
+
+export class RpcRequestError extends Error {
+  readonly code: RpcErrorCode;
+  readonly details: unknown;
+
+  constructor(code: RpcErrorCode, message: string, details?: unknown) {
+    super(message);
+    this.name = 'RpcRequestError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export interface RpcSocket {
+  readyState: number;
+  onopen: ((event: unknown) => void) | null;
+  onclose: ((event: unknown) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+  onmessage: ((event: { data: unknown }) => void) | null;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+export type RpcSocketFactory = (url: string, protocols: string[]) => RpcSocket;
+
+export interface EventSink {
+  getState(): {
+    appendEvent(threadId: string, event: ThreadEventRow): void;
+  };
+}
+
+export interface RpcClientOptions {
+  url: string;
+  token: string;
+  socketFactory?: RpcSocketFactory;
+  requestTimeoutMs?: number;
+  jitter?: () => number;
+  store?: EventSink;
+  logger?: Pick<Console, 'warn'>;
+}
+
+export interface RpcClient {
+  request<M extends RpcMethod>(method: M, params: RpcParams<M>): Promise<RpcResult<M>>;
+  onEvent(callback: (event: ServerEvent) => void): () => void;
+  onStatus(callback: (status: ConnectionStatus) => void): () => void;
+  replay(threadId: string, sinceSeq?: number): Promise<{ hasMore: boolean }>;
+  getStatus(): ConnectionStatus;
+  close(): void;
+}
+
+interface PendingRequest {
+  method: RpcMethod;
+  frame: string;
+  sent: boolean;
+  resolve(value: unknown): void;
+  reject(error: RpcRequestError): void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const defaultSocketFactory: RpcSocketFactory = (url, protocols) =>
+  new WebSocket(url, protocols) as unknown as RpcSocket;
+
+let nextRequestId = 1;
+
+function createRequestId(): string {
+  nextRequestId += 1;
+  return `req-${Date.now().toString(36)}-${nextRequestId.toString(36)}`;
+}
+
+export function createRpcClient(options: RpcClientOptions): RpcClient {
+  const {
+    url,
+    token,
+    socketFactory = defaultSocketFactory,
+    requestTimeoutMs = REQUEST_TIMEOUT_MS,
+    jitter = Math.random,
+    store = useAppStore,
+    logger = console,
+  } = options;
+
+  const eventListeners = new Set<(event: ServerEvent) => void>();
+  const statusListeners = new Set<(status: ConnectionStatus) => void>();
+  const pending = new Map<string, PendingRequest>();
+
+  let socket: RpcSocket | null = null;
+  let status: ConnectionStatus = 'connecting';
+  let attempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let closedByUser = false;
+
+  function emitStatus(next: ConnectionStatus): void {
+    status = next;
+    for (const listener of statusListeners) listener(next);
+  }
+
+  function signalProtocolError(message: string, frame: unknown): void {
+    logger.warn(`[rpc] ${message}`, frame);
+    emitStatus('protocol-error');
+  }
+
+  function sendPending(): void {
+    if (!socket) return;
+    for (const entry of pending.values()) {
+      if (entry.sent) continue;
+      entry.sent = true;
+      socket.send(entry.frame);
+    }
+  }
+
+  function settlePending(keepUnsent: boolean): void {
+    for (const [id, entry] of pending) {
+      if (keepUnsent && !entry.sent) continue;
+      clearTimeout(entry.timer);
+      pending.delete(id);
+      entry.reject(
+        new RpcRequestError(
+          'internal',
+          keepUnsent
+            ? 'Connection closed before the server responded.'
+            : 'The RPC client was closed.',
+        ),
+      );
+    }
+  }
+
+  function scheduleReconnect(): void {
+    if (closedByUser || reconnectTimer) return;
+    const delay = reconnectDelay(attempt, jitter());
+    attempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
+  function handleResponseFrame(frame: unknown): void {
+    const response = ServerResponseSchema.safeParse(frame);
+    if (!response.success) {
+      signalProtocolError('Dropped an invalid response frame.', frame);
+      return;
+    }
+
+    const entry = pending.get(response.data.id);
+    if (!entry) return;
+
+    clearTimeout(entry.timer);
+    pending.delete(response.data.id);
+
+    if (!response.data.ok) {
+      const error = RpcErrorSchema.safeParse(response.data.error);
+      if (!error.success) {
+        signalProtocolError('Dropped an invalid RPC error.', response.data.error);
+        entry.reject(new RpcRequestError('internal', 'The server sent an invalid error.'));
+        return;
+      }
+      entry.reject(new RpcRequestError(error.data.code, error.data.message, error.data.details));
+      return;
+    }
+
+    const parsed = methods[entry.method].result.safeParse(response.data.result);
+    if (!parsed.success) {
+      signalProtocolError(`Dropped an invalid ${entry.method} result.`, response.data.result);
+      entry.reject(
+        new RpcRequestError('internal', `The server sent an invalid ${entry.method} result.`),
+      );
+      return;
+    }
+
+    entry.resolve(parsed.data);
+  }
+
+  function handleEventFrame(frame: unknown): void {
+    const event = ServerEventSchema.safeParse(frame);
+    if (!event.success) {
+      signalProtocolError('Dropped an invalid server event.', frame);
+      return;
+    }
+    for (const listener of eventListeners) listener(event.data);
+  }
+
+  function handleMessage(data: unknown): void {
+    if (typeof data !== 'string') {
+      signalProtocolError('Dropped a non-text frame.', data);
+      return;
+    }
+
+    let frame: unknown;
+    try {
+      frame = JSON.parse(data);
+    } catch {
+      signalProtocolError('Dropped a frame that was not JSON.', data);
+      return;
+    }
+
+    if (typeof frame === 'object' && frame !== null && 'kind' in frame && frame.kind === 'event') {
+      handleEventFrame(frame);
+      return;
+    }
+
+    handleResponseFrame(frame);
+  }
+
+  function connect(): void {
+    if (closedByUser) return;
+    emitStatus('connecting');
+
+    let next: RpcSocket;
+    try {
+      next = socketFactory(url, [`tuffcode.bearer.${token}`]);
+    } catch (error) {
+      logger.warn('[rpc] Could not create the WebSocket.', error);
+      emitStatus('closed');
+      scheduleReconnect();
+      return;
+    }
+
+    socket = next;
+
+    next.onopen = () => {
+      attempt = 0;
+      emitStatus('open');
+      sendPending();
+    };
+
+    next.onmessage = (event) => {
+      handleMessage(event.data);
+    };
+
+    next.onerror = (event) => {
+      logger.warn('[rpc] WebSocket error.', event);
+    };
+
+    next.onclose = () => {
+      if (socket === next) socket = null;
+      if (closedByUser) {
+        emitStatus('closed');
+        return;
+      }
+      settlePending(true);
+      emitStatus('closed');
+      scheduleReconnect();
+    };
+  }
+
+  function request<M extends RpcMethod>(method: M, params: RpcParams<M>): Promise<RpcResult<M>> {
+    const parsedParams = methods[method].params.safeParse(params);
+    if (!parsedParams.success) {
+      return Promise.reject(
+        new RpcRequestError('bad-request', `Invalid params for ${method}.`, parsedParams.error),
+      );
+    }
+
+    const id = createRequestId();
+    const frame = ClientRequestSchema.parse({
+      id,
+      method,
+      params: parsedParams.data,
+    });
+
+    return new Promise<RpcResult<M>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(
+          new RpcRequestError(
+            'internal',
+            `The ${method} request timed out after ${requestTimeoutMs} ms.`,
+          ),
+        );
+      }, requestTimeoutMs);
+
+      pending.set(id, {
+        method,
+        frame: JSON.stringify(frame),
+        sent: false,
+        resolve: (value) => resolve(value as RpcResult<M>),
+        reject,
+        timer,
+      });
+
+      if (status === 'open') sendPending();
+    });
+  }
+
+  async function replay(threadId: string, sinceSeq = 0): Promise<{ hasMore: boolean }> {
+    const result = await request('threads.events', { id: threadId, sinceSeq });
+    for (const event of result.events) store.getState().appendEvent(threadId, event);
+    return { hasMore: result.hasMore };
+  }
+
+  function close(): void {
+    closedByUser = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    settlePending(false);
+    const current = socket;
+    socket = null;
+    if (current) {
+      current.onopen = null;
+      current.onmessage = null;
+      current.onerror = null;
+      current.onclose = null;
+      current.close();
+    }
+    emitStatus('closed');
+  }
+
+  connect();
+
+  return {
+    request,
+    onEvent: (callback) => {
+      eventListeners.add(callback);
+      return () => eventListeners.delete(callback);
+    },
+    onStatus: (callback) => {
+      statusListeners.add(callback);
+      return () => statusListeners.delete(callback);
+    },
+    replay,
+    getStatus: () => status,
+    close,
+  };
+}
