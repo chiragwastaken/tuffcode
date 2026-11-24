@@ -3,7 +3,7 @@
 All notable changes to Tuffcode are documented here. The format follows Keep a Changelog, and
 the project uses semantic versioning.
 
-## [Unreleased]
+## [0.1.2] - 2026-11-25
 
 ### Models and providers
 - Model discovery for every provider kind: Claude subscription through the Agent SDK, Codex
@@ -47,6 +47,17 @@ the project uses semantic versioning.
 - Subagent pane with cards, connector line, tabs and cancel; strip when closed.
 - Council node board with dependency edges and click-through, restored after reload via council.latest.
 - Split panes: two or three resizable panes per thread with draggable splitters, tab drag between panes, keyboard shortcuts and persisted layout.
+
+### Known issues
+
+- Diff pane is narrow with the file tree expanded; collapse the tree for wide lines.
+- Council board lives in the inspector; the thread shows status and the goal box.
+- Codex adapter and model list are fixture-tested only because the CLI was not installed on the
+  release host.
+- Compaction trims harness history only, not vendor CLI sessions.
+- Idle RAM is above the original target and the renderer bundle is a single chunk (issue #30).
+- GitHub Actions intermittently did not fire for new pull request pushes during this round; those
+  PRs were verified locally with recorded counts.
 
 ## [0.1.1] - 2026-11-24
 
