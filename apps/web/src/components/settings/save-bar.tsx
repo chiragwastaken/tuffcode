@@ -11,6 +11,16 @@ export interface SaveBarProps {
 }
 
 /**
+ * Measured geometry of the resting bar: an 8px top pad, one 20px `text-xs` line, an
+ * 8px bottom pad and the 1px top border. `bottom-6` adds the 24px gutter the settings
+ * column already reserves, so the scroll content must end with that full clearance
+ * for the last row to scroll clear of the bar.
+ */
+export const SAVE_BAR_HEIGHT_PX = 37;
+export const SAVE_BAR_OFFSET_PX = 24;
+export const SAVE_BAR_CLEARANCE_PX = SAVE_BAR_HEIGHT_PX + SAVE_BAR_OFFSET_PX;
+
+/**
  * Footer for a settings form. `mt-auto` pushes it to the bottom of the full-height
  * settings column, so at rest it sits at the window bottom instead of mid-page.
  * `sticky bottom-6` keeps it there while a long section scrolls; the 24px offset is
