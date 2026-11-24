@@ -9,11 +9,16 @@ import { useAppStore } from '../../store/app-store';
 import { Composer } from './Composer';
 import { groupTimeline, type UserItem } from './grouping';
 import {
+  addLocalUserMessage,
   failLocalUserMessage,
+  nextLocalUserMessageId,
   resolveLocalUserMessage,
   retryLocalUserMessage,
+  supersedeTurn,
+  updateLocalUserMessageText,
   useApprovalDecisions,
   useLocalUserMessages,
+  useSupersededTurns,
 } from './local-messages';
 import { StatusChip } from './status-chip';
 import { Timeline } from './Timeline';
@@ -39,6 +44,7 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   const messages = useAppStore((state) => state.messages[threadId]);
   const userMessages = useLocalUserMessages(threadId);
   const approvals = useApprovalDecisions();
+  const supersededTurns = useSupersededTurns(threadId);
   const theme = useAppStore((state) => state.settings?.theme ?? 'dark');
 
   const items = useMemo(
@@ -48,8 +54,9 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
         messages: messages ?? [],
         userMessages,
         approvals,
+        supersededTurns,
       }),
-    [approvals, events, messages, userMessages],
+    [approvals, events, messages, supersededTurns, userMessages],
   );
 
   const retryUserMessage = useCallback(
@@ -65,6 +72,50 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
           (result) => resolveLocalUserMessage(item.messageId, result.turnId),
           (error: unknown) => {
             failLocalUserMessage(item.messageId);
+            toast.error(error instanceof Error ? error.message : 'Could not send the message.');
+          },
+        );
+    },
+    [rpc, threadId],
+  );
+
+  /**
+   * Rewrites the prompt a turn started with and sends it again. The replaced turn
+   * is hidden for this session; a persisted prompt becomes a fresh echo, while an
+   * unsent echo is edited in place.
+   */
+  const editUserMessage = useCallback(
+    (item: UserItem, text: string) => {
+      const next = text.trim();
+      if (next.length === 0) return;
+
+      let messageId = item.messageId;
+      if (item.turnId === null && updateLocalUserMessageText(item.messageId, next)) {
+        retryLocalUserMessage(messageId);
+      } else {
+        if (item.turnId !== null) supersedeTurn(threadId, item.turnId);
+        messageId = nextLocalUserMessageId(threadId);
+        addLocalUserMessage({
+          id: messageId,
+          threadId,
+          turnId: null,
+          text: next,
+          attachments: item.attachments,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      void rpc
+        .request('threads.send', {
+          id: threadId,
+          text: next,
+          ...(item.attachments.length > 0 ? { attachments: item.attachments } : {}),
+        })
+        .then(
+          (result) => resolveLocalUserMessage(messageId, result.turnId),
+          (error: unknown) => {
+            failLocalUserMessage(messageId);
             toast.error(error instanceof Error ? error.message : 'Could not send the message.');
           },
         );
@@ -146,6 +197,7 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
             theme={theme}
             threadId={threadId}
             onRetryUserMessage={retryUserMessage}
+            onEditUserMessage={editUserMessage}
           />
         )}
 

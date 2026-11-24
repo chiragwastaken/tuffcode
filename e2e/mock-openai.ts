@@ -14,6 +14,11 @@ export const MOCK_ALLOWED_TEXT = 'The command ran successfully.';
 export const MOCK_WROTE_TEXT = 'Wrote the file.';
 export const MOCK_FILE_PATH = 'e2e-added.txt';
 export const MOCK_FILE_CONTENT = 'added by the mock provider';
+export const MOCK_THINKING = 'The project is small, so a quick scan is enough.';
+export const MOCK_PROSE = 'I will inspect the project before editing it.';
+export const MOCK_TIMELINE_FINAL = 'The project looks healthy and ready for changes.';
+export const MOCK_TIMELINE_FILE = 'timeline-added.txt';
+export const MOCK_TIMELINE_FILE_CONTENT = 'alpha\nbeta';
 
 const LF = String.fromCharCode(10);
 const DONE = String.fromCharCode(91, 68, 79, 78, 69, 93);
@@ -120,6 +125,52 @@ function streamToolCall(
   response.write('data: ' + DONE + LF + LF);
 }
 
+interface MockToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+async function streamReasoning(response: ServerResponse, text: string): Promise<void> {
+  const words = text.split(' ');
+  for (let index = 0; index < words.length; index += 1) {
+    const suffix = index === words.length - 1 ? '' : ' ';
+    writeSse(response, chunk({ reasoning_content: (words[index] ?? '') + suffix }, null));
+    await delay(CHUNK_DELAY_MS);
+  }
+}
+
+async function streamContent(response: ServerResponse, text: string): Promise<void> {
+  const words = text.split(' ');
+  for (let index = 0; index < words.length; index += 1) {
+    const suffix = index === words.length - 1 ? '' : ' ';
+    writeSse(response, chunk({ content: (words[index] ?? '') + suffix }, null));
+    await delay(CHUNK_DELAY_MS);
+  }
+}
+
+/** One assistant message with several calls, so a turn has a real tool group. */
+function finishWithToolCalls(response: ServerResponse, calls: MockToolCall[]): void {
+  writeSse(
+    response,
+    chunk(
+      {
+        role: 'assistant',
+        tool_calls: calls.map((call, index) => ({
+          index,
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: JSON.stringify(call.args) },
+        })),
+      },
+      null,
+    ),
+  );
+  writeSse(response, chunk({}, 'tool_calls'));
+  writeSse(response, usageChunk());
+  response.write('data: ' + DONE + LF + LF);
+}
+
 function messagesOf(body: ChatRequest): ChatMessage[] {
   return Array.isArray(body.messages) ? (body.messages as ChatMessage[]) : [];
 }
@@ -157,20 +208,38 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
   });
 
   const messages = messagesOf(body);
+  const prompt = lastRole(messages, 'user');
   const last = messages.at(-1);
   if (last?.role === 'tool') {
     const output = contentOf(last);
     const reply = output.includes('denied')
       ? MOCK_DENIED_TEXT
-      : output.startsWith('wrote ')
-        ? MOCK_WROTE_TEXT
-        : MOCK_ALLOWED_TEXT;
+      : prompt.includes('show-timeline')
+        ? MOCK_TIMELINE_FINAL
+        : output.startsWith('wrote ')
+          ? MOCK_WROTE_TEXT
+          : MOCK_ALLOWED_TEXT;
     await streamText(response, reply);
     response.end();
     return;
   }
 
-  const prompt = lastRole(messages, 'user');
+  if (prompt.includes('show-timeline')) {
+    await streamReasoning(response, MOCK_THINKING);
+    await streamContent(response, MOCK_PROSE);
+    finishWithToolCalls(response, [
+      {
+        id: 'call_e2e_timeline_write',
+        name: 'write',
+        args: { path: MOCK_TIMELINE_FILE, content: MOCK_TIMELINE_FILE_CONTENT },
+      },
+      { id: 'call_e2e_timeline_grep', name: 'grep', args: { pattern: 'answer', path: 'src' } },
+      { id: 'call_e2e_timeline_bash', name: 'bash', args: { command: 'echo timeline-ok' } },
+    ]);
+    response.end();
+    return;
+  }
+
   if (prompt.includes('run-bash')) {
     streamToolCall(response, 'call_e2e_bash', 'bash', { command: 'echo tuffcode-ok' });
     response.end();
