@@ -125,6 +125,25 @@ describe('AnthropicClient', () => {
     expect(tools[0]?.input_schema).toBeDefined();
   });
 
+  it('offers only the allowlisted tools, and none when the allowlist is empty', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchFn = async (_url: string, init: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return new Response(streamOf(''));
+    };
+    const client = new AnthropicClient(
+      { baseUrl: DEFAULT_ANTHROPIC_BASE_URL, headers: {}, secret: 'key', maxTokens: 64 },
+      { fetchFn, sleep: async () => {}, logger },
+    );
+
+    await client.stream({ ...request, toolAllowlist: ['read'] }, new AbortController().signal);
+    const filtered = bodies[0]?.tools as { name: string }[];
+    expect(filtered.map((tool) => tool.name)).toEqual(['read']);
+
+    await client.stream({ ...request, toolAllowlist: [] }, new AbortController().signal);
+    expect(bodies[1]?.tools).toBeUndefined();
+  });
+
   it('retries once on 429 and honours retry-after', async () => {
     const calls: string[] = [];
     const sleeps: number[] = [];

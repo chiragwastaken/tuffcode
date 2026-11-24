@@ -3,7 +3,8 @@ import {
   type AdapterLogger,
   type ProviderConfig,
 } from '@tuffcode/contracts';
-import { TOOL_SCHEMAS, type ToolSchema } from '@tuffcode/prompt';
+import type { ToolSchema } from '@tuffcode/prompt';
+import { allowedToolSchemas } from '../tool-policy.js';
 
 export interface OpenAIToolCall {
   id: string;
@@ -21,6 +22,8 @@ export interface ChatMessage {
 export interface ChatRequestBody {
   model: string;
   messages: ChatMessage[];
+  /** Settings allowlist for this turn; unset offers every harness tool. */
+  toolAllowlist?: string[];
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -96,8 +99,8 @@ export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
   };
 }
 
-export function toOpenAITools(): unknown[] {
-  return TOOL_SCHEMAS.map((schema: ToolSchema) => ({
+export function toOpenAITools(allowlist?: readonly string[]): unknown[] {
+  return allowedToolSchemas(allowlist).map((schema: ToolSchema) => ({
     type: 'function',
     function: {
       name: schema.name,
@@ -108,11 +111,11 @@ export function toOpenAITools(): unknown[] {
 }
 
 function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record<string, unknown> {
+  const tools = toOpenAITools(request.toolAllowlist);
   return {
     model: request.model,
     messages: request.messages,
-    tools: toOpenAITools(),
-    tool_choice: 'auto',
+    ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
     stream: true,
     stream_options: { include_usage: true },
     ...(config.maxTokens !== undefined ? { max_tokens: config.maxTokens } : {}),

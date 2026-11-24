@@ -9,6 +9,7 @@ import {
 } from './client.js';
 import { streamSse } from './sse.js';
 import { classifyTool, executeTool, type ToolExecResult, type ToolSessionState } from './tools.js';
+import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
 
 export const MAX_TOOL_ITERATIONS = 40;
 const LF = String.fromCharCode(10);
@@ -137,7 +138,11 @@ function parseChunk(value: unknown): ChunkDelta | null {
 export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEvent> {
   const { ctx, client, messages, state, deps, signal } = options;
   const turnId = ctx.turnId;
-  const maxIterations = options.maxIterations ?? MAX_TOOL_ITERATIONS;
+  const maxIterations = effectiveToolIterations(
+    ctx.maxToolIterations,
+    options.maxIterations,
+    MAX_TOOL_ITERATIONS,
+  );
   let reason: 'complete' | 'interrupted' | 'error' = 'complete';
   let completed = false;
 
@@ -151,7 +156,11 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
       let stream: ReadableStream<Uint8Array>;
       try {
         stream = await client.stream(
-          { model: ctx.model, messages: requestMessages(ctx, messages) },
+          {
+            model: ctx.model,
+            messages: requestMessages(ctx, messages),
+            ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
+          },
           signal,
         );
       } catch (error) {
@@ -270,6 +279,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           result = { output: parseError, isError: true };
         } else if (!isToolName(name)) {
           result = { output: 'unknown tool: ' + name, isError: true };
+        } else if (isToolDisabled(name, ctx.toolAllowlist)) {
+          result = { output: 'tool "' + name + '" is disabled in settings', isError: true };
         } else {
           const decision = classifyTool(name, args ?? {}, ctx.permissionMode);
           if (decision === 'deny') {
