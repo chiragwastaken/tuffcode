@@ -423,7 +423,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
 
       <section
         aria-label="Review comments"
-        className="flex max-h-64 shrink-0 flex-col border-t border-border"
+        className="flex shrink-0 flex-col border-t border-border"
       >
         <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-2xs text-muted-foreground">
           <MessageSquarePlus aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
@@ -434,7 +434,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
             </span>
           ) : null}
         </div>
-        <ScrollArea className="min-h-0 flex-1">
+        <div className="max-h-48 overflow-y-auto">
           <CommentList
             comments={comments}
             knownPaths={new Set(files.map((file) => file.path))}
@@ -444,7 +444,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
             }}
             onSelectFile={setSelectedPath}
           />
-        </ScrollArea>
+        </div>
       </section>
     </section>
   );

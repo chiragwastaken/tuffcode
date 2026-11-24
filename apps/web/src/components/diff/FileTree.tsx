@@ -12,6 +12,7 @@ export interface FileTreeProps {
 export function FileTree({ directories, selectedPath, onSelect, className }: FileTreeProps) {
   return (
     <ScrollArea
+      role="navigation"
       aria-label="Changed files"
       className={cn('h-full w-48 shrink-0 border-r border-border', className)}
       viewportClassName="py-1"
