@@ -281,6 +281,70 @@ describe('runTurn', () => {
     });
     expect(events.some((event) => event.type === 'error')).toBe(true);
   });
+
+  it('offers only the allowlisted tools and rejects a disabled call', async () => {
+    const client = new FakeClient([
+      streamOf(fixture('tool-use-stream')),
+      streamOf(fixture('text-stream')),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ toolAllowlist: ['read'] }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.toolAllowlist).toEqual(['read']);
+    const finished = events.find((event) => event.type === 'tool.finished');
+    expect(finished).toMatchObject({
+      type: 'tool.finished',
+      output: 'tool "write" is disabled in settings',
+      isError: true,
+    });
+    expect(events.some((event) => event.type === 'approval.requested')).toBe(false);
+    await expect(readFile(join(root, 'out.txt'), 'utf8')).rejects.toThrow();
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'complete',
+    });
+  });
+
+  it('honours the per-turn iteration cap over the adapter cap', async () => {
+    const payload = fixture('tool-use-stream');
+    const client = new FakeClient([streamOf(payload), streamOf(payload)]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ maxToolIterations: 1, toolAllowlist: ['write'] }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+        maxIterations: 5,
+      }),
+    );
+
+    expect(client.requests).toHaveLength(1);
+    expect(
+      events.some(
+        (event) => event.type === 'error' && event.message.includes('stopped after 1 tool'),
+      ),
+    ).toBe(true);
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'error',
+    });
+  });
 });
 
 describe('mapStopReason', () => {

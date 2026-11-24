@@ -85,6 +85,27 @@ describe('OpenAIClient', () => {
     expect(body.temperature).toBe(0.2);
   });
 
+  it('offers only the allowlisted tools, and none when the allowlist is empty', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchFn = async (_url: string, init: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return response(200);
+    };
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      { fetchFn, sleep: async () => {}, logger },
+    );
+
+    await client.stream({ ...request, toolAllowlist: ['read'] }, new AbortController().signal);
+    const filtered = bodies[0]?.tools as { function: { name: string } }[];
+    expect(filtered.map((tool) => tool.function.name)).toEqual(['read']);
+    expect(bodies[0]?.tool_choice).toBe('auto');
+
+    await client.stream({ ...request, toolAllowlist: [] }, new AbortController().signal);
+    expect(bodies[1]?.tools).toBeUndefined();
+    expect(bodies[1]?.tool_choice).toBeUndefined();
+  });
+
   it('maps 401 to a non-retryable error', async () => {
     const client = new OpenAIClient(
       { baseUrl: 'http://x/v1', headers: {}, secret: null },

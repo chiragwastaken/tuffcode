@@ -10,6 +10,10 @@ export interface TurnContext {
   brainSlice: string;
   attachments: { path: string; kind: 'file' | 'image' }[];
   signal: AbortSignal;
+  /** Tool names the user enabled in settings; unset means every harness tool. */
+  toolAllowlist?: string[];
+  /** Per-turn cap on tool round-trips; unset leaves the adapter's own cap in force. */
+  maxToolIterations?: number;
 }
 
 export interface AdapterCapabilities {

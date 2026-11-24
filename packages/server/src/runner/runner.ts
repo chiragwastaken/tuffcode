@@ -334,7 +334,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       const now = new Date();
       const createdAt = now.toISOString();
       const turnId = newId('turn');
-      const brain = assembleBrain(repos, deps.settings(), {
+      const settings = deps.settings();
+      const brain = assembleBrain(repos, settings, {
         projectId: project.id,
         threadId: thread.id,
         mode: thread.executionMode,
@@ -397,6 +398,8 @@ export function createRunner(deps: RunnerDeps): Runner {
         brainSlice: renderBrainSlice(brain.slice),
         attachments: turnAttachments,
         signal: controller.signal,
+        toolAllowlist: settings.enabledTools,
+        maxToolIterations: settings.maxToolIterations,
       };
       active.set(thread.id, { session, turnId, controller, adapterKey });
       setThreadStatus(thread, 'running');

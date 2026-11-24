@@ -16,6 +16,7 @@ import {
   type ToolExecResult,
   type ToolSessionState,
 } from '../openai/tools.js';
+import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
 
 /** Mirrors the `maxToolIterations` setting default. */
 export const DEFAULT_MAX_TOOL_ITERATIONS = 40;
@@ -91,7 +92,11 @@ function parseToolArguments(json: string): {
 export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEvent> {
   const { ctx, client, messages, state, deps, signal } = options;
   const turnId = ctx.turnId;
-  const maxIterations = options.maxIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+  const maxIterations = effectiveToolIterations(
+    ctx.maxToolIterations,
+    options.maxIterations,
+    DEFAULT_MAX_TOOL_ITERATIONS,
+  );
   const system = systemPrompt(ctx);
   let reason: 'complete' | 'interrupted' | 'error' = 'complete';
   let completed = false;
@@ -111,6 +116,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             messages,
             max_tokens: options.maxTokens,
             ...(system.length > 0 ? { system } : {}),
+            ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
           },
           signal,
         );
@@ -321,6 +327,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           result = { output: parseError, isError: true };
         } else if (!isToolName(call.name)) {
           result = { output: 'unknown tool: ' + call.name, isError: true };
+        } else if (isToolDisabled(call.name, ctx.toolAllowlist)) {
+          result = { output: 'tool "' + call.name + '" is disabled in settings', isError: true };
         } else {
           const decision = classifyTool(call.name, args ?? {}, ctx.permissionMode);
           if (decision === 'deny') {

@@ -3,7 +3,8 @@ import {
   type AdapterLogger,
   type ProviderConfig,
 } from '@tuffcode/contracts';
-import { TOOL_SCHEMAS, type ToolSchema } from '@tuffcode/prompt';
+import type { ToolSchema } from '@tuffcode/prompt';
+import { allowedToolSchemas } from '../tool-policy.js';
 
 export interface AnthropicTextBlock {
   type: 'text';
@@ -40,6 +41,8 @@ export interface AnthropicRequestBody {
   system?: string;
   max_tokens: number;
   temperature?: number;
+  /** Settings allowlist for this turn; unset offers every harness tool. */
+  toolAllowlist?: string[];
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -127,8 +130,8 @@ export function readAnthropicConfig(provider: ProviderConfig): AnthropicClientCo
   };
 }
 
-export function toAnthropicTools(): unknown[] {
-  return TOOL_SCHEMAS.map((schema: ToolSchema) => ({
+export function toAnthropicTools(allowlist?: readonly string[]): unknown[] {
+  return allowedToolSchemas(allowlist).map((schema: ToolSchema) => ({
     name: schema.name,
     description: schema.description,
     input_schema: schema.parameters,
@@ -140,11 +143,12 @@ function buildBody(
   request: AnthropicRequestBody,
 ): Record<string, unknown> {
   const system = request.system?.trim() ?? '';
+  const tools = toAnthropicTools(request.toolAllowlist);
   return {
     model: request.model,
     max_tokens: request.max_tokens,
     messages: request.messages,
-    tools: toAnthropicTools(),
+    ...(tools.length > 0 ? { tools } : {}),
     stream: true,
     ...(system.length > 0 ? { system } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
