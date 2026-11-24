@@ -9,6 +9,8 @@ export interface BrainListOptions {
   projectId?: string;
   query?: string;
   limit?: number;
+  /** Inspector-only: include entries toggled inactive. Selection never does. */
+  includeInactive?: boolean;
 }
 
 export interface UpsertBrainInput {
@@ -70,7 +72,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
     `SELECT ${BRAIN_COLUMNS} FROM brain_entries
      WHERE (? IS NULL OR kind = ?)
        AND (? IS NULL OR project_id = ?)
-       AND active = 1
+       AND (? = 1 OR active = 1)
      ORDER BY importance DESC, updated_at DESC
      LIMIT ?`,
   );
@@ -82,7 +84,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
      WHERE brain_fts MATCH ?
        AND (? IS NULL OR e.kind = ?)
        AND (? IS NULL OR e.project_id = ?)
-       AND e.active = 1
+       AND (? = 1 OR e.active = 1)
      ORDER BY rank
      LIMIT ?`,
   );
@@ -92,7 +94,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
      ON CONFLICT(id) DO UPDATE SET
        kind = excluded.kind,
        scope = excluded.scope,
-       project_id = excluded.project_id,
+       project_id = CASE WHEN ? = 1 THEN brain_entries.project_id ELSE excluded.project_id END,
        text = excluded.text,
        tags = excluded.tags,
        applies_to = excluded.applies_to,
@@ -123,6 +125,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
             options.kind ?? null,
             options.projectId ?? null,
             options.projectId ?? null,
+            options.includeInactive === true ? 1 : 0,
             limit,
           )
           .map((row) => mapBrainEntry(asRow(row)));
@@ -133,6 +136,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
           options.kind ?? null,
           options.projectId ?? null,
           options.projectId ?? null,
+          options.includeInactive === true ? 1 : 0,
           limit,
         )
         .map((row) => mapBrainEntry(asRow(row)));
@@ -154,6 +158,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
         input.sourceQuote ?? null,
         now,
         now,
+        input.projectId === undefined ? 1 : 0,
       );
       const entry = get(id);
       if (entry === undefined) throw new Error('brain entry insert did not persist');

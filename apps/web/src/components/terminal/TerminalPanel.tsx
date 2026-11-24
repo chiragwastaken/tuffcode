@@ -104,6 +104,7 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
   return (
     <section
       aria-label="Terminal"
+      data-testid="terminal-panel"
       className={cn(
         'flex h-full min-h-0 flex-col bg-terminal-background text-foreground',
         className,

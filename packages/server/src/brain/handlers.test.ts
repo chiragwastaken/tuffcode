@@ -66,6 +66,68 @@ describe('brain RPC handlers', () => {
     expect(() => handlers['brain.delete']({ id: 'brn_missing' })).toThrow('brain entry not found');
   });
 
+  it('deactivates and re-enables through upsert, and only the inspector sees inactive rows', () => {
+    const created = handlers['brain.upsert']({
+      kind: 'preference',
+      scope: 'global',
+      text: 'dark theme by default',
+      importance: 0.8,
+    });
+
+    const off = handlers['brain.upsert']({
+      id: created.id,
+      kind: created.kind,
+      scope: created.scope,
+      text: created.text,
+      importance: created.importance,
+      active: false,
+    });
+    expect(off.active).toBe(false);
+    expect(handlers['brain.list']({})).toEqual([]);
+    expect(handlers['brain.list']({ includeInactive: true })).toEqual([off]);
+
+    const on = handlers['brain.upsert']({
+      id: created.id,
+      kind: off.kind,
+      scope: off.scope,
+      text: off.text,
+      importance: off.importance,
+      active: true,
+    });
+    expect(on.active).toBe(true);
+    expect(handlers['brain.list']({})).toEqual([on]);
+  });
+
+  it('keeps a project scope when an upsert omits projectId', () => {
+    const entry = handlers['brain.upsert']({
+      kind: 'project',
+      scope: 'project',
+      projectId: 'prj_a',
+      text: 'Electron plus React',
+    });
+
+    const toggled = handlers['brain.upsert']({
+      id: entry.id,
+      kind: entry.kind,
+      scope: entry.scope,
+      text: entry.text,
+      importance: entry.importance,
+      active: false,
+    });
+    expect(toggled.projectId).toBe('prj_a');
+    expect(toggled.active).toBe(false);
+
+    const moved = handlers['brain.upsert']({
+      id: entry.id,
+      kind: entry.kind,
+      scope: entry.scope,
+      projectId: null,
+      text: entry.text,
+      importance: entry.importance,
+    });
+    expect(moved.projectId).toBeNull();
+  });
+
   it('previews exactly what the turn runner would inject', () => {
     store.upsert({ kind: 'rule', scope: 'global', text: 'never use npm', appliesTo: 'all' });
     store.upsert({ kind: 'rule', scope: 'global', text: 'plan first', appliesTo: 'plan' });

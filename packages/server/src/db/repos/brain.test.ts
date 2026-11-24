@@ -54,4 +54,53 @@ describe('brain repo FTS sync', () => {
     expect(ctx.repos.brain.list({ query: 'blue' }).map((row) => row.id)).toEqual([memory.id]);
     expect(ctx.repos.brain.list({ query: '" OR *' })).toHaveLength(0);
   });
+
+  it('hides inactive rows unless the caller asks for them, plain and FTS alike', () => {
+    const entry = ctx.repos.brain.upsert({
+      kind: 'memory',
+      scope: 'global',
+      text: 'the deploy script uses pnpm',
+    });
+    ctx.repos.brain.upsert({
+      id: entry.id,
+      kind: entry.kind,
+      scope: entry.scope,
+      text: entry.text,
+      active: false,
+    });
+
+    expect(ctx.repos.brain.list({})).toHaveLength(0);
+    expect(ctx.repos.brain.list({ query: 'pnpm' })).toHaveLength(0);
+    expect(ctx.repos.brain.list({ includeInactive: true }).map((row) => row.id)).toEqual([
+      entry.id,
+    ]);
+    expect(
+      ctx.repos.brain.list({ query: 'pnpm', includeInactive: true }).map((row) => row.id),
+    ).toEqual([entry.id]);
+  });
+
+  it('preserves project scope when an upsert omits projectId', () => {
+    ctx.repos.projects.add({
+      id: 'prj_a',
+      name: 'alpha',
+      path: 'C:/tmp/alpha',
+      defaultBranch: 'main',
+      createdAt: '2026-11-24T10:00:00.000Z',
+    });
+    const entry = ctx.repos.brain.upsert({
+      kind: 'project',
+      scope: 'project',
+      projectId: 'prj_a',
+      text: 'Electron plus React',
+    });
+
+    const toggled = ctx.repos.brain.upsert({
+      id: entry.id,
+      kind: entry.kind,
+      scope: entry.scope,
+      text: entry.text,
+      active: false,
+    });
+    expect(toggled.projectId).toBe('prj_a');
+  });
 });
