@@ -157,15 +157,16 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
     setAdding(true);
     setAddError(null);
     try {
-      const created = await rpc.request('brain.upsert', {
+      await rpc.request('brain.upsert', {
         kind: addKind,
         scope: 'global',
         text,
       });
       if (!mountedRef.current) return;
-      setEntries((current) => [created, ...current.filter((entry) => entry.id !== created.id)]);
       setAddText('');
-      setPreviewToken((token) => token + 1);
+      // Reload rather than inserting locally: an active search must not gain a
+      // row it does not match.
+      refresh();
     } catch (cause) {
       if (mountedRef.current) setAddError(brainErrorMessage(cause));
     } finally {
