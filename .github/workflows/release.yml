@@ -50,12 +50,26 @@ jobs:
       # blockmap) through the GitHub provider configured in
       # apps/desktop/electron-builder.yml. Signing uses CSC_LINK when the
       # repository secret exists and is skipped when it is empty.
+      # Its upload has dropped assets before (v0.1.1 shipped without the exe and
+      # latest.yml), so a partial publish must not abort the job; the explicit
+      # upload below repairs the asset list and the verify step fails if it did
+      # not. A build failure still fails the job there because the files will
+      # not exist.
       - name: Build and publish installer
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: pnpm --filter @tuffcode/desktop run build:win:publish
+
+      # Deterministic asset upload: --clobber replaces anything electron-builder
+      # managed to attach and adds whatever it missed.
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" apps/desktop/dist/Tuffcode-Setup-*.exe apps/desktop/dist/latest.yml apps/desktop/dist/*.blockmap --clobber
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -67,8 +81,21 @@ jobs:
             apps/desktop/dist/*.blockmap
           if-no-files-found: error
 
+      # Fail the release if any required asset is absent, and always print the
+      # assets that are present so a partial upload is visible in the log.
       - name: Verify release assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'
+        run: |
+          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
+          echo "Release assets for $GITHUB_REF_NAME:"
+          printf '%s\n' "$assets"
+          missing=0
+          grep -Eq '^Tuffcode-Setup-.*\.exe$' <<<"$assets" || { echo "::error::missing Tuffcode-Setup-*.exe"; missing=1; }
+          grep -Eq '^latest\.yml$' <<<"$assets" || { echo "::error::missing latest.yml"; missing=1; }
+          grep -Eq '\.blockmap$' <<<"$assets" || { echo "::error::missing blockmap"; missing=1; }
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more required release assets are missing."
+            exit 1
+          fi
