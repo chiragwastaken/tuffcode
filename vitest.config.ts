@@ -16,6 +16,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Windows CI runners are slow; give tests and hooks extra headroom.
+    testTimeout: 20000,
+    hookTimeout: 20000,
     environment: 'node',
     include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/out/**'],

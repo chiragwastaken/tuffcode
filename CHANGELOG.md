@@ -65,3 +65,13 @@ First release.
   checkpoints, providers, settings, brain entries, and council state.
 - Slash commands and skills discovered from `<project>/.tuffcode/commands` and skill files.
 - esbuild server bundle, Vitest unit and integration suites, and a Playwright Electron suite.
+
+### Known limitations
+
+- Idle memory is about 510 MB for the 5-process tree, above the 350 MB target.
+- First launch after install takes about 3.0 s; warm starts are under 400 ms.
+- The Codex adapter is fixture-tested only because the codex CLI was not installed on the release
+  host.
+- Updates are full downloads; no blockmap is published.
+- Release page notes live in this changelog because GitHub rejected the release body edit.
+
