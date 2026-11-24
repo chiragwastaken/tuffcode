@@ -182,6 +182,52 @@ describe('rpc registry', () => {
     });
   });
 
+  it('answers brain.graph and memory.search through the contract', async () => {
+    const { ctx, handlers } = fixture();
+    ctx.repos.projects.add({
+      id: 'prj_graph',
+      name: 'graph',
+      path: 'C:/tmp/graph',
+      defaultBranch: 'main',
+      createdAt: '2026-11-24T10:00:00.000Z',
+    });
+    ctx.repos.brain.upsert({
+      kind: 'memory',
+      scope: 'project',
+      projectId: 'prj_graph',
+      text: 'emdash memory',
+    });
+
+    const graph = await dispatch(handlers, {
+      id: 'graph',
+      method: 'brain.graph',
+      params: { projectId: 'prj_graph' },
+    });
+    expect(graph).toMatchObject({
+      id: 'graph',
+      ok: true,
+      result: { nodes: [{ kind: 'memory', label: 'emdash memory' }], edges: [] },
+    });
+
+    const search = await dispatch(handlers, {
+      id: 'search',
+      method: 'memory.search',
+      params: { projectId: 'prj_graph', query: 'emdash' },
+    });
+    expect(search).toMatchObject({
+      id: 'search',
+      ok: true,
+      result: { entries: [{ kind: 'memory', text: 'emdash memory' }] },
+    });
+
+    const blank = await dispatch(handlers, {
+      id: 'blank',
+      method: 'memory.search',
+      params: { query: '   ' },
+    });
+    expect(blank).toMatchObject({ id: 'blank', ok: false, error: { code: 'bad-request' } });
+  });
+
   it('rejects unknown methods and invalid params as bad-request', async () => {
     const { handlers } = fixture();
     const unknown = await dispatch(handlers, {
