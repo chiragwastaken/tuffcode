@@ -7,11 +7,13 @@ import {
   BOOTSTRAP_CHANNEL,
   PICK_FOLDER_CHANNEL,
   SET_THEME_CHANNEL,
+  attachSecretBridge,
   isTheme,
   type BootstrapInfo,
 } from './bridge';
 import { createMainLogger } from './logger';
 import { createApplicationMenu } from './menu';
+import { createSecretStore } from './secrets';
 import {
   readServerConnection,
   resolveServerEntry,
@@ -185,12 +187,14 @@ async function bootstrapApplication(): Promise<void> {
   mainWindow = window;
   createApplicationMenu(window);
 
+  const secretStore = createSecretStore();
   const running = await startServerProcess();
   if (running === null) {
     app.quit();
     return;
   }
   server = running;
+  attachSecretBridge(running.child, secretStore, logger);
 
   const info = readBootstrap(running.port);
   if (info === null) {
