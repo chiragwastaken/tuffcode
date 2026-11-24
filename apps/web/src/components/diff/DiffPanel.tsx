@@ -12,7 +12,7 @@ import {
   type DiffLineComment,
 } from '@tuffcode/ui';
 import { FileDiff, MessageSquarePlus, RefreshCw, X } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { CommentList } from './CommentList';
 import { FileTree } from './FileTree';
@@ -96,7 +96,6 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
       })
       .catch((caught: unknown) => {
         if (cancelled || !shouldApplyDiffResponse(activeKeyRef.current, key)) return;
-        setFiles([]);
         setError(caught instanceof Error ? caught.message : 'Could not load the diff.');
       })
       .finally(() => {
@@ -138,7 +137,12 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
     rpc
       .request('comments.list', { threadId })
       .then((result) => {
-        if (!cancelled) setComments(result);
+        if (cancelled) return;
+        setComments((previous) => {
+          const byId = new Map(previous.map((comment) => [comment.id, comment]));
+          for (const comment of result) byId.set(comment.id, comment);
+          return [...byId.values()];
+        });
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
@@ -151,10 +155,14 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
     };
   }, [rpc, threadId, reloadToken]);
 
-  const directories = buildDiffTree(files);
+  const directories = useMemo(() => buildDiffTree(files), [files]);
+  const knownPaths = useMemo(() => new Set(files.map((file) => file.path)), [files]);
   const summary = summarizeDiff(files);
   const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
-  const sides = selectedFile ? splitPatchSides(selectedFile.patch) : null;
+  const sides = useMemo(
+    () => (selectedFile ? splitPatchSides(selectedFile.patch) : null),
+    [selectedFile],
+  );
   const selectedMeta = selectedFile ? DIFF_STATUS_META[selectedFile.status] : null;
 
   function reload(): void {
@@ -162,11 +170,14 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
   }
 
   function handleCheckpointChange(value: string | null): void {
-    setCheckpointId(checkpointIdFromValue(value));
+    const next = checkpointIdFromValue(value);
+    if (next === checkpointId) return;
+    setCheckpointId(next);
     setFiles([]);
     setSelectedPath(null);
     setDraft(null);
     setError(null);
+    setLoading(true);
   }
 
   function handleLineComment(comment: DiffLineComment): void {
@@ -402,7 +413,11 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
               />
             ) : selectedFile ? (
               <EmptyState title="No preview" description={noPreviewDescription(selectedFile)} />
-            ) : (
+            ) : loading ? (
+              <div className="flex items-center justify-center py-10">
+                <Spinner label="Loading diff" />
+              </div>
+            ) : error ? null : (
               <EmptyState
                 icon={FileDiff}
                 title="No changes"
@@ -412,7 +427,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
                     : 'Nothing changed between this checkpoint and the worktree.'
                 }
                 action={
-                  <Button size="sm" variant="secondary" disabled={loading} onClick={reload}>
+                  <Button size="sm" variant="secondary" onClick={reload}>
                     Refresh
                   </Button>
                 }
@@ -438,7 +453,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
         <div className="max-h-48 overflow-y-auto">
           <CommentList
             comments={comments}
-            knownPaths={new Set(files.map((file) => file.path))}
+            knownPaths={knownPaths}
             busyId={resolvingId}
             onResolve={(comment) => {
               void handleResolve(comment);
