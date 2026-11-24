@@ -6,7 +6,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ export interface E2EWorkspace {
   home: string;
   localAppData: string;
   appData: string;
+  userData: string;
   projectPath: string;
 }
 
@@ -33,7 +34,9 @@ function stringEnv(source: NodeJS.ProcessEnv): Record<string, string> {
 
 /**
  * A temp home, a temp app-data tree, and a real git repository. The app never sees
- * the developer's profile: TUFFCODE_HOME, LOCALAPPDATA, and APPDATA are all redirected.
+ * the developer's profile: TUFFCODE_HOME, LOCALAPPDATA, and TUFFCODE_USER_DATA are
+ * redirected. `APPDATA` is redirected too, but Chromium ignores it for `userData`
+ * (it uses the shell known-folder API), which is why `TUFFCODE_USER_DATA` exists.
  * USERPROFILE and HOME stay untouched because Electron aborts when they move.
  */
 export function createWorkspace(): E2EWorkspace {
@@ -41,8 +44,9 @@ export function createWorkspace(): E2EWorkspace {
   const home = join(root, 'home');
   const localAppData = join(root, 'localappdata');
   const appData = join(root, 'appdata');
+  const userData = join(root, 'userdata');
   const projectPath = join(root, 'project');
-  for (const dir of [home, localAppData, appData, projectPath]) {
+  for (const dir of [home, localAppData, appData, userData, projectPath]) {
     mkdirSync(dir, { recursive: true });
   }
 
@@ -58,7 +62,7 @@ export function createWorkspace(): E2EWorkspace {
   git(['add', '.']);
   git(['commit', '-m', 'initial commit']);
 
-  return { root, home, localAppData, appData, projectPath };
+  return { root, home, localAppData, appData, userData, projectPath };
 }
 
 export interface AppSession {
@@ -73,13 +77,14 @@ export interface AppSession {
 /**
  * A force-killed Electron can leave its crashpad handler behind. A stale handler
  * makes the next launch abort with 0x80000003, so clear only the handlers that
- * point at this suite's temp app-data tree.
+ * point at this workspace's temp tree. Scoped to one workspace on purpose: a broad
+ * `tuffcode-e2e-*` match would kill the handlers of a concurrent suite.
  */
-function killOrphanCrashpad(): void {
+function killOrphanCrashpad(root: string): void {
   if (process.platform !== 'win32') return;
   const script =
     'Get-CimInstance Win32_Process -Filter "Name=\'crashpad_handler.exe\'" | ' +
-    "Where-Object { $_.CommandLine -like '*tuffcode-e2e-*' } | " +
+    `Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf('${root}') -ge 0 } | ` +
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
   try {
     execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
@@ -91,13 +96,19 @@ function killOrphanCrashpad(): void {
   }
 }
 
+/** Deletes a workspace root, tolerating the short-lived locks Windows keeps after exit. */
+function removeWorkspace(root: string): void {
+  killOrphanCrashpad(root);
+  rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+}
+
 async function launchOnce(workspace: E2EWorkspace): Promise<{
   app: ElectronApplication;
   page: Page;
   consoleErrors: string[];
   pageErrors: string[];
 }> {
-  killOrphanCrashpad();
+  killOrphanCrashpad(workspace.root);
   const app = await electron.launch({
     // Software rendering only: GPU init is flaky on Windows builders and no test
     // asserts pixels. The renderer sandbox stays enabled.
@@ -108,6 +119,7 @@ async function launchOnce(workspace: E2EWorkspace): Promise<{
       TUFFCODE_HOME: workspace.home,
       LOCALAPPDATA: workspace.localAppData,
       APPDATA: workspace.appData,
+      TUFFCODE_USER_DATA: workspace.userData,
     },
     timeout: 60_000,
   });
@@ -176,7 +188,9 @@ export interface Fixtures {
 export const test = base.extend<Fixtures>({
   // oxlint-disable-next-line no-empty-pattern -- Playwright fixtures require destructuring.
   workspace: async ({}, use) => {
-    await use(createWorkspace());
+    const workspace = createWorkspace();
+    await use(workspace);
+    removeWorkspace(workspace.root);
   },
   // oxlint-disable-next-line no-empty-pattern -- Playwright fixtures require destructuring.
   mock: async ({}, use) => {
