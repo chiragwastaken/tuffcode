@@ -1,6 +1,6 @@
 import type { ThreadEventRow } from '@tuffcode/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createRpcClient, reconnectDelay, type RpcSocket } from './client';
+import { createRpcClient, reconnectDelay, type EventSink, type RpcSocket } from './client';
 
 class FakeSocket implements RpcSocket {
   static instances: FakeSocket[] = [];
@@ -152,6 +152,9 @@ describe('rpc client', () => {
       store: {
         getState: () => ({
           appendEvent: (_threadId, event) => appended.push(event),
+          subagentStarted: () => undefined,
+          subagentEvent: () => undefined,
+          subagentFinished: () => undefined,
         }),
       },
     });
@@ -192,5 +195,143 @@ describe('reconnectDelay', () => {
     expect(reconnectDelay(0, 0.5)).toBe(550);
     expect(reconnectDelay(0, 1)).toBe(600);
     expect(reconnectDelay(20, 1)).toBe(10_000);
+  });
+});
+
+interface RecordedCall {
+  method: 'started' | 'event' | 'finished';
+  input: unknown;
+}
+
+function recordingSink(): { calls: RecordedCall[]; sink: EventSink } {
+  const calls: RecordedCall[] = [];
+  return {
+    calls,
+    sink: {
+      getState: () => ({
+        appendEvent: () => undefined,
+        subagentStarted: (input) => calls.push({ method: 'started', input }),
+        subagentEvent: (input) => calls.push({ method: 'event', input }),
+        subagentFinished: (input) => calls.push({ method: 'finished', input }),
+      }),
+    },
+  };
+}
+
+function createRoutingClient(store: EventSink) {
+  return createRpcClient({
+    url: 'ws://127.0.0.1:9999/ws',
+    token: 'test-token',
+    socketFactory: (url, protocols) => new FakeSocket(url, protocols),
+    requestTimeoutMs: 1000,
+    jitter: () => 0,
+    logger: { warn: vi.fn() },
+    store,
+  });
+}
+
+describe('rpc client subagent routing', () => {
+  it('routes started, event and finished frames into the store sink', () => {
+    const { calls, sink } = recordingSink();
+    const client = createRoutingClient(sink);
+    const socket = lastSocket();
+    socket.open();
+
+    socket.message({
+      kind: 'event',
+      type: 'subagent.started',
+      payload: { childId: 'child-1', threadId: 'thread-1', type: 'explorer', model: 'm1' },
+    });
+    socket.message({
+      kind: 'event',
+      type: 'subagent.event',
+      payload: {
+        childId: 'child-1',
+        threadId: 'thread-1',
+        event: { type: 'text.delta', turnId: 'turn-child', text: 'hello' },
+      },
+    });
+    socket.message({
+      kind: 'event',
+      type: 'subagent.finished',
+      payload: { childId: 'child-1', threadId: 'thread-1', status: 'done', summary: 'ok' },
+    });
+
+    expect(calls).toEqual([
+      {
+        method: 'started',
+        input: { childId: 'child-1', threadId: 'thread-1', type: 'explorer', model: 'm1' },
+      },
+      {
+        method: 'event',
+        input: {
+          childId: 'child-1',
+          threadId: 'thread-1',
+          event: { type: 'text.delta', turnId: 'turn-child', text: 'hello' },
+        },
+      },
+      {
+        method: 'finished',
+        input: { childId: 'child-1', threadId: 'thread-1', status: 'done', summary: 'ok' },
+      },
+    ]);
+
+    client.close();
+  });
+
+  it('still notifies onEvent listeners after routing and drops a malformed frame', () => {
+    const { calls, sink } = recordingSink();
+    const client = createRoutingClient(sink);
+    const socket = lastSocket();
+    socket.open();
+
+    const seen: string[] = [];
+    client.onEvent((event) => seen.push(event.type));
+
+    socket.message({
+      kind: 'event',
+      type: 'subagent.started',
+      payload: { childId: 'child-1', threadId: 'thread-1', type: 'explorer', model: 'm1' },
+    });
+    socket.message({ kind: 'event', type: 'subagent.started', payload: { childId: '' } });
+
+    expect(seen).toEqual(['subagent.started']);
+    expect(calls).toHaveLength(1);
+    expect(client.getStatus()).toBe('protocol-error');
+
+    client.close();
+  });
+
+  it('ignores unrelated events in the sink', () => {
+    const { calls, sink } = recordingSink();
+    const client = createRoutingClient(sink);
+    const socket = lastSocket();
+    socket.open();
+
+    socket.message({
+      kind: 'event',
+      type: 'thread.updated',
+      payload: {
+        id: 'thread-1',
+        projectId: 'project-1',
+        parentThreadId: null,
+        title: 'Thread',
+        providerId: 'provider-1',
+        modelId: 'model-1',
+        executionMode: 'work',
+        permissionMode: 'ask',
+        status: 'idle',
+        worktreePath: 'C:/worktree',
+        branch: 'tuffcode/thread-1',
+        baseBranch: 'main',
+        prUrl: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        lastSeq: 0,
+      },
+    });
+
+    expect(calls).toEqual([]);
+    client.close();
   });
 });
