@@ -3,7 +3,14 @@ import type { MarkdownTheme } from '@tuffcode/ui';
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { ApprovalCard } from './ApprovalCard';
 import type { TimelineItem } from './grouping';
-import { AssistantMessage, NoticeRow, ReasoningRow, ToolRow, UserBubble } from './timeline-items';
+import {
+  AssistantMessage,
+  NoticeRow,
+  ReasoningRow,
+  ToolGroupRow,
+  ToolRow,
+  UserBubble,
+} from './timeline-items';
 
 export interface TimelineProps {
   items: TimelineItem[];
@@ -23,6 +30,8 @@ function renderItem(item: TimelineItem, theme: MarkdownTheme, threadId: string):
       return <ReasoningRow item={item} />;
     case 'tool':
       return <ToolRow item={item} />;
+    case 'tool-group':
+      return <ToolGroupRow item={item} />;
     case 'approval':
       return <ApprovalCard item={item} threadId={threadId} />;
     case 'notice':
@@ -53,7 +62,7 @@ export function Timeline({ items, theme, threadId }: TimelineProps) {
       role="log"
       aria-label="Thread timeline"
       aria-live="polite"
-      className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-4"
+      className="min-h-0 flex-1 scroll-pt-3 overflow-y-auto overscroll-contain py-4"
       onScroll={() => {
         const element = scrollRef.current;
         if (!element) return;

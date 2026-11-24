@@ -1,7 +1,7 @@
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import type { Project } from '@tuffcode/contracts';
 import { Button, EmptyState, IconButton, Input, Kbd } from '@tuffcode/ui';
-import { FolderOpen, FolderPlus, Plus, Search, X } from 'lucide-react';
+import { FolderOpen, FolderPlus, Search, SearchX, X } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -57,12 +57,6 @@ export function Sidebar() {
     [filteredGroups, isCollapsed],
   );
   const virtual = needsVirtualization(filteredGroups);
-
-  const activeProjectId = activeThreadId ? threadsById[activeThreadId]?.projectId : undefined;
-  const defaultProjectId =
-    (activeProjectId && projects.some((project) => project.id === activeProjectId)
-      ? activeProjectId
-      : projects[0]?.id) ?? null;
 
   const createThread = useCallback(
     async (projectId: string) => {
@@ -183,7 +177,7 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-col gap-1.5 px-2 py-2">
+      <div className="px-2 py-2">
         <div className="relative">
           <Search
             aria-hidden="true"
@@ -199,7 +193,7 @@ export function Sidebar() {
             aria-label="Search projects and threads"
             spellCheck={false}
             autoComplete="off"
-            className="h-8 border-sidebar-border bg-secondary pr-8 pl-7 text-xs"
+            className="h-8 w-full border-sidebar-border bg-secondary pr-8 pl-7 text-xs"
           />
           {query !== '' ? (
             <IconButton
@@ -215,30 +209,6 @@ export function Sidebar() {
             </Kbd>
           )}
         </div>
-
-        <div className="flex items-center gap-1">
-          <Button
-            data-testid="sidebar-new-thread"
-            variant="secondary"
-            size="sm"
-            className="min-w-0 flex-1 justify-start"
-            disabled={defaultProjectId === null || creatingProjectId !== null}
-            onClick={() => {
-              if (defaultProjectId) void createThread(defaultProjectId);
-            }}
-          >
-            <Plus strokeWidth={1.75} />
-            <span className="truncate">New thread</span>
-          </Button>
-          <IconButton
-            data-testid="sidebar-add-project"
-            icon={FolderPlus}
-            label="Add project"
-            size="sm"
-            disabled={adding}
-            onClick={addProject}
-          />
-        </div>
       </div>
 
       {projects.length === 0 ? (
@@ -246,7 +216,6 @@ export function Sidebar() {
           <EmptyState
             icon={FolderOpen}
             title="No projects yet"
-            description="Add a local repository to start your first thread."
             action={
               <Button size="sm" onClick={addProject} disabled={adding}>
                 <FolderPlus strokeWidth={1.75} />
@@ -259,8 +228,8 @@ export function Sidebar() {
       ) : filteredGroups.length === 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
           <EmptyState
+            icon={SearchX}
             title="No matches"
-            description={`No project or thread matches "${query.trim()}".`}
             action={
               <Button size="sm" variant="outline" onClick={clearSearch}>
                 Clear search
@@ -272,6 +241,20 @@ export function Sidebar() {
       ) : (
         <SidebarList items={items} virtual={virtual} actions={actions} />
       )}
+
+      <div className="shrink-0 border-t border-sidebar-border p-2">
+        <Button
+          data-testid="sidebar-add-project"
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start text-sidebar-muted-foreground"
+          disabled={adding}
+          onClick={addProject}
+        >
+          <FolderPlus strokeWidth={1.75} />
+          Add project
+        </Button>
+      </div>
 
       <RemoveProjectDialog
         project={removeTarget}

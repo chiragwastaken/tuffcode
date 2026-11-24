@@ -45,6 +45,14 @@ export interface ToolItem {
   running: boolean;
 }
 
+/** Consecutive tool calls folded under one expandable summary row. */
+export interface ToolGroupItem {
+  kind: 'tool-group';
+  key: string;
+  turnId: string;
+  tools: ToolItem[];
+}
+
 export interface ApprovalItem {
   kind: 'approval';
   key: string;
@@ -67,6 +75,7 @@ export type TimelineItem =
   | AssistantItem
   | ReasoningItem
   | ToolItem
+  | ToolGroupItem
   | ApprovalItem
   | NoticeItem;
 
@@ -248,7 +257,49 @@ export function groupTimeline({
   }
   for (const message of pending) items.push(userItem(message));
 
-  return items;
+  return collapseToolRuns(items);
+}
+
+/** Two or more consecutive tool calls read better as one summary row. */
+const TOOL_GROUP_MIN = 2;
+
+/** Folds runs of consecutive tool rows into expandable summary rows. */
+export function collapseToolRuns(items: readonly TimelineItem[]): TimelineItem[] {
+  const result: TimelineItem[] = [];
+  let run: ToolItem[] = [];
+
+  const flush = (): void => {
+    if (run.length === 0) return;
+    const [first] = run;
+    if (first && run.length >= TOOL_GROUP_MIN) {
+      result.push({
+        kind: 'tool-group',
+        key: `tools-${first.key}`,
+        turnId: first.turnId,
+        tools: run,
+      });
+    } else {
+      result.push(...run);
+    }
+    run = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === 'tool') {
+      run.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
+
+  return result;
+}
+
+/** "Ran 4 tools" for a collapsed group; the count is always plural here. */
+export function toolGroupSummary(count: number): string {
+  return `Ran ${count} tools`;
 }
 
 const SUMMARY_KEYS = [
@@ -290,4 +341,22 @@ export function formatToolInput(input: unknown): string {
   } catch {
     return String(input);
   }
+}
+
+const COMMAND_KEYS = ['command', 'cmd', 'script', 'shell'] as const;
+
+/**
+ * The human-readable body of a tool call: a shell command stays raw instead of
+ * arriving as escaped JSON, and anything else falls back to pretty JSON.
+ */
+export function toolInputText(input: unknown): string {
+  if (typeof input === 'string') return input;
+  if (input !== null && typeof input === 'object') {
+    const record = input as Record<string, unknown>;
+    for (const key of COMMAND_KEYS) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim().length > 0) return value;
+    }
+  }
+  return formatToolInput(input);
 }

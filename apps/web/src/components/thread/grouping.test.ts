@@ -1,6 +1,14 @@
 import type { AdapterEvent, ThreadEventRow } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
-import { groupTimeline, toolSummary, type LocalUserMessage } from './grouping';
+import {
+  groupTimeline,
+  collapseToolRuns,
+  toolGroupSummary,
+  toolInputText,
+  toolSummary,
+  type LocalUserMessage,
+  type TimelineItem,
+} from './grouping';
 
 function event(seq: number, payload: AdapterEvent): ThreadEventRow {
   return {
@@ -206,6 +214,126 @@ describe('groupTimeline', () => {
     if (items[0]?.kind !== 'notice') throw new Error('Expected a notice row.');
     expect(items[0].tone).toBe('error');
     expect(items[0].text).toBe('Provider failed');
+  });
+});
+
+function toolEvents(turnId: string, startSeq: number, calls: { id: string; name: string }[]) {
+  return calls.flatMap((call, index) => [
+    event(startSeq + index * 2, {
+      type: 'tool.started' as const,
+      turnId,
+      toolCallId: call.id,
+      name: call.name,
+      input: { command: `${call.name} --run` },
+    }),
+    event(startSeq + index * 2 + 1, {
+      type: 'tool.finished' as const,
+      turnId,
+      toolCallId: call.id,
+      output: `${call.name} ok`,
+      isError: false,
+    }),
+  ]);
+}
+
+describe('tool grouping', () => {
+  it('folds four consecutive tool calls into one summary row', () => {
+    const items = groupTimeline({
+      events: toolEvents('turn-1', 1, [
+        { id: 'c1', name: 'read' },
+        { id: 'c2', name: 'bash' },
+        { id: 'c3', name: 'write' },
+        { id: 'c4', name: 'edit' },
+      ]),
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items).toHaveLength(1);
+    const group = items[0];
+    if (group?.kind !== 'tool-group') throw new Error('Expected a tool group.');
+    expect(group.tools.map((tool) => tool.name)).toEqual(['read', 'bash', 'write', 'edit']);
+    expect(group.tools.every((tool) => !tool.running)).toBe(true);
+    expect(toolGroupSummary(group.tools.length)).toBe('Ran 4 tools');
+  });
+
+  it('keeps a lone tool call as its own row', () => {
+    const items = groupTimeline({
+      events: toolEvents('turn-1', 1, [{ id: 'c1', name: 'bash' }]),
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(['tool']);
+  });
+
+  it('breaks a run at assistant text so only adjacent calls group', () => {
+    const items = groupTimeline({
+      events: [
+        ...toolEvents('turn-1', 1, [
+          { id: 'c1', name: 'read' },
+          { id: 'c2', name: 'bash' },
+        ]),
+        event(5, { type: 'text.delta', turnId: 'turn-1', text: 'Done.' }),
+        ...toolEvents('turn-1', 6, [
+          { id: 'c3', name: 'grep' },
+          { id: 'c4', name: 'bash' },
+        ]),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(['tool-group', 'assistant', 'tool-group']);
+  });
+
+  it('does not fold across a notice or approval row', () => {
+    const items: TimelineItem[] = [
+      {
+        kind: 'tool',
+        key: 'tool-a',
+        turnId: 'turn-1',
+        toolCallId: 'a',
+        name: 'bash',
+        input: {},
+        output: '',
+        isError: false,
+        running: false,
+      },
+      {
+        kind: 'notice',
+        key: 'notice-1',
+        tone: 'info',
+        text: 'Session ended: complete',
+      },
+      {
+        kind: 'tool',
+        key: 'tool-b',
+        turnId: 'turn-1',
+        toolCallId: 'b',
+        name: 'bash',
+        input: {},
+        output: '',
+        isError: false,
+        running: false,
+      },
+    ];
+
+    expect(collapseToolRuns(items).map((item) => item.kind)).toEqual(['tool', 'notice', 'tool']);
+  });
+});
+
+describe('toolInputText', () => {
+  it('renders a shell command raw instead of escaped JSON', () => {
+    expect(toolInputText({ command: 'git rm src/legacy.ts && git commit -m "drop legacy"' })).toBe(
+      'git rm src/legacy.ts && git commit -m "drop legacy"',
+    );
+    expect(toolInputText('echo hello')).toBe('echo hello');
+  });
+
+  it('falls back to pretty JSON for tools without a command', () => {
+    expect(toolInputText({ path: 'src/index.ts' })).toBe('{\n  "path": "src/index.ts"\n}');
+    expect(toolInputText(undefined)).toBe('');
   });
 });
 

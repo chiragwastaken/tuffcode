@@ -7,7 +7,17 @@ import type {
   Skill,
   Thread,
 } from '@tuffcode/contracts';
-import { Button, IconButton, Select, Spinner, cn } from '@tuffcode/ui';
+import {
+  Button,
+  IconButton,
+  Kbd,
+  Select,
+  Spinner,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  cn,
+} from '@tuffcode/ui';
 import { ArrowUp, Paperclip, Square, X } from 'lucide-react';
 import {
   useEffect,
@@ -278,43 +288,70 @@ export function Composer({ thread }: ComposerProps) {
         {paletteOpen && triggerKind ? (
           <div
             ref={paletteRef}
-            className="absolute bottom-full left-0 z-20 mb-2 w-full overflow-hidden rounded-lg border border-border bg-popover"
+            data-testid="command-palette"
+            className="absolute bottom-full left-0 z-30 mb-2 flex max-h-80 w-full flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-xl"
           >
             <div className="flex items-center justify-between border-b border-border px-2.5 py-1.5">
               <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
                 {paletteLabel[triggerKind]}
               </span>
-              <span className="text-2xs text-muted-foreground">Enter to insert</span>
+              <span className="text-2xs text-muted-foreground">
+                {paletteEntries.length} {paletteEntries.length === 1 ? 'match' : 'matches'}
+              </span>
             </div>
-            <ul className="max-h-64 overflow-y-auto p-1" aria-label={paletteLabel[triggerKind]}>
-              {paletteEntries.map((entry, index) => (
-                <li key={entry.name}>
-                  <button
-                    type="button"
-                    data-active={index === activeIndex}
-                    aria-current={index === activeIndex}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => choose(entry)}
-                    className={cn(
-                      'flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left',
-                      index === activeIndex ? 'bg-accent' : 'hover:bg-accent',
-                    )}
-                  >
-                    <span className="font-mono text-xs text-foreground">
-                      {triggerKind === 'command' ? '/' : '$'}
-                      {entry.name}
-                    </span>
-                    <span className="line-clamp-1 text-2xs text-muted-foreground">
-                      {entry.description}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="relative min-h-0">
+              <ul className="max-h-64 overflow-y-auto p-1" aria-label={paletteLabel[triggerKind]}>
+                {paletteEntries.map((entry, index) => (
+                  <li key={entry.name}>
+                    <button
+                      type="button"
+                      data-active={index === activeIndex}
+                      aria-current={index === activeIndex}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => choose(entry)}
+                      className={cn(
+                        'flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left',
+                        'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                        index === activeIndex
+                          ? 'bg-foreground/[0.08] ring-1 ring-border/60 ring-inset'
+                          : 'hover:bg-accent',
+                      )}
+                    >
+                      <span className="font-mono text-xs text-foreground">
+                        {triggerKind === 'command' ? '/' : '$'}
+                        {entry.name}
+                      </span>
+                      <span className="line-clamp-1 text-2xs text-muted-foreground">
+                        {entry.description}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-popover to-transparent"
+              />
+            </div>
+            <div className="flex items-center gap-3 border-t border-border px-2.5 py-1.5 text-2xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Kbd className="h-4 min-w-4">↑</Kbd>
+                <Kbd className="h-4 min-w-4">↓</Kbd>
+                navigate
+              </span>
+              <span className="flex items-center gap-1">
+                <Kbd className="h-4 min-w-4">↵</Kbd>
+                insert
+              </span>
+              <span className="flex items-center gap-1">
+                <Kbd className="h-4 min-w-4">esc</Kbd>
+                close
+              </span>
+            </div>
           </div>
         ) : null}
 
-        <div className="rounded-xl border border-border bg-message-surface/80 p-2 backdrop-blur-md">
+        <div className="rounded-xl border border-border bg-message-surface/80 p-3 backdrop-blur-md transition-colors duration-150 focus-within:border-ring/50 focus-within:ring-1 focus-within:ring-ring/40 focus-within:ring-inset">
           {attachments.length > 0 ? (
             <div className="mb-1 flex flex-wrap gap-1.5 px-1">
               {attachments.map((attachment, index) => (
@@ -359,14 +396,21 @@ export function Composer({ thread }: ComposerProps) {
             className="max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-64"
           />
 
-          <div className="flex flex-wrap items-center gap-1 pt-1">
-            <IconButton
-              icon={Paperclip}
-              label={fileBridge ? 'Attach files' : 'Attach folder'}
-              size="sm"
-              disabled={!thread || sending}
-              onClick={() => void attach()}
-            />
+          <div className="flex flex-wrap items-center gap-1.5 pt-2">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <IconButton
+                    icon={Paperclip}
+                    label={fileBridge ? 'Attach files' : 'Attach folder'}
+                    size="sm"
+                    disabled={!thread || sending}
+                    onClick={() => void attach()}
+                  />
+                }
+              />
+              <TooltipContent>{fileBridge ? 'Attach files' : 'Attach a folder'}</TooltipContent>
+            </Tooltip>
             <input
               ref={fileInputRef}
               type="file"
@@ -384,7 +428,7 @@ export function Composer({ thread }: ComposerProps) {
               onValueChange={(value) => {
                 if (value && value !== modelId) void applyUpdate({ modelId: value });
               }}
-              className="h-8 w-auto max-w-44 border-0 bg-transparent px-2 text-xs"
+              className="h-7 w-auto min-w-28 max-w-52 rounded-md border-border/60 bg-secondary px-2 text-2xs hover:bg-accent"
             />
             <Select
               aria-label="Execution mode"
@@ -397,7 +441,7 @@ export function Composer({ thread }: ComposerProps) {
                   void applyUpdate({ executionMode: next.value });
                 }
               }}
-              className="h-8 w-auto border-0 bg-transparent px-2 text-xs"
+              className="h-7 w-auto min-w-20 rounded-md border-border/60 bg-secondary px-2 text-2xs hover:bg-accent"
             />
             <Select
               aria-label="Permission mode"
@@ -410,7 +454,7 @@ export function Composer({ thread }: ComposerProps) {
                   void applyUpdate({ permissionMode: next.value });
                 }
               }}
-              className="h-8 w-auto border-0 bg-transparent px-2 text-xs"
+              className="h-7 w-auto min-w-24 rounded-md border-border/60 bg-secondary px-2 text-2xs hover:bg-accent"
             />
 
             <div className="ml-auto flex items-center gap-2">
