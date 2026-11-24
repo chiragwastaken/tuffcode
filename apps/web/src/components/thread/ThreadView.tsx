@@ -150,10 +150,10 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
+      <header className="@container sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
         <div className="flex min-w-0 items-center gap-2">
           {projectName ? (
-            <span className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
+            <span className="hidden min-w-0 items-center gap-1.5 text-2xs text-muted-foreground @min-[44rem]:flex">
               <FolderOpen aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
               <span className="max-w-40 truncate" title={projectName}>
                 {projectName}
@@ -161,7 +161,10 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
             </span>
           ) : null}
           {projectName ? (
-            <span aria-hidden="true" className="text-muted-foreground/40">
+            <span
+              aria-hidden="true"
+              className="hidden text-muted-foreground/40 @min-[44rem]:inline"
+            >
               /
             </span>
           ) : null}
