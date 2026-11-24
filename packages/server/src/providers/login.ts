@@ -18,7 +18,12 @@ export interface LoginPty {
   kill(): void;
 }
 
-export type SpawnLoginPty = (file: string, args: string[], env: Record<string, string>) => LoginPty;
+/** `args` is argv, or a raw command line when node-pty must pass it verbatim. */
+export type SpawnLoginPty = (
+  file: string,
+  args: string[] | string,
+  env: Record<string, string>,
+) => LoginPty;
 
 /** Kills the login process and every child it started. */
 export type KillLoginTree = (pid: number) => Promise<void>;
@@ -56,7 +61,11 @@ const LOGIN_FLOWS: Partial<Record<ProviderKind, LoginFlow>> = {
 
 const KILL_TIMEOUT_MS = 2_000;
 
-function defaultSpawnPty(file: string, args: string[], env: Record<string, string>): LoginPty {
+function defaultSpawnPty(
+  file: string,
+  args: string[] | string,
+  env: Record<string, string>,
+): LoginPty {
   const pty = spawn(file, args, {
     name: 'xterm-256color',
     cols: 100,
@@ -148,8 +157,11 @@ export function createProviderLogins(deps: ProviderLoginsDeps): ProviderLogins {
       if (cliPath === null) throw badRequest(`${flow.hint} (${flow.name} was not found)`);
 
       const invocation = windowsInvocation(cliPath, flow.args);
+      // node-pty appends a raw command line after the executable verbatim, which is
+      // what ComSpec needs; argv goes through node-pty's quoting for direct spawns.
+      const commandArgs = invocation.verbatim ? invocation.args.join(' ') : invocation.args;
       const loginId = newId('login');
-      const pty = spawnPty(invocation.file, invocation.args, terminalEnv());
+      const pty = spawnPty(invocation.file, commandArgs, terminalEnv());
       sessions.set(loginId, { providerId, pty, cancelled: false });
       pty.onData((chunk) => {
         deps.bus.emit({

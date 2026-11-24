@@ -15,19 +15,33 @@ export type RunCommand = (
   timeoutMs: number,
 ) => Promise<CommandResult>;
 
+export interface WindowsInvocation {
+  file: string;
+  args: string[];
+  /** True when `args` must reach ComSpec verbatim (a `.cmd`/`.bat` shim). */
+  verbatim: boolean;
+}
+
 /**
  * Windows cannot start a `.cmd`/`.bat` shim through CreateProcess, so npm-installed
  * CLIs are launched through ComSpec. Every caller passes fixed literal arguments,
- * never user text, so the command line needs no escaping.
+ * never user text. ComSpec does not understand the backslash escaping Node applies
+ * to quoted arguments, so batch invocations are marked `verbatim`.
  */
 export function windowsInvocation(
   file: string,
   args: readonly string[],
   platform: NodeJS.Platform = process.platform,
-): { file: string; args: string[] } {
-  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(file)) return { file, args: [...args] };
+): WindowsInvocation {
+  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(file)) {
+    return { file, args: [...args], verbatim: false };
+  }
   const comspec = process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe';
-  return { file: comspec, args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`] };
+  return {
+    file: comspec,
+    args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`],
+    verbatim: true,
+  };
 }
 
 /** Default runner: never rejects, so a missing or failing CLI is a result, not a throw. */
@@ -37,7 +51,13 @@ export const runCommand: RunCommand = (file, args, timeoutMs) => {
   execFile(
     invocation.file,
     invocation.args,
-    { windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024, encoding: 'utf8' },
+    {
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.verbatim,
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf8',
+    },
     (error, stdout, stderr) => {
       const out = typeof stdout === 'string' ? stdout : '';
       const err = typeof stderr === 'string' ? stderr : '';

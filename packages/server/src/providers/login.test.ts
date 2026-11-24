@@ -1,6 +1,10 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ServerEvent } from '@tuffcode/contracts';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEventBus, type EventBus } from '../events.js';
+import { commandExists } from '../pty/shell.js';
 import { createTestContext, type TestContext } from '../test-support.js';
 import {
   createProviderLogins,
@@ -37,9 +41,11 @@ class FakePty implements LoginPty {
   }
 }
 
+const hasCmd = process.platform === 'win32' && commandExists('cmd.exe');
+
 interface Spawned {
   file: string;
-  args: string[];
+  args: string[] | string;
   env: Record<string, string>;
   pty: FakePty;
 }
@@ -192,6 +198,43 @@ describe('provider login', () => {
     await expect(logins.start('prv_anthropic')).rejects.toMatchObject({ code: 'bad-request' });
     await expect(logins.start('prv_missing')).rejects.toMatchObject({ code: 'not-found' });
     expect(spawned).toEqual([]);
+  });
+
+  it.skipIf(!hasCmd)('streams a real batch shim through ComSpec', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tuffcode-login-'));
+    const shim = join(dir, 'fake claude.cmd');
+    writeFileSync(shim, '@echo off\r\necho Visit https://example.com/device\r\nexit /b 0\r\n');
+    const real = createProviderLogins({
+      repos: ctx.repos,
+      bus,
+      resolveCommand: async () => null,
+    });
+    try {
+      ctx.repos.providers.upsert({
+        id: 'prv_real',
+        kind: 'claude',
+        label: 'Claude',
+        config: { pathToClaudeCodeExecutable: shim },
+      });
+      const { loginId } = await real.start('prv_real');
+      await vi.waitFor(
+        () => {
+          expect(events.some((event) => event.type === 'provider.login.done')).toBe(true);
+        },
+        { timeout: 20_000, interval: 50 },
+      );
+      const output = events
+        .flatMap((event) => (event.type === 'provider.login.output' ? [event.payload.chunk] : []))
+        .join('');
+      expect(output).toContain('Visit https://example.com/device');
+      expect(events.at(-1)).toEqual({
+        kind: 'event',
+        type: 'provider.login.done',
+        payload: { loginId, providerId: 'prv_real', ok: true, detail: 'signed in' },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects a subscription provider whose CLI is missing', async () => {
