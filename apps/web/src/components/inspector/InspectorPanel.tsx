@@ -1,5 +1,5 @@
 import { EmptyState, TabsList, TabsPanel, TabsRoot, TabsTab } from '@tuffcode/ui';
-import { useReducer } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { useAppStore } from '../../store/app-store';
 import { DiffPanel } from '../diff/DiffPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
@@ -12,13 +12,12 @@ import {
   inspectorTabsReducer,
   isInspectorTab,
   tabForThread,
+  type InspectorTab,
 } from './inspector-tabs';
 
 export interface InspectorPanelProps {
   /** The open thread, or null on settings and empty workspace routes. */
   threadId: string | null;
-  /** False when the shell collapsed the panel; tab state survives the collapse. */
-  open: boolean;
 }
 
 /**
@@ -26,7 +25,7 @@ export interface InspectorPanelProps {
  * choice is remembered per thread for the session, and new threads inherit the
  * last tab used anywhere.
  */
-export function InspectorPanel({ threadId, open }: InspectorPanelProps) {
+export function InspectorPanel({ threadId }: InspectorPanelProps) {
   const [tabs, dispatch] = useReducer(inspectorTabsReducer, initialInspectorTabs);
   const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
   const activeTab = tabForThread(tabs, threadId);
@@ -73,22 +72,50 @@ export function InspectorPanel({ threadId, open }: InspectorPanelProps) {
         </TabsList>
       </div>
 
-      {open ? (
-        <>
-          <TabsPanel value="diff" className="min-h-0 flex-1">
-            <DiffPanel threadId={threadId} />
-          </TabsPanel>
-          <TabsPanel value="terminal" className="min-h-0 flex-1">
-            <TerminalPanel threadId={threadId} />
-          </TabsPanel>
-          <TabsPanel value="brain" className="min-h-0 flex-1">
-            <BrainPanel threadId={threadId} projectId={thread?.projectId ?? null} />
-          </TabsPanel>
-          <TabsPanel value="council" className="min-h-0 flex-1">
-            <CouncilPanel key={threadId} threadId={threadId} />
-          </TabsPanel>
-        </>
-      ) : null}
+      <InspectorTabs
+        key={threadId}
+        threadId={threadId}
+        projectId={thread?.projectId ?? null}
+        activeTab={activeTab}
+      />
     </TabsRoot>
+  );
+}
+
+interface InspectorTabsProps {
+  threadId: string;
+  projectId: string | null;
+  activeTab: InspectorTab;
+}
+
+/**
+ * Panels stay mounted once visited so a tab switch does not close the thread's
+ * terminal or drop an unsaved comment. A panel is not mounted until its tab is
+ * first shown, so opening a thread never spawns a shell the user did not ask for.
+ */
+function InspectorTabs({ threadId, projectId, activeTab }: InspectorTabsProps) {
+  const [mountedTabs, setMountedTabs] = useState<readonly InspectorTab[]>([activeTab]);
+
+  useEffect(() => {
+    setMountedTabs((current) => (current.includes(activeTab) ? current : [...current, activeTab]));
+  }, [activeTab]);
+
+  const isMounted = (tab: InspectorTab): boolean => mountedTabs.includes(tab);
+
+  return (
+    <>
+      <TabsPanel value="diff" keepMounted className="min-h-0 flex-1">
+        {isMounted('diff') ? <DiffPanel threadId={threadId} /> : null}
+      </TabsPanel>
+      <TabsPanel value="terminal" keepMounted className="min-h-0 flex-1">
+        {isMounted('terminal') ? <TerminalPanel threadId={threadId} /> : null}
+      </TabsPanel>
+      <TabsPanel value="brain" keepMounted className="min-h-0 flex-1">
+        {isMounted('brain') ? <BrainPanel threadId={threadId} projectId={projectId} /> : null}
+      </TabsPanel>
+      <TabsPanel value="council" keepMounted className="min-h-0 flex-1">
+        {isMounted('council') ? <CouncilPanel threadId={threadId} /> : null}
+      </TabsPanel>
+    </>
   );
 }

@@ -103,4 +103,24 @@ describe('brain repo FTS sync', () => {
     });
     expect(toggled.projectId).toBe('prj_a');
   });
+
+  it('keeps the source quote when an upsert omits it', () => {
+    const entry = ctx.repos.brain.upsert({
+      kind: 'rule',
+      scope: 'global',
+      text: 'plan first',
+      sourceQuote: 'the user said: plan first',
+    });
+
+    const toggled = ctx.repos.brain.upsert({
+      id: entry.id,
+      kind: entry.kind,
+      scope: entry.scope,
+      text: entry.text,
+      active: false,
+    });
+
+    expect(toggled.active).toBe(false);
+    expect(toggled.sourceQuote).toBe('the user said: plan first');
+  });
 });

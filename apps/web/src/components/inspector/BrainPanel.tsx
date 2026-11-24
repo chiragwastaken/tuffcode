@@ -379,7 +379,6 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
                     <Button
                       size="sm"
                       variant="outline"
-                      aria-pressed={entry.active}
                       disabled={busyId !== null}
                       onClick={() => void toggleEntry(entry)}
                     >
