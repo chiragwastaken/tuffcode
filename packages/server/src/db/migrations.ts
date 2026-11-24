@@ -268,6 +268,34 @@ ALTER TABLE providers_new RENAME TO providers;
 ALTER TABLE provider_models_new RENAME TO provider_models;
 `;
 
+const SUBAGENTS_SQL = `
+CREATE TABLE subagents (
+  child_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  child_thread_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('explorer','reviewer','notetaker','worker','planner')),
+  provider_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed','cancelled')),
+  task TEXT NOT NULL,
+  summary TEXT,
+  budget_tokens INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_subagents_thread ON subagents(thread_id, created_at);
+CREATE INDEX idx_subagents_status ON subagents(status);
+`;
+
+/**
+ * Discovery results are cached per provider, so every model row carries the moment the
+ * set was refreshed. Rows seeded from provider config keep `NULL`, which reads as stale
+ * and lets the first `providers.models` call discover for real.
+ */
+const MODEL_REFRESH_SQL = `
+ALTER TABLE provider_models ADD COLUMN refreshed_at TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -288,5 +316,15 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 4,
     name: 'brain-edges',
     sql: BRAIN_EDGES_SQL,
+  },
+  {
+    version: 5,
+    name: 'subagents',
+    sql: SUBAGENTS_SQL,
+  },
+  {
+    version: 6,
+    name: 'provider-model-refresh',
+    sql: MODEL_REFRESH_SQL,
   },
 ];

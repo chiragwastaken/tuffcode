@@ -1,6 +1,9 @@
 import { Terminal, type TerminalHandle } from '@tuffcode/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RpcClient } from '../../rpc/client';
+import { TERMINAL_MENU, type ActionContext } from '../actions';
+import { useActionPorts } from '../menu/action-context';
+import { useContextMenuTrigger } from '../menu/Menu';
 import { subscribeTerminalData } from './terminal-data';
 import { TerminalError, terminalErrorMessage } from './TerminalError';
 import { TERMINAL_FONT_SIZE } from './terminal-size';
@@ -20,6 +23,7 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
   const handleRef = useRef<TerminalHandle | null>(null);
   const resizeTimerRef = useRef<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const ports = useActionPorts();
 
   useEffect(() => {
     return subscribeTerminalData(rpc, terminalId, (data) => handleRef.current?.write(data));
@@ -70,10 +74,21 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
     onReopen(terminalId);
   }, [onReopen, terminalId]);
 
+  const context: ActionContext = {
+    ...ports,
+    terminal: {
+      getSelection: () => handleRef.current?.getSelection() ?? '',
+      write: sendInput,
+      clear: () => handleRef.current?.clear(),
+    },
+  };
+  const menuProps = useContextMenuTrigger(TERMINAL_MENU, context, { label: 'Terminal actions' });
+
   return (
     <div
       hidden={!active}
       data-terminal-id={terminalId}
+      {...menuProps}
       className="absolute inset-0 focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset"
     >
       <Terminal

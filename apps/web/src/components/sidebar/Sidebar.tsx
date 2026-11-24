@@ -1,5 +1,5 @@
 import { useNavigate, useRouter } from '@tanstack/react-router';
-import type { Project } from '@tuffcode/contracts';
+import type { Project, Thread } from '@tuffcode/contracts';
 import { Button, EmptyState, IconButton, Input, Kbd } from '@tuffcode/ui';
 import { FolderPlus, Search, SearchX, X } from 'lucide-react';
 import {
@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { useAddProject } from '../../hooks/use-add-project';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { requestThreadDelete, requestThreadRename } from '../thread/thread-dialogs';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
 import { SidebarList, type SidebarItemActions } from './SidebarList';
 import {
@@ -115,6 +116,22 @@ export function Sidebar() {
     [setActiveThread],
   );
 
+  const handleOpenThread = useCallback(
+    (thread: Thread) => {
+      setActiveThread(thread.id);
+      void navigate({
+        to: '/project/$projectId/thread/$threadId',
+        params: { projectId: thread.projectId, threadId: thread.id },
+      });
+    },
+    [navigate, setActiveThread],
+  );
+
+  const projectPathFor = useCallback(
+    (projectId: string) => projects.find((project) => project.id === projectId)?.path,
+    [projects],
+  );
+
   const handleNewThread = useCallback(
     (projectId: string) => void createThread(projectId),
     [createThread],
@@ -137,7 +154,11 @@ export function Sidebar() {
     () => ({
       activeThreadId,
       creatingProjectId,
+      projectPathFor,
       onSelectThread: handleSelectThread,
+      onOpenThread: handleOpenThread,
+      onRenameThread: requestThreadRename,
+      onDeleteThread: requestThreadDelete,
       onToggleProject: handleToggleProject,
       onNewThread: handleNewThread,
       onRemoveProject: handleRemoveProject,
@@ -146,9 +167,11 @@ export function Sidebar() {
       activeThreadId,
       creatingProjectId,
       handleNewThread,
+      handleOpenThread,
       handleRemoveProject,
       handleSelectThread,
       handleToggleProject,
+      projectPathFor,
     ],
   );
 

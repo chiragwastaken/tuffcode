@@ -1,4 +1,12 @@
-import { Markdown, Spinner, cn, focusRing, type MarkdownTheme } from '@tuffcode/ui';
+import {
+  Button,
+  Markdown,
+  Spinner,
+  Textarea,
+  cn,
+  focusRing,
+  type MarkdownTheme,
+} from '@tuffcode/ui';
 import {
   Brain,
   Check,
@@ -16,7 +24,17 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { type NoticeItem, type ToolItem, type UserItem } from './grouping';
+import {
+  ASSISTANT_MESSAGE_MENU,
+  USER_MESSAGE_HOVER,
+  USER_MESSAGE_MENU,
+  runAction,
+  type ActionContext,
+} from '../actions';
+import { useActionPorts } from '../menu/action-context';
+import { useContextMenuTrigger } from '../menu/Menu';
+import { type AssistantItem, type NoticeItem, type ToolItem, type UserItem } from './grouping';
+import { MessageActions } from './message-actions';
 import {
   blockCopyText,
   elapsedMs,
@@ -45,46 +63,127 @@ function StreamingCaret() {
 
 export function UserBubble({
   item,
+  threadId,
   onRetry,
 }: {
   item: UserItem;
+  threadId: string;
   onRetry?: (item: UserItem) => void;
 }) {
+  const ports = useActionPorts();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.text);
   const failed = item.status === 'failed';
+
+  const context: ActionContext = {
+    ...ports,
+    threadId,
+    userMessage: item,
+    ui: {
+      editUserMessage: () => {
+        setDraft(item.text);
+        setEditing(true);
+      },
+    },
+  };
+  const menuProps = useContextMenuTrigger(USER_MESSAGE_MENU, context, {
+    label: 'Message actions',
+  });
+
+  function report(error: unknown): void {
+    context.notify.error(error instanceof Error ? error.message : 'That action failed.');
+  }
+
+  function retry(): void {
+    if (onRetry !== undefined) {
+      onRetry(item);
+      return;
+    }
+    void Promise.resolve(runAction('message.retry', context)).catch(report);
+  }
+
+  function submitEdit(): void {
+    const text = draft.trim();
+    if (text === '') return;
+    setEditing(false);
+    void Promise.resolve(runAction('message.edit', { ...context, input: { text } })).catch(report);
+  }
+
   return (
-    <div className="flex justify-end">
-      <div className="flex max-w-[85%] flex-col items-end gap-1">
-        <div
-          data-testid={failed ? 'user-message-failed' : 'user-message'}
-          data-status={item.status}
-          className={cn(
-            'rounded-2xl px-3.5 py-2 text-sm leading-6 break-words whitespace-pre-wrap text-foreground',
-            failed ? 'bg-error-surface/60' : 'bg-message-surface',
-            item.status === 'pending' && 'opacity-70',
-          )}
-        >
-          {item.text}
-          {item.attachments.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {item.attachments.map((attachment, index) => (
-                <span
-                  key={`${attachment.path}-${index}`}
-                  className="rounded-sm border border-border px-1.5 py-0.5 font-mono text-2xs text-muted-foreground"
-                  title={attachment.path}
-                >
-                  {attachment.name}
-                </span>
-              ))}
+    <div
+      className={cn(
+        'group relative flex justify-end rounded-xl',
+        'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+      )}
+      tabIndex={0}
+      data-testid="user-message-row"
+      {...menuProps}
+    >
+      <div className="relative flex max-w-[85%] flex-col items-end gap-1">
+        <MessageActions items={USER_MESSAGE_HOVER} context={context} />
+        {editing ? (
+          <form
+            className="flex w-full flex-col gap-2 rounded-2xl border border-border bg-surface-raised p-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitEdit();
+            }}
+          >
+            <Textarea
+              value={draft}
+              autoFocus
+              rows={2}
+              aria-label="Edit message"
+              className="min-h-16 text-sm"
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                setEditing(false);
+              }}
+            />
+            <div className="flex justify-end gap-1.5">
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" type="submit" variant="primary">
+                Resend
+              </Button>
             </div>
-          ) : null}
-        </div>
+          </form>
+        ) : (
+          <div
+            data-testid={failed ? 'user-message-failed' : 'user-message'}
+            data-status={item.status}
+            className={cn(
+              'rounded-2xl px-3.5 py-2 text-sm leading-6 break-words whitespace-pre-wrap text-foreground',
+              failed ? 'bg-error-surface/60' : 'bg-message-surface',
+              item.status === 'pending' && 'opacity-70',
+            )}
+          >
+            {item.text}
+            {item.attachments.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {item.attachments.map((attachment, index) => (
+                  <span
+                    key={`${attachment.path}-${index}`}
+                    className="rounded-sm border border-border px-1.5 py-0.5 font-mono text-2xs text-muted-foreground"
+                    title={attachment.path}
+                  >
+                    {attachment.name}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
         {failed ? (
           <span className="flex items-center gap-1.5 text-2xs text-error-foreground">
             <span>Not sent.</span>
             <button
               type="button"
               data-testid="user-message-retry"
-              onClick={() => onRetry?.(item)}
+              onClick={retry}
               className={cn(
                 'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 font-medium hover:bg-accent',
                 focusRing,
@@ -121,18 +220,37 @@ export function ProseText({ block, theme }: { block: ProseBlock; theme: Markdown
 export interface FinalAnswerProps {
   block: FinalBlock;
   theme: MarkdownTheme;
+  threadId: string;
   onRetry?: (item: UserItem) => void;
   onEdit?: (item: UserItem, text: string) => void;
 }
 
 /** The closing answer, with copy, retry and edit actions on hover. */
-export function FinalAnswer({ block, theme, onRetry, onEdit }: FinalAnswerProps) {
+export function FinalAnswer({ block, theme, threadId, onRetry, onEdit }: FinalAnswerProps) {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const ports = useActionPorts();
 
   const prompt = block.prompt;
   const showActions = prompt !== null && !block.streaming && block.text.trim().length > 0;
+  const assistant: AssistantItem = {
+    kind: 'assistant',
+    key: block.key,
+    turnId: block.turnId,
+    text: block.text,
+    streaming: block.streaming,
+  };
+  const context: ActionContext = {
+    ...ports,
+    threadId,
+    assistantMessage: assistant,
+    retryPrompt:
+      prompt === null ? undefined : { text: prompt.text, attachments: prompt.attachments },
+  };
+  const menuProps = useContextMenuTrigger(ASSISTANT_MESSAGE_MENU, context, {
+    label: 'Message actions',
+  });
 
   async function copy(): Promise<void> {
     try {
@@ -159,7 +277,12 @@ export function FinalAnswer({ block, theme, onRetry, onEdit }: FinalAnswerProps)
   }
 
   return (
-    <div className="group/final flex flex-col gap-1">
+    <div
+      className="group/final flex flex-col gap-1 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      tabIndex={0}
+      data-testid="assistant-message-row"
+      {...menuProps}
+    >
       <div
         data-testid="assistant-message"
         className="max-w-[var(--chat-content-max-width)] px-1 text-sm leading-6 text-foreground"
@@ -275,7 +398,11 @@ export function FinalAnswer({ block, theme, onRetry, onEdit }: FinalAnswerProps)
 export function ReasoningRow({ block }: { block: ReasoningBlock }) {
   const [open, setOpen] = useState(false);
   const duration = formatDuration(block.durationMs);
-  const label = block.streaming ? 'Thinking' : duration.length > 0 ? `Thought for ${duration}` : 'Thought';
+  const label = block.streaming
+    ? 'Thinking'
+    : duration.length > 0
+      ? `Thought for ${duration}`
+      : 'Thought';
 
   return (
     <div data-testid="reasoning-block" className="rounded-md">
@@ -313,7 +440,11 @@ function ToolStatusIcon({ tool }: { tool: ToolItem }) {
   if (tool.running) return <Spinner size="sm" label="Tool running" />;
   if (tool.isError) {
     return (
-      <X aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0 text-error-foreground" />
+      <X
+        aria-hidden="true"
+        strokeWidth={1.75}
+        className="size-3.5 shrink-0 text-error-foreground"
+      />
     );
   }
   return (
@@ -362,9 +493,7 @@ function DiffBody({ lines, path }: { lines: ToolDiffLine[]; path: string }) {
             {line.text}
           </div>
         ))}
-        {hidden > 0 ? (
-          <div className="px-2 text-muted-foreground">{hidden} more lines</div>
-        ) : null}
+        {hidden > 0 ? <div className="px-2 text-muted-foreground">{hidden} more lines</div> : null}
       </div>
     </div>
   );
@@ -433,7 +562,9 @@ function ToolBody({ tool }: { tool: ToolItem }) {
     <div className="border-t border-border/60 px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-2xs tracking-wide text-muted-foreground uppercase">
-          {tail.hidden > 0 ? `Output, last ${tail.lines.length} of ${tail.hidden + tail.lines.length} lines` : 'Output'}
+          {tail.hidden > 0
+            ? `Output, last ${tail.lines.length} of ${tail.hidden + tail.lines.length} lines`
+            : 'Output'}
         </p>
         <CopyOutputButton tool={tool} />
       </div>
@@ -474,7 +605,11 @@ export function ToolRow({ tool }: { tool: ToolItem }) {
         )}
       >
         <ToolStatusIcon tool={tool} />
-        <Icon aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0 text-muted-foreground" />
+        <Icon
+          aria-hidden="true"
+          strokeWidth={1.75}
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
         <span
           className={cn(
             'shrink-0 text-xs font-medium',

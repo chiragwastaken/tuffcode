@@ -9,6 +9,7 @@ import {
   Textarea,
   cn,
   type DiffLineComment,
+  type DiffLineContext,
 } from '@tuffcode/ui';
 import {
   FileDiff,
@@ -20,6 +21,9 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
+import { DIFF_LINE_MENU, type ActionContext } from '../actions';
+import { useActionPorts } from '../menu/action-context';
+import { useMenu } from '../menu/Menu';
 import { CommentList } from './CommentList';
 import { FileTree } from './FileTree';
 import {
@@ -38,6 +42,8 @@ import {
 
 export interface DiffPanelProps {
   threadId: string;
+  /** Switches to the terminal tab and cds to the file's directory. */
+  onOpenInTerminal?: (path: string) => void;
 }
 
 interface CommentAnchor {
@@ -59,12 +65,14 @@ function noPreviewDescription(file: DiffFile): string {
  * file through the design system diff viewer, inline comments, and a checkpoint
  * selector that rebases the diff.
  */
-export function DiffPanel({ threadId }: DiffPanelProps) {
-  return <DiffPanelBody key={threadId} threadId={threadId} />;
+export function DiffPanel({ threadId, onOpenInTerminal }: DiffPanelProps) {
+  return <DiffPanelBody key={threadId} threadId={threadId} onOpenInTerminal={onOpenInTerminal} />;
 }
 
-function DiffPanelBody({ threadId }: DiffPanelProps) {
+function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
   const rpc = useRpc();
+  const menu = useMenu();
+  const ports = useActionPorts();
 
   const [checkpointId, setCheckpointId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -197,6 +205,20 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
     setDraft({ path: comment.path, line: comment.line, side: comment.side });
     setDraftBody('');
     setDraftError(null);
+  }
+
+  function handleLineMenu(line: DiffLineContext, point: { x: number; y: number }): void {
+    const context: ActionContext = {
+      ...ports,
+      diffLine: line,
+      ui: { addDiffComment: handleLineComment },
+    };
+    menu.open({
+      point,
+      items: DIFF_LINE_MENU,
+      context,
+      label: `Line ${line.line} actions`,
+    });
   }
 
   async function handleAddComment(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -388,6 +410,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
             directories={directories}
             selectedPath={selectedFile?.path ?? null}
             onSelect={setSelectedPath}
+            onOpenInTerminal={onOpenInTerminal}
           />
         ) : null}
 
@@ -438,6 +461,7 @@ function DiffPanelBody({ threadId }: DiffPanelProps) {
                 overflow="scroll"
                 files={[{ path: selectedFile.path, patch: selectedFile.patch }]}
                 onLineComment={handleLineComment}
+                onLineContextMenu={handleLineMenu}
               />
             </div>
           ) : selectedFile ? (

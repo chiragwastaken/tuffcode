@@ -1,4 +1,4 @@
-import type { ApprovalChoice, PermissionMode, ProviderKind } from './entities.js';
+import type { ApprovalChoice, PermissionMode, ProviderKind, SubagentType } from './entities.js';
 import type { AdapterEvent } from './events.js';
 
 export interface TurnContext {
@@ -44,6 +44,25 @@ export interface AdapterDeps {
   logger: AdapterLogger;
   resolveCommand(name: string): Promise<string | null>;
   env: Record<string, string | undefined>;
+  /**
+   * Spawns a typed subagent for the parent turn that owns `cwd`. The harness passes
+   * the turn cwd because the adapter never sees the thread id; the server resolves
+   * the parent thread from the worktree and rejects nested or read-only turns.
+   */
+  spawnSubagent?(request: SubagentToolRequest): Promise<SubagentToolResult>;
+}
+
+export interface SubagentToolRequest {
+  /** Absolute worktree of the parent turn. */
+  cwd: string;
+  type: SubagentType;
+  task: string;
+  model?: string;
+}
+
+export interface SubagentToolResult {
+  childId: string;
+  status: string;
 }
 
 export interface ProviderConfig {

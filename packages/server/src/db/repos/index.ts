@@ -10,6 +10,7 @@ import { createMessagesRepo, type MessagesRepo } from './messages.js';
 import { createProjectsRepo, type ProjectsRepo } from './projects.js';
 import { createProvidersRepo, type ProvidersRepo } from './providers.js';
 import { createSettingsRepo, type SettingsRepo } from './settings.js';
+import { createSubagentsRepo, type SubagentsRepo } from './subagents.js';
 import { createThreadsRepo, type ThreadsRepo } from './threads.js';
 import { createTurnsRepo, type TurnsRepo } from './turns.js';
 
@@ -25,6 +26,7 @@ export interface Repos {
   brain: BrainRepo;
   council: CouncilRepo;
   turns: TurnsRepo;
+  subagents: SubagentsRepo;
   settings: SettingsRepo;
   /** Runs `fn` in a transaction on the shared connection; nesting is rejected. */
   transaction<T>(fn: () => T): T;
@@ -44,6 +46,7 @@ export function createRepos(db: DatabaseSync): Repos {
     brain: createBrainRepo(db),
     council: createCouncilRepo(db),
     turns: createTurnsRepo(db),
+    subagents: createSubagentsRepo(db),
     settings: createSettingsRepo(db),
     transaction: (fn) => transaction(db, fn),
   };
@@ -77,6 +80,13 @@ export type {
   UpsertProviderInput,
 } from './providers.js';
 export type { SettingsRepo } from './settings.js';
+export type {
+  CreateSubagentInput,
+  FinishSubagentInput,
+  SubagentRecord,
+  SubagentsRepo,
+} from './subagents.js';
+export { toSubagentView } from './subagents.js';
 export type { CreateThreadInput, ThreadsRepo, UpdateThreadInput } from './threads.js';
 export type { CreateTurnInput, TurnRecord, TurnsRepo, TurnStatus } from './turns.js';
 export { toFtsQuery } from './brain.js';

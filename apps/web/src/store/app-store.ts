@@ -38,6 +38,7 @@ export interface AppState {
   removeThread(threadId: string): void;
   appendEvent(threadId: string, event: ThreadEventRow): void;
   setMessages(threadId: string, messages: Message[]): void;
+  removeMessage(threadId: string, messageId: string): void;
   setSettings(settings: Settings): void;
   upsertProvider(provider: ProviderView): void;
   setActiveThread(threadId: string | null): void;
@@ -164,6 +165,15 @@ export function createAppStore() {
       set((state) => ({
         messages: { ...state.messages, [threadId]: messages },
       })),
+
+    removeMessage: (threadId, messageId) =>
+      set((state) => {
+        const list = state.messages[threadId];
+        if (list === undefined) return {};
+        const next = list.filter((message) => message.id !== messageId);
+        if (next.length === list.length) return {};
+        return { messages: { ...state.messages, [threadId]: next } };
+      }),
 
     setSettings: (settings) => set({ settings }),
 

@@ -50,7 +50,13 @@ export interface ProvidersRepo {
   upsert(input: UpsertProviderInput): ProviderView;
   remove(id: string): void;
   listModels(providerId: string): Model[];
-  replaceModels(providerId: string, models: ReplaceModelInput[]): Model[];
+  /** When the stored model set was last refreshed; `null` means seeded from config. */
+  modelsRefreshedAt(providerId: string): string | null;
+  replaceModels(
+    providerId: string,
+    models: ReplaceModelInput[],
+    refreshedAt?: string | null,
+  ): Model[];
 }
 
 const PROVIDER_COLUMNS = 'id, kind, label, config, secret_ref, enabled, created_at, updated_at';
@@ -98,7 +104,10 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
   );
   const deleteModels = db.prepare('DELETE FROM provider_models WHERE provider_id = ?');
   const insertModel = db.prepare(
-    'INSERT INTO provider_models (provider_id, model_id, label, context_window, is_default) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO provider_models (provider_id, model_id, label, context_window, is_default, refreshed_at) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const selectRefreshedAt = db.prepare(
+    'SELECT MAX(refreshed_at) AS refreshed_at FROM provider_models WHERE provider_id = ?',
   );
 
   function get(id: string): ProviderRecord | undefined {
@@ -159,7 +168,11 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
       removeRow.run(id);
     },
     listModels,
-    replaceModels: (providerId, models) =>
+    modelsRefreshedAt: (providerId) => {
+      const row = selectRefreshedAt.get(providerId);
+      return row === undefined ? null : nullableText(asRow(row), 'refreshed_at');
+    },
+    replaceModels: (providerId, models, refreshedAt = null) =>
       transaction(db, () => {
         deleteModels.run(providerId);
         for (const model of models) {
@@ -169,6 +182,7 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
             model.label,
             model.contextWindow,
             model.isDefault ? 1 : 0,
+            refreshedAt,
           );
         }
         return listModels(providerId);

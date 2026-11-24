@@ -13,7 +13,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
 import { InspectorPanel } from './inspector/InspectorPanel';
+import { CommandPalette } from './menu/CommandPalette';
+import { MenuProvider } from './menu/Menu';
 import { Sidebar } from './sidebar/Sidebar';
+import { ThreadActionDialogs } from './thread/thread-action-dialogs';
 import { shellVisibility, windowControlsInset } from './shell-layout';
 
 const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> = {
@@ -148,182 +151,186 @@ export function AppShell() {
   }, [sheetOpen]);
 
   return (
-    <div
-      data-testid="app-shell"
-      className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
-    >
-      <header
-        inert={sheetOpen}
-        className="drag-region flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
-        style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1.5rem)' }}
+    <MenuProvider>
+      <div
+        data-testid="app-shell"
+        className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {visibility.backToWorkspace ? (
-            <Link
-              to="/"
-              aria-label="Back to workspace"
-              title="Back to workspace"
-              className={cn(
-                buttonVariants({ variant: 'ghost', size: 'icon-sm' }),
-                'no-drag shrink-0',
-              )}
-            >
-              <ArrowLeft strokeWidth={1.75} />
-            </Link>
-          ) : (
-            <IconButton
-              icon={PanelLeft}
-              label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-              size="sm"
-              aria-pressed={sidebarOpen}
-              className="no-drag shrink-0"
-              onClick={() => setSidebarOpen((open) => !open)}
-            />
-          )}
+        <header
+          inert={sheetOpen}
+          className="drag-region flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
+          style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1.5rem)' }}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {visibility.backToWorkspace ? (
+              <Link
+                to="/"
+                aria-label="Back to workspace"
+                title="Back to workspace"
+                className={cn(
+                  buttonVariants({ variant: 'ghost', size: 'icon-sm' }),
+                  'no-drag shrink-0',
+                )}
+              >
+                <ArrowLeft strokeWidth={1.75} />
+              </Link>
+            ) : (
+              <IconButton
+                icon={PanelLeft}
+                label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                size="sm"
+                aria-pressed={sidebarOpen}
+                className="no-drag shrink-0"
+                onClick={() => setSidebarOpen((open) => !open)}
+              />
+            )}
 
-          <span className="shrink-0 text-sm font-semibold tracking-tight">Tuffcode</span>
+            <span className="shrink-0 text-sm font-semibold tracking-tight">Tuffcode</span>
 
-          {visibility.backToWorkspace ? (
-            <span className="min-w-0 truncate text-xs text-muted-foreground">Settings</span>
-          ) : null}
-        </div>
+            {visibility.backToWorkspace ? (
+              <span className="min-w-0 truncate text-xs text-muted-foreground">Settings</span>
+            ) : null}
+          </div>
 
-        <div className="no-drag flex shrink-0 items-center gap-1">
-          {showInspectorToggle ? (
-            <IconButton
-              icon={PanelRight}
-              label={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
-              size="sm"
-              aria-pressed={inspectorOpen}
-              onClick={() => setInspectorOpen((open) => !open)}
-            />
-          ) : null}
-
-          <PopoverRoot>
-            <PopoverTrigger
-              data-testid="connection-status"
-              data-status={connection}
-              title={meta.label}
-              aria-label={`Connection: ${meta.label}`}
-              className={cn(
-                buttonVariants({ variant: 'ghost', size: 'sm' }),
-                'gap-1.5 px-2 text-2xs',
-              )}
-            >
-              <span aria-hidden="true" className={cn('size-2 rounded-full', meta.dot)} />
-              <span className="hidden sm:inline">{meta.label}</span>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-64 p-3">
-              <div className="flex flex-col gap-2" data-testid="connection-popover">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-2xs text-muted-foreground">Status</span>
-                  <span className="flex items-center gap-1.5 text-xs text-foreground">
-                    <span aria-hidden="true" className={cn('size-2 rounded-full', meta.dot)} />
-                    {meta.label}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-2xs text-muted-foreground">Port</span>
-                  <span
-                    className="text-xs tabular-nums text-foreground"
-                    data-testid="connection-port"
-                  >
-                    {bootstrap?.port ?? 'unknown'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-2xs text-muted-foreground">Version</span>
-                  <span
-                    className="text-xs tabular-nums text-foreground"
-                    data-testid="connection-version"
-                  >
-                    {bootstrap?.version ?? 'unknown'}
-                  </span>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-1 w-full"
-                  data-testid="connection-reconnect"
-                  onClick={() => window.location.reload()}
-                >
-                  Reconnect
-                </Button>
-              </div>
-            </PopoverContent>
-          </PopoverRoot>
-
-          {visibility.backToWorkspace ? null : (
-            <Link
-              to="/settings/{-$section}"
-              params={{}}
-              aria-label="Settings"
-              title="Settings"
-              className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
-            >
-              <Settings strokeWidth={1.75} />
-            </Link>
-          )}
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {visibility.sidebar && sidebarOpen ? (
-          <aside
-            aria-label="Projects and threads"
-            inert={sheetOpen}
-            className="flex w-[var(--sidebar-width)] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
-          >
-            <Sidebar />
-          </aside>
-        ) : null}
-
-        <main inert={sheetOpen} className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <Outlet />
-        </main>
-
-        {hasThread ? (
-          <>
-            {inspectorVisible ? (
-              <button
-                type="button"
-                aria-label="Close inspector"
-                data-testid="inspector-backdrop"
-                className="fixed inset-0 z-30 bg-black/40 xl:hidden"
-                onClick={() => setInspectorOpen(false)}
+          <div className="no-drag flex shrink-0 items-center gap-1">
+            {showInspectorToggle ? (
+              <IconButton
+                icon={PanelRight}
+                label={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
+                size="sm"
+                aria-pressed={inspectorOpen}
+                onClick={() => setInspectorOpen((open) => !open)}
               />
             ) : null}
+
+            <PopoverRoot>
+              <PopoverTrigger
+                data-testid="connection-status"
+                data-status={connection}
+                title={meta.label}
+                aria-label={`Connection: ${meta.label}`}
+                className={cn(
+                  buttonVariants({ variant: 'ghost', size: 'sm' }),
+                  'gap-1.5 px-2 text-2xs',
+                )}
+              >
+                <span aria-hidden="true" className={cn('size-2 rounded-full', meta.dot)} />
+                <span className="hidden sm:inline">{meta.label}</span>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 p-3">
+                <div className="flex flex-col gap-2" data-testid="connection-popover">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-2xs text-muted-foreground">Status</span>
+                    <span className="flex items-center gap-1.5 text-xs text-foreground">
+                      <span aria-hidden="true" className={cn('size-2 rounded-full', meta.dot)} />
+                      {meta.label}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-2xs text-muted-foreground">Port</span>
+                    <span
+                      className="text-xs tabular-nums text-foreground"
+                      data-testid="connection-port"
+                    >
+                      {bootstrap?.port ?? 'unknown'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-2xs text-muted-foreground">Version</span>
+                    <span
+                      className="text-xs tabular-nums text-foreground"
+                      data-testid="connection-version"
+                    >
+                      {bootstrap?.version ?? 'unknown'}
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-1 w-full"
+                    data-testid="connection-reconnect"
+                    onClick={() => window.location.reload()}
+                  >
+                    Reconnect
+                  </Button>
+                </div>
+              </PopoverContent>
+            </PopoverRoot>
+
+            {visibility.backToWorkspace ? null : (
+              <Link
+                to="/settings/{-$section}"
+                params={{}}
+                aria-label="Settings"
+                title="Settings"
+                className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })}
+              >
+                <Settings strokeWidth={1.75} />
+              </Link>
+            )}
+          </div>
+        </header>
+
+        <div className="flex min-h-0 flex-1">
+          {visibility.sidebar && sidebarOpen ? (
             <aside
-              ref={sheetRef}
-              aria-label="Inspector"
-              role={sheetOpen ? 'dialog' : undefined}
-              aria-modal={sheetOpen ? true : undefined}
-              tabIndex={-1}
-              data-panel=""
-              data-slot="right-panel"
-              data-state={inspectorVisible ? 'open' : 'closed'}
-              className={cn(
-                'z-40 min-h-0 flex-col border-border bg-background outline-none',
-                // Below the topbar: its top-right corner is reserved for the native
-                // caption buttons, so the sheet's own header and collapse control
-                // must stay under it. The backdrop still covers the whole window.
-                'max-xl:fixed max-xl:top-[var(--topbar-height)] max-xl:right-0 max-xl:bottom-0',
-                'max-xl:w-[min(26rem,92vw)] max-xl:border-l max-xl:shadow-2xl',
-                'xl:static xl:w-[var(--right-panel-width)] xl:max-w-[var(--right-panel-max-width)] xl:shrink-0 xl:border-l',
-                // Kept mounted while hidden so the terminal and tab choice survive.
-                inspectorVisible ? 'flex' : 'hidden',
-              )}
+              aria-label="Projects and threads"
+              inert={sheetOpen}
+              className="flex w-[var(--sidebar-width)] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
             >
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <InspectorPanel
-                  threadId={inspectorThreadId}
-                  onCollapse={() => setInspectorOpen(false)}
-                />
-              </div>
+              <Sidebar />
             </aside>
-          </>
-        ) : null}
+          ) : null}
+
+          <main inert={sheetOpen} className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <Outlet />
+          </main>
+
+          {hasThread ? (
+            <>
+              {inspectorVisible ? (
+                <button
+                  type="button"
+                  aria-label="Close inspector"
+                  data-testid="inspector-backdrop"
+                  className="fixed inset-0 z-30 bg-black/40 xl:hidden"
+                  onClick={() => setInspectorOpen(false)}
+                />
+              ) : null}
+              <aside
+                ref={sheetRef}
+                aria-label="Inspector"
+                role={sheetOpen ? 'dialog' : undefined}
+                aria-modal={sheetOpen ? true : undefined}
+                tabIndex={-1}
+                data-panel=""
+                data-slot="right-panel"
+                data-state={inspectorVisible ? 'open' : 'closed'}
+                className={cn(
+                  'z-40 min-h-0 flex-col border-border bg-background outline-none',
+                  // Below the topbar: its top-right corner is reserved for the native
+                  // caption buttons, so the sheet's own header and collapse control
+                  // must stay under it. The backdrop still covers the whole window.
+                  'max-xl:fixed max-xl:top-[var(--topbar-height)] max-xl:right-0 max-xl:bottom-0',
+                  'max-xl:w-[min(26rem,92vw)] max-xl:border-l max-xl:shadow-2xl',
+                  'xl:static xl:w-[var(--right-panel-width)] xl:max-w-[var(--right-panel-max-width)] xl:shrink-0 xl:border-l',
+                  // Kept mounted while hidden so the terminal and tab choice survive.
+                  inspectorVisible ? 'flex' : 'hidden',
+                )}
+              >
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <InspectorPanel
+                    threadId={inspectorThreadId}
+                    onCollapse={() => setInspectorOpen(false)}
+                  />
+                </div>
+              </aside>
+            </>
+          ) : null}
+        </div>
       </div>
-    </div>
+      <CommandPalette />
+      <ThreadActionDialogs />
+    </MenuProvider>
   );
 }

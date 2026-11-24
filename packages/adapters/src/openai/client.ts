@@ -3,7 +3,7 @@ import {
   type AdapterLogger,
   type ProviderConfig,
 } from '@tuffcode/contracts';
-import type { ToolSchema } from '@tuffcode/prompt';
+import type { HarnessToolSchema } from '../tool-policy.js';
 import { allowedToolSchemas } from '../tool-policy.js';
 
 export interface OpenAIToolCall {
@@ -24,6 +24,8 @@ export interface ChatRequestBody {
   messages: ChatMessage[];
   /** Settings allowlist for this turn; unset offers every harness tool. */
   toolAllowlist?: string[];
+  /** Offer the `subagent` delegation tool for this turn. */
+  subagentTool?: boolean;
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -99,8 +101,11 @@ export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
   };
 }
 
-export function toOpenAITools(allowlist?: readonly string[]): unknown[] {
-  return allowedToolSchemas(allowlist).map((schema: ToolSchema) => ({
+export function toOpenAITools(
+  allowlist?: readonly string[],
+  options: { subagent?: boolean } = {},
+): unknown[] {
+  return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
     type: 'function',
     function: {
       name: schema.name,
@@ -111,7 +116,7 @@ export function toOpenAITools(allowlist?: readonly string[]): unknown[] {
 }
 
 function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record<string, unknown> {
-  const tools = toOpenAITools(request.toolAllowlist);
+  const tools = toOpenAITools(request.toolAllowlist, { subagent: request.subagentTool === true });
   return {
     model: request.model,
     messages: request.messages,

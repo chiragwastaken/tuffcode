@@ -25,6 +25,8 @@ import { createRpcHandlers, type RpcHandlers } from './rpc.js';
 import { createRunner, type Runner } from './runner/runner.js';
 import { createSecretBridge, type SecretPort, type Secrets } from './secrets/bridge.js';
 import { createSkillHandlers } from './skills/handlers.js';
+import { createSubagents } from './subagents/service.js';
+import type { Subagents } from './subagents/types.js';
 import { attachWebSocket, type AttachedWebSocket } from './ws.js';
 
 export interface ServerJson {
@@ -113,7 +115,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   });
 
   const providers = createProvidersService({ repos, bus, secrets, resolveCommand });
-  const adapterDeps = createAdapterDeps({ logger: adapterLogger, resolveCommand });
+  // The runner needs adapter deps and the subagent service needs the runner, so the
+  // harness hook resolves the service through a holder assigned right after creation.
+  let subagentsRef: Subagents | undefined;
+  const adapterDeps = createAdapterDeps({
+    logger: adapterLogger,
+    resolveCommand,
+    spawnSubagent: async (request) => {
+      if (subagentsRef === undefined) throw new Error('subagent service is not ready');
+      return subagentsRef.spawnFromTool(request);
+    },
+  });
   const runner = createRunner({
     repos,
     bus,
@@ -125,6 +137,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   });
   runner.recoverOrphanedRuns();
   const council = createCouncil({ repos, bus, runner, logger });
+  const subagents = createSubagents({
+    repos,
+    bus,
+    runner,
+    logger,
+    settings: () => repos.settings.get(),
+  });
+  subagentsRef = subagents;
+  subagents.recoverOrphaned();
 
   const diagnostics: DiagnosticsInput = {
     version,
@@ -160,6 +181,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     commands,
     diagnostics,
     council,
+    subagents,
     featureHandlers: [
       createTerminalHandlers(terminals),
       ...(options.featureHandlers ?? []),
@@ -172,6 +194,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (closed) return;
     closed = true;
     await council.dispose();
+    await subagents.dispose();
     await runner.disposeAll();
     secrets.dispose();
     await terminals.disposeAll();
