@@ -9,8 +9,8 @@ import { EmptyState } from '@tuffcode/ui';
 import { useEffect } from 'react';
 import { AppShell } from './components/AppShell';
 import { EmptyWorkspace } from './components/EmptyWorkspace';
+import { PaneWorkspace } from './components/panes/PaneWorkspace';
 import { resolveRootView } from './components/shell-layout';
-import { ThreadView } from './components/thread/ThreadView';
 import { SettingsPage } from './routes/settings/settings-page';
 import { useAppStore } from './store/app-store';
 
@@ -56,7 +56,9 @@ function ThreadRoute() {
     setActiveThread(threadId);
   }, [setActiveThread, threadId]);
 
-  return <ThreadView threadId={threadId} thread={thread} projectName={projectName} />;
+  return (
+    <PaneWorkspace key={threadId} threadId={threadId} thread={thread} projectName={projectName} />
+  );
 }
 
 function SettingsView() {

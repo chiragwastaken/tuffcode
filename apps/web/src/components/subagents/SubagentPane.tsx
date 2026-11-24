@@ -29,13 +29,22 @@ export interface SubagentPaneProps {
   theme: MarkdownTheme;
   onSelect(childId: string): void;
   onClose(): void;
+  /** `docked` is the thread row's own column; `pane` fills a split pane. */
+  variant?: 'docked' | 'pane';
 }
 
 /**
  * Right-hand child pane: one tab per child, the selected child's timeline, and a
  * 1px connector back to that child's card in the parent timeline.
  */
-export function SubagentPane({ threadId, stageRef, theme, onSelect, onClose }: SubagentPaneProps) {
+export function SubagentPane({
+  threadId,
+  stageRef,
+  theme,
+  onSelect,
+  onClose,
+  variant = 'docked',
+}: SubagentPaneProps) {
   const rpc = useRpc();
   const subagents = useAppStore(
     useShallow((state) => subagentsOfThread(state.subagents, threadId)),
@@ -89,11 +98,16 @@ export function SubagentPane({ threadId, stageRef, theme, onSelect, onClose }: S
       data-pane-width={SUBAGENT_PANE_WIDTH_PERCENT}
       style={{ '--subagent-pane-width': `${SUBAGENT_PANE_WIDTH_PERCENT}%` } as CSSProperties}
       className={cn(
-        'relative flex min-h-0 w-[var(--subagent-pane-width)] min-w-[18rem] max-w-[36rem] shrink-0 flex-col border-l border-border bg-background',
-        // Below ~56rem of thread row the pane would leave the timeline and composer
-        // unusable, so it overlays the row instead of squeezing it (the inspector
-        // already owns a column on wide windows).
-        '@max-[56rem]:absolute @max-[56rem]:top-0 @max-[56rem]:right-0 @max-[56rem]:bottom-[var(--subagent-dock-height,0px)] @max-[56rem]:z-30 @max-[56rem]:w-[min(26rem,92%)] @max-[56rem]:border-l-primary/30 @max-[56rem]:shadow-2xl',
+        'relative flex min-h-0 flex-col bg-background',
+        variant === 'pane'
+          ? 'h-full w-full'
+          : cn(
+              'w-[var(--subagent-pane-width)] min-w-[18rem] max-w-[36rem] shrink-0 border-l border-border',
+              // Below ~56rem of thread row the pane would leave the timeline and composer
+              // unusable, so it overlays the row instead of squeezing it (the inspector
+              // already owns a column on wide windows).
+              '@max-[56rem]:absolute @max-[56rem]:top-0 @max-[56rem]:right-0 @max-[56rem]:bottom-[var(--subagent-dock-height,0px)] @max-[56rem]:z-30 @max-[56rem]:w-[min(26rem,92%)] @max-[56rem]:border-l-primary/30 @max-[56rem]:shadow-2xl',
+            ),
       )}
     >
       {geometry ? (
