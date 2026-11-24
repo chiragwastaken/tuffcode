@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router';
-import type { Thread, ThreadEventRow } from '@tuffcode/contracts';
+import type { ExecutionMode, Thread, ThreadEventRow } from '@tuffcode/contracts';
 import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
 import { FolderOpen, GitBranch, MessagesSquare } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
@@ -21,13 +21,22 @@ import {
   useSupersededTurns,
 } from './local-messages';
 import { StatusChip } from './status-chip';
+import { SegmentedControl, type SegmentedOption } from './SegmentedControl';
 import { Timeline } from './Timeline';
 import { useThreadStream } from './use-thread-stream';
 
 const EMPTY_EVENTS: readonly ThreadEventRow[] = [];
 
+const THREAD_MODES: readonly SegmentedOption<'work' | 'council'>[] = [
+  { value: 'work', label: 'Work' },
+  { value: 'council', label: 'Council' },
+];
+
 function focusComposer(): void {
-  document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus();
+  const input =
+    document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]') ??
+    document.querySelector<HTMLTextAreaElement>('[data-testid="council-goal-input"]');
+  input?.focus();
 }
 
 export interface ThreadViewProps {
@@ -42,10 +51,12 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   const rpc = useRpc();
   const events = useAppStore((state) => state.events[threadId]);
   const messages = useAppStore((state) => state.messages[threadId]);
+  const upsertThread = useAppStore((state) => state.upsertThread);
   const userMessages = useLocalUserMessages(threadId);
   const approvals = useApprovalDecisions();
   const supersededTurns = useSupersededTurns(threadId);
   const theme = useAppStore((state) => state.settings?.theme ?? 'dark');
+  const [switchingMode, setSwitchingMode] = useState(false);
 
   const items = useMemo(
     () =>
@@ -125,43 +136,74 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
 
   const title = thread?.title ?? threadId;
 
+  async function setThreadMode(mode: ExecutionMode): Promise<void> {
+    if (!thread || thread.executionMode === mode) return;
+    setSwitchingMode(true);
+    try {
+      upsertThread(await rpc.request('threads.update', { id: thread.id, executionMode: mode }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not switch the thread mode.');
+    } finally {
+      setSwitchingMode(false);
+    }
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="sticky top-0 z-20 flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
-        {projectName ? (
-          <span className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
-            <FolderOpen aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
-            <span className="max-w-40 truncate" title={projectName}>
-              {projectName}
+      <header className="sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-2">
+          {projectName ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
+              <FolderOpen aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+              <span className="max-w-40 truncate" title={projectName}>
+                {projectName}
+              </span>
             </span>
-          </span>
-        ) : null}
-        {projectName ? (
-          <span aria-hidden="true" className="text-muted-foreground/40">
-            /
-          </span>
-        ) : null}
-        <span
-          data-testid="thread-title"
-          className="min-w-0 truncate text-sm font-medium"
-          title={title}
-        >
-          {title}
-        </span>
-        {thread ? (
-          <span data-testid="thread-status" data-status={thread.status} className="inline-flex">
-            <StatusChip status={thread.status} />
-          </span>
-        ) : null}
-        {thread?.branch ? (
+          ) : null}
+          {projectName ? (
+            <span aria-hidden="true" className="text-muted-foreground/40">
+              /
+            </span>
+          ) : null}
           <span
-            className="ml-auto flex min-w-0 items-center gap-1 font-mono text-2xs text-muted-foreground"
-            title={thread.branch}
+            data-testid="thread-title"
+            className="min-w-0 truncate text-sm font-medium"
+            title={title}
           >
-            <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
-            <span className="truncate">{thread.branch}</span>
+            {title}
           </span>
-        ) : null}
+          {thread ? (
+            <span data-testid="thread-status" data-status={thread.status} className="inline-flex">
+              <StatusChip status={thread.status} />
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex justify-center">
+          {thread ? (
+            <SegmentedControl
+              ariaLabel="Thread mode"
+              testId="thread-mode-switch"
+              size="md"
+              value={thread.executionMode === 'council' ? 'council' : 'work'}
+              options={THREAD_MODES}
+              disabled={switchingMode}
+              onValueChange={(mode) => void setThreadMode(mode)}
+            />
+          ) : null}
+        </div>
+
+        <div className="flex min-w-0 items-center justify-end gap-2">
+          {thread?.branch ? (
+            <span
+              className="flex min-w-0 items-center gap-1 font-mono text-2xs text-muted-foreground"
+              title={thread.branch}
+            >
+              <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+              <span className="truncate">{thread.branch}</span>
+            </span>
+          ) : null}
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
