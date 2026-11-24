@@ -1,12 +1,15 @@
-import { existsSync } from 'node:fs';
 import type { Model, ProviderKind, ProviderView } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
 import type { ReplaceModelInput, Repos } from '../db/repos/index.js';
-import { notFound, RpcError } from '../errors.js';
+import { badRequest, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
 import type { Secrets } from '../secrets/bridge.js';
 import type { ResolveCommand } from '../adapters/resolveCommand.js';
-import { validateProviderConfig } from './config.js';
+import { configuredCommand, resolveCliPath, runCommand, type RunCommand } from './command.js';
+import { DEFAULT_ANTHROPIC_BASE_URL, validateProviderConfig } from './config.js';
+import { HINTS } from './hints.js';
+import { createProviderLogins, type KillLoginTree, type SpawnLoginPty } from './login.js';
+import { parseClaudeAuthStatus, parseCodexLoginStatus } from './status.js';
 
 export interface ProvidersUpsertInput {
   id?: string;
@@ -19,6 +22,12 @@ export interface ProvidersUpsertInput {
 export interface ProviderTestResult {
   ok: boolean;
   detail: string;
+  /** Subscription providers only: whether the vendor CLI is signed in. */
+  signedIn?: boolean;
+  /** Subscription providers only: the resolved CLI path. */
+  cliPath?: string;
+  /** API providers only: model ids reported by the endpoint, when cheap to read. */
+  models?: string[];
 }
 
 export interface ProvidersService {
@@ -27,6 +36,8 @@ export interface ProvidersService {
   remove(id: string): Promise<void>;
   test(id: string): Promise<ProviderTestResult>;
   listModels(providerId: string): Model[];
+  login(providerId: string): Promise<{ loginId: string }>;
+  cancelLogin(loginId: string): Promise<void>;
 }
 
 export interface ProvidersServiceDeps {
@@ -35,16 +46,13 @@ export interface ProvidersServiceDeps {
   secrets: Secrets;
   resolveCommand: ResolveCommand;
   fetchFn?: typeof fetch;
+  runCommand?: RunCommand;
+  spawnPty?: SpawnLoginPty;
+  killTree?: KillLoginTree;
 }
 
 const TEST_TIMEOUT_MS = 5_000;
-
-const HINTS = {
-  claude: 'Install Claude Code, then run claude auth login.',
-  codex: 'Codex CLI not found. Install it with `npm install -g @openai/codex`, then run `codex login`.',
-  opencode: 'Install OpenCode (`npm install -g opencode-ai`) so that `opencode` is on PATH.',
-  acp: 'Install an ACP agent such as `agy` or `opencode`, or set the provider config `command`.',
-} as const;
+const ANTHROPIC_VERSION = '2023-06-01';
 
 /** The bridge key for one provider. The database only ever stores this string. */
 export function providerSecretKey(providerId: string): string {
@@ -65,15 +73,6 @@ function modelSeeds(config: Record<string, unknown>): ReplaceModelInput[] | null
   });
 }
 
-function configuredCommand(value: unknown): string | null {
-  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
-  if (Array.isArray(value)) {
-    const first = value[0];
-    if (typeof first === 'string' && first.trim().length > 0) return first.trim();
-  }
-  return null;
-}
-
 function stringHeaders(value: unknown): Record<string, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
   const headers: Record<string, string> = {};
@@ -83,17 +82,53 @@ function stringHeaders(value: unknown): Record<string, string> {
   return headers;
 }
 
-function modelCount(body: unknown): number {
-  if (typeof body !== 'object' || body === null) return 0;
+/** Reads the `data[].id` list both OpenAI and Anthropic model endpoints return. */
+function modelIds(body: unknown): string[] {
+  if (typeof body !== 'object' || body === null) return [];
   const data = (body as Record<string, unknown>)['data'];
-  return Array.isArray(data) ? data.length : 0;
+  if (!Array.isArray(data)) return [];
+  const ids: string[] = [];
+  for (const entry of data) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const id = (entry as Record<string, unknown>)['id'];
+    if (typeof id === 'string' && id.length > 0) ids.push(id);
+  }
+  return ids;
+}
+
+function configString(config: Record<string, unknown>, key: string): string | null {
+  const value = config[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function failure(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'request failed';
+  return `request failed: ${message}`;
 }
 
 export function createProvidersService(deps: ProvidersServiceDeps): ProvidersService {
   const fetchFn = deps.fetchFn ?? fetch;
+  const runCommandFn = deps.runCommand ?? runCommand;
+  const logins = createProviderLogins({
+    repos: deps.repos,
+    bus: deps.bus,
+    resolveCommand: deps.resolveCommand,
+    ...(deps.spawnPty === undefined ? {} : { spawnPty: deps.spawnPty }),
+    ...(deps.killTree === undefined ? {} : { killTree: deps.killTree }),
+  });
 
   function emitUpdated(): void {
-    deps.bus.emit({ kind: 'event', type: 'providers.updated', payload: deps.repos.providers.list() });
+    deps.bus.emit({
+      kind: 'event',
+      type: 'providers.updated',
+      payload: deps.repos.providers.list(),
+    });
+  }
+
+  async function secretFor(secretRef: string | null): Promise<string | null> {
+    if (secretRef === null) return null;
+    const secret = await deps.secrets.get(secretRef);
+    return secret !== null && secret.length > 0 ? secret : null;
   }
 
   async function testOpenAI(
@@ -102,7 +137,7 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
   ): Promise<ProviderTestResult> {
     const baseUrl = String(config['baseUrl']).replace(/\/+$/, '');
     const headers: Record<string, string> = { accept: 'application/json' };
-    const secret = secretRef === null ? null : await deps.secrets.get(secretRef);
+    const secret = await secretFor(secretRef);
     if (secret !== null) headers['authorization'] = `Bearer ${secret}`;
     Object.assign(headers, stringHeaders(config['headers']));
     try {
@@ -113,16 +148,40 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
       if (!response.ok) {
         return { ok: false, detail: `endpoint returned HTTP ${response.status}` };
       }
-      let count = 0;
-      try {
-        count = modelCount(await response.json());
-      } catch {
-        count = 0;
-      }
-      return { ok: true, detail: `${count} models available` };
+      const models = modelIds(await response.json().catch(() => null));
+      return { ok: true, detail: `${models.length} models available`, models };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'request failed';
-      return { ok: false, detail: `request failed: ${message}` };
+      return { ok: false, detail: failure(error) };
+    }
+  }
+
+  async function testAnthropic(
+    config: Record<string, unknown>,
+    secretRef: string | null,
+  ): Promise<ProviderTestResult> {
+    const secret = await secretFor(secretRef);
+    if (secret === null) return { ok: false, detail: 'no API key stored' };
+    const baseUrl = configString(config, 'baseUrl') ?? DEFAULT_ANTHROPIC_BASE_URL;
+    const trimmed = baseUrl.replace(/\/+$/, '');
+    const url = /\/v\d+$/.test(trimmed) ? `${trimmed}/models` : `${trimmed}/v1/models`;
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      'anthropic-version': ANTHROPIC_VERSION,
+      'x-api-key': secret,
+    };
+    Object.assign(headers, stringHeaders(config['headers']));
+    try {
+      const response = await fetchFn(url, {
+        headers,
+        signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return { ok: false, detail: `endpoint returned HTTP ${response.status}` };
+      }
+      const models = modelIds(await response.json().catch(() => null));
+      return { ok: true, detail: `${models.length} models available`, models };
+    } catch (error) {
+      return { ok: false, detail: failure(error) };
     }
   }
 
@@ -131,19 +190,45 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
     hint: string,
     configured: string | null,
   ): Promise<ProviderTestResult> {
-    if (configured !== null) {
-      if (configured.includes('/') || configured.includes('\\')) {
-        return existsSync(configured)
-          ? { ok: true, detail: configured }
-          : { ok: false, detail: `${hint} (${configured} was not found)` };
-      }
-      const resolved = await deps.resolveCommand(configured);
-      return resolved === null
-        ? { ok: false, detail: `${hint} (${configured} was not found)` }
-        : { ok: true, detail: resolved };
+    const resolved = await resolveCliPath(deps.resolveCommand, configured, name);
+    if (resolved !== null) return { ok: true, detail: resolved };
+    return {
+      ok: false,
+      detail: configured === null ? hint : `${hint} (${configured} was not found)`,
+    };
+  }
+
+  /** `claude auth status --json` reports `loggedIn`; the CLI path comes from resolution. */
+  async function testClaude(configured: string | null): Promise<ProviderTestResult> {
+    const cliPath = await resolveCliPath(deps.resolveCommand, configured, 'claude');
+    if (cliPath === null) {
+      return {
+        ok: false,
+        signedIn: false,
+        detail:
+          configured === null ? HINTS.claude : `${HINTS.claude} (${configured} was not found)`,
+      };
     }
-    const resolved = await deps.resolveCommand(name);
-    return resolved === null ? { ok: false, detail: hint } : { ok: true, detail: resolved };
+    const status = parseClaudeAuthStatus(
+      await runCommandFn(cliPath, ['auth', 'status', '--json'], TEST_TIMEOUT_MS),
+    );
+    return { ok: status.signedIn, detail: status.detail, signedIn: status.signedIn, cliPath };
+  }
+
+  /** `codex login status` exits 0 only when signed in. */
+  async function testCodex(configured: string | null): Promise<ProviderTestResult> {
+    const cliPath = await resolveCliPath(deps.resolveCommand, configured, 'codex');
+    if (cliPath === null) {
+      return {
+        ok: false,
+        signedIn: false,
+        detail: configured === null ? HINTS.codex : `${HINTS.codex} (${configured} was not found)`,
+      };
+    }
+    const status = parseCodexLoginStatus(
+      await runCommandFn(cliPath, ['login', 'status'], TEST_TIMEOUT_MS),
+    );
+    return { ok: status.signedIn, detail: status.detail, signedIn: status.signedIn, cliPath };
   }
 
   return {
@@ -152,24 +237,24 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
     upsert: async (input) => {
       const config = validateProviderConfig(input.kind, input.config);
       const id = input.id ?? newId('prv');
+      const existing = deps.repos.providers.get(id);
+      const willHaveSecret =
+        input.secret === undefined
+          ? existing !== undefined && existing.secretRef !== null
+          : input.secret.length > 0;
+      if (input.kind === 'anthropic' && !willHaveSecret) {
+        throw badRequest('anthropic providers require an API key');
+      }
+
       const key = providerSecretKey(id);
       let secretRef: string | null | undefined;
       if (input.secret !== undefined) {
-        if (input.secret.length > 0) {
-          try {
-            await deps.secrets.set(key, input.secret);
-          } catch {
-            throw new RpcError('internal', 'secret storage unavailable');
-          }
-          secretRef = key;
-        } else {
-          try {
-            await deps.secrets.set(key, '');
-          } catch {
-            throw new RpcError('internal', 'secret storage unavailable');
-          }
-          secretRef = null;
+        try {
+          await deps.secrets.set(key, input.secret);
+        } catch {
+          throw new RpcError('internal', 'secret storage unavailable');
         }
+        secretRef = input.secret.length > 0 ? key : null;
       }
 
       const view = deps.repos.providers.upsert({
@@ -199,20 +284,10 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
       if (provider === undefined) throw notFound('provider not found');
       const config = provider.config;
       switch (provider.kind) {
-        case 'claude': {
-          const configured =
-            typeof config['pathToClaudeCodeExecutable'] === 'string'
-              ? config['pathToClaudeCodeExecutable'].trim()
-              : '';
-          if (configured.length > 0) {
-            return existsSync(configured)
-              ? { ok: true, detail: configured }
-              : { ok: false, detail: `${HINTS.claude} (${configured} was not found)` };
-          }
-          return testCommand('claude', HINTS.claude, null);
-        }
+        case 'claude':
+          return testClaude(configString(config, 'pathToClaudeCodeExecutable'));
         case 'codex':
-          return testCommand('codex', HINTS.codex, configuredCommand(config['command']));
+          return testCodex(configuredCommand(config['command']));
         case 'acp':
           return testCommand(
             'agy',
@@ -227,6 +302,8 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
           );
         case 'openai-compatible':
           return testOpenAI(config, provider.secretRef);
+        case 'anthropic':
+          return testAnthropic(config, provider.secretRef);
         default:
           return { ok: false, detail: `unsupported provider kind: ${String(provider.kind)}` };
       }
@@ -238,5 +315,8 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
       }
       return deps.repos.providers.listModels(providerId);
     },
+
+    login: (providerId) => logins.start(providerId),
+    cancelLogin: (loginId) => logins.cancel(loginId),
   };
 }

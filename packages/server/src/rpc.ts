@@ -13,6 +13,7 @@ import {
 } from '@tuffcode/contracts';
 import type { z } from 'zod';
 import { createBrainRpcHandlers, type BrainHandlerDeps } from './brain/handlers.js';
+import { createCommentHandlers } from './comments/rpc.js';
 import { createCouncilHandlers } from './council/rpc.js';
 import type { Council } from './council/types.js';
 import type { Repos } from './db/repos/index.js';
@@ -180,6 +181,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
 
   register(createRunnerHandlers({ runner: deps.runner }));
   register(createProviderHandlers({ providers: deps.providers }));
+  register(createCommentHandlers({ repos: deps.repos }));
   register(createBrainRpcHandlers(deps.brain));
   register(deps.commands);
   register(createDiagnosticsHandlers(deps.diagnostics));

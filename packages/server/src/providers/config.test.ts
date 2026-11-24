@@ -62,6 +62,21 @@ describe('provider config validation', () => {
       maxTokens: 4096,
       temperature: 0.7,
     });
+
+    expect(validateProviderConfig('anthropic', {})).toEqual({
+      baseUrl: 'https://api.anthropic.com',
+    });
+    expect(
+      validateProviderConfig('anthropic', {
+        baseUrl: 'https://proxy.example.com/anthropic/',
+        model: 'claude-opus-4-5',
+        headers: { 'x-title': 'Tuffcode' },
+      }),
+    ).toEqual({
+      baseUrl: 'https://proxy.example.com/anthropic/',
+      model: 'claude-opus-4-5',
+      headers: { 'x-title': 'Tuffcode' },
+    });
   });
 
   it('accepts a models seed on any kind', () => {
@@ -84,6 +99,14 @@ describe('provider config validation', () => {
       () => validateProviderConfig('openai-compatible', { baseUrl: 'ftp://example.com' }),
       'baseUrl',
     );
+    expectBadRequest(
+      () => validateProviderConfig('anthropic', { baseUrl: 'api.anthropic.com' }),
+      'baseUrl',
+    );
+    expectBadRequest(
+      () => validateProviderConfig('anthropic', { baseUrl: 'ftp://example.com' }),
+      'baseUrl',
+    );
   });
 
   it('rejects bad headers, a negative maxTokens, and an out of range temperature', () => {
@@ -95,6 +118,11 @@ describe('provider config validation', () => {
         }),
       'headers.x-title',
     );
+    expectBadRequest(
+      () => validateProviderConfig('anthropic', { headers: { 'x-title': 3 } }),
+      'headers.x-title',
+    );
+    expectBadRequest(() => validateProviderConfig('anthropic', { model: '   ' }), 'model');
     expectBadRequest(
       () =>
         validateProviderConfig('openai-compatible', {

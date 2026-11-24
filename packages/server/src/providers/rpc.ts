@@ -24,5 +24,12 @@ export function createProviderHandlers(deps: ProviderHandlerDeps): RpcHandlers {
   handlers.set('models.list', (params) =>
     deps.providers.listModels((params as RpcParams<'models.list'>).providerId),
   );
+  handlers.set('providers.login', (params) =>
+    deps.providers.login((params as RpcParams<'providers.login'>).id),
+  );
+  handlers.set('providers.loginCancel', async (params) => {
+    await deps.providers.cancelLogin((params as RpcParams<'providers.loginCancel'>).loginId);
+    return {};
+  });
   return handlers;
 }

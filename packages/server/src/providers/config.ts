@@ -7,7 +7,16 @@ import { badRequest } from '../errors.js';
  * compatibility. Failures name the field path.
  */
 
-const KINDS: readonly ProviderKind[] = ['claude', 'codex', 'acp', 'opencode', 'openai-compatible'];
+const KINDS: readonly ProviderKind[] = [
+  'claude',
+  'codex',
+  'acp',
+  'opencode',
+  'openai-compatible',
+  'anthropic',
+];
+
+export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
 function fail(path: string, expectation: string): never {
   throw badRequest(`config.${path} ${expectation}`);
@@ -97,20 +106,25 @@ function validateModels(config: Record<string, unknown>): void {
   if (defaults > 1) fail('models', 'may mark at most one model as default');
 }
 
-function validateOpenAI(config: Record<string, unknown>): void {
-  const baseUrl = config['baseUrl'];
-  if (typeof baseUrl !== 'string' || baseUrl.trim().length === 0) {
+function absoluteBaseUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
     fail('baseUrl', 'is required');
   }
+  const trimmed = value.trim();
   let url: URL;
   try {
-    url = new URL(baseUrl.trim());
+    url = new URL(trimmed);
   } catch {
     fail('baseUrl', 'must be an absolute URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     fail('baseUrl', 'must use http: or https:');
   }
+  return trimmed;
+}
+
+function validateOpenAI(config: Record<string, unknown>): void {
+  absoluteBaseUrl(config['baseUrl']);
   optionalStringRecord(config, 'headers');
   optionalString(config, 'family');
   optionalPositiveInteger(config, 'maxTokens');
@@ -125,6 +139,17 @@ function validateOpenAI(config: Record<string, unknown>): void {
       fail('temperature', 'must be a finite number from 0 to 2');
     }
   }
+}
+
+function validateAnthropic(config: Record<string, unknown>): void {
+  const baseUrl = config['baseUrl'];
+  if (baseUrl === undefined) {
+    config['baseUrl'] = DEFAULT_ANTHROPIC_BASE_URL;
+  } else {
+    config['baseUrl'] = absoluteBaseUrl(baseUrl);
+  }
+  optionalString(config, 'model');
+  optionalStringRecord(config, 'headers');
 }
 
 function validateAcpLike(config: Record<string, unknown>): void {
@@ -167,6 +192,9 @@ export function validateProviderConfig(
       break;
     case 'openai-compatible':
       validateOpenAI(normalized);
+      break;
+    case 'anthropic':
+      validateAnthropic(normalized);
       break;
     default:
       break;

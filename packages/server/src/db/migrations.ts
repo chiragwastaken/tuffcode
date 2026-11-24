@@ -218,6 +218,41 @@ CREATE INDEX idx_turns_thread ON turns(thread_id, created_at);
 CREATE INDEX idx_turns_status ON turns(status);
 `;
 
+/**
+ * `anthropic` is an API-key provider kind, but the original providers CHECK constraint
+ * only listed the CLI kinds. SQLite cannot alter a CHECK, so both tables are rebuilt:
+ * the copy keeps every row, and renaming `providers_new` rewrites the model FK back to
+ * `providers` so the cascade still holds.
+ */
+const ANTHROPIC_KIND_SQL = `
+CREATE TABLE providers_new (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('claude','codex','acp','opencode','openai-compatible','anthropic')),
+  label TEXT NOT NULL,
+  config TEXT NOT NULL,
+  secret_ref TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO providers_new (id, kind, label, config, secret_ref, enabled, created_at, updated_at)
+  SELECT id, kind, label, config, secret_ref, enabled, created_at, updated_at FROM providers;
+CREATE TABLE provider_models_new (
+  provider_id TEXT NOT NULL REFERENCES providers_new(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  context_window INTEGER,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider_id, model_id)
+);
+INSERT INTO provider_models_new (provider_id, model_id, label, context_window, is_default)
+  SELECT provider_id, model_id, label, context_window, is_default FROM provider_models;
+DROP TABLE provider_models;
+DROP TABLE providers;
+ALTER TABLE providers_new RENAME TO providers;
+ALTER TABLE provider_models_new RENAME TO provider_models;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -228,5 +263,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 2,
     name: 'turns',
     sql: TURNS_SQL,
+  },
+  {
+    version: 3,
+    name: 'provider-anthropic-kind',
+    sql: ANTHROPIC_KIND_SQL,
   },
 ];

@@ -4,7 +4,12 @@ import { createEventBus, type EventBus } from '../events.js';
 import { RpcError } from '../errors.js';
 import { createSecretBridge, type Secrets } from '../secrets/bridge.js';
 import { createTestContext, type TestContext } from '../test-support.js';
+import type { CommandResult, RunCommand } from './command.js';
 import { createProvidersService, providerSecretKey, type ProvidersService } from './service.js';
+
+function statusCommand(result: CommandResult): RunCommand {
+  return async () => result;
+}
 
 interface FakeSecrets extends Secrets {
   calls: { key: string; value: string }[];
@@ -45,6 +50,7 @@ describe('providers service', () => {
     secrets?: Secrets;
     commands?: Record<string, string | null>;
     fetchFn?: typeof fetch;
+    runCommand?: RunCommand;
   } = {}): ProvidersService {
     return createProvidersService({
       repos: ctx.repos,
@@ -52,6 +58,7 @@ describe('providers service', () => {
       secrets: overrides.secrets ?? secrets,
       resolveCommand: async (name) => overrides.commands?.[name] ?? null,
       ...(overrides.fetchFn === undefined ? {} : { fetchFn: overrides.fetchFn }),
+      ...(overrides.runCommand === undefined ? {} : { runCommand: overrides.runCommand }),
     });
   }
 
@@ -161,16 +168,23 @@ describe('providers service', () => {
         claude: 'C:/tools/claude.exe',
         opencode: 'C:/tools/opencode.exe',
       },
+      runCommand: statusCommand({
+        code: 0,
+        stdout: '{"loggedIn":true,"authMethod":"oauth_token"}',
+        stderr: '',
+      }),
     });
     await cli.upsert({ id: 'prv_claude', kind: 'claude', label: 'Claude', config: {} });
     await expect(cli.test('prv_claude')).resolves.toEqual({
       ok: true,
-      detail: 'C:/tools/claude.exe',
+      detail: 'signed in (oauth_token)',
+      signedIn: true,
+      cliPath: 'C:/tools/claude.exe',
     });
 
     await cli.upsert({ id: 'prv_codex', kind: 'codex', label: 'Codex', config: {} });
     const codex = await cli.test('prv_codex');
-    expect(codex.ok).toBe(false);
+    expect(codex).toMatchObject({ ok: false, signedIn: false });
     expect(codex.detail).toContain('npm install -g @openai/codex');
 
     await cli.upsert({ id: 'prv_acp', kind: 'acp', label: 'ACP', config: {} });
@@ -185,6 +199,77 @@ describe('providers service', () => {
     });
 
     await expect(cli.test('prv_missing')).rejects.toMatchObject({ code: 'not-found' });
+  });
+
+  it('parses claude auth status for a fake CLI', async () => {
+    const invocations: { file: string; args: string[] }[] = [];
+    const claude = build({
+      commands: { claude: 'C:/tools/claude.exe' },
+      runCommand: async (file, args) => {
+        invocations.push({ file, args });
+        return { code: 1, stdout: '{"loggedIn":false}', stderr: '' };
+      },
+    });
+    await claude.upsert({ id: 'prv_claude', kind: 'claude', label: 'Claude', config: {} });
+
+    await expect(claude.test('prv_claude')).resolves.toEqual({
+      ok: false,
+      detail: 'not signed in',
+      signedIn: false,
+      cliPath: 'C:/tools/claude.exe',
+    });
+    expect(invocations).toEqual([
+      { file: 'C:/tools/claude.exe', args: ['auth', 'status', '--json'] },
+    ]);
+
+    const garbage = build({
+      commands: { claude: 'C:/tools/claude.exe' },
+      runCommand: statusCommand({ code: 0, stdout: 'not json', stderr: '' }),
+    });
+    await expect(garbage.test('prv_claude')).resolves.toMatchObject({
+      ok: false,
+      signedIn: false,
+      detail: 'claude auth status did not report JSON',
+    });
+  });
+
+  it('parses codex login status from the CLI output and exit code', async () => {
+    const signedIn = build({
+      commands: { codex: 'C:/tools/codex.exe' },
+      runCommand: statusCommand({ code: 0, stdout: '', stderr: 'Logged in using ChatGPT' }),
+    });
+    await signedIn.upsert({ id: 'prv_codex', kind: 'codex', label: 'Codex', config: {} });
+    await expect(signedIn.test('prv_codex')).resolves.toEqual({
+      ok: true,
+      detail: 'Logged in using ChatGPT',
+      signedIn: true,
+      cliPath: 'C:/tools/codex.exe',
+    });
+
+    const signedOut = build({
+      commands: { codex: 'C:/tools/codex.exe' },
+      runCommand: statusCommand({ code: 1, stdout: '', stderr: 'Not logged in' }),
+    });
+    await expect(signedOut.test('prv_codex')).resolves.toEqual({
+      ok: false,
+      detail: 'Not logged in',
+      signedIn: false,
+      cliPath: 'C:/tools/codex.exe',
+    });
+
+    const apiKey = build({
+      commands: { codex: 'C:/tools/codex.exe' },
+      runCommand: statusCommand({
+        code: 0,
+        stdout: '',
+        stderr: 'API key configured - sk-abcd...wxyz',
+      }),
+    });
+    await expect(apiKey.test('prv_codex')).resolves.toMatchObject({
+      ok: true,
+      signedIn: true,
+      detail: 'signed in with an API key',
+    });
   });
 
   it('checks an openai-compatible endpoint with the bearer secret and never leaks it', async () => {
@@ -210,7 +295,7 @@ describe('providers service', () => {
     expect(seenUrl).toBe('https://api.example.com/v1/models');
     expect(seenHeaders['authorization']).toBe('Bearer sk-live-secret');
     expect(seenHeaders['x-title']).toBe('Tuffcode');
-    expect(result).toEqual({ ok: true, detail: '2 models available' });
+    expect(result).toEqual({ ok: true, detail: '2 models available', models: ['a', 'b'] });
     expect(result.detail).not.toContain('sk-live-secret');
 
     const unauthorized = build({
@@ -266,5 +351,102 @@ describe('providers service', () => {
 
   it('rejects an unknown provider in test as not-found', async () => {
     await expect(service.test('prv_none')).rejects.toBeInstanceOf(RpcError);
+  });
+
+  it('probes the anthropic models endpoint with the stored API key', async () => {
+    let seenUrl = '';
+    let seenHeaders: Record<string, string> = {};
+    const anthropic = build({
+      fetchFn: fakeFetch(async (url, init) => {
+        seenUrl = url;
+        seenHeaders = (init?.headers ?? {}) as Record<string, string>;
+        return new Response(
+          JSON.stringify({ data: [{ id: 'claude-opus-4-5' }, { id: 'claude-sonnet-4-5' }] }),
+          { status: 200 },
+        );
+      }),
+    });
+    await anthropic.upsert({
+      id: 'prv_anthropic',
+      kind: 'anthropic',
+      label: 'Anthropic API',
+      config: { model: 'claude-opus-4-5', headers: { 'x-title': 'Tuffcode' } },
+      secret: 'sk-ant-live',
+    });
+
+    await expect(anthropic.test('prv_anthropic')).resolves.toEqual({
+      ok: true,
+      detail: '2 models available',
+      models: ['claude-opus-4-5', 'claude-sonnet-4-5'],
+    });
+    expect(seenUrl).toBe('https://api.anthropic.com/v1/models');
+    expect(seenHeaders['x-api-key']).toBe('sk-ant-live');
+    expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
+    expect(seenHeaders['x-title']).toBe('Tuffcode');
+    expect(seenHeaders['authorization']).toBeUndefined();
+  });
+
+  it('keeps a custom anthropic base URL and reports HTTP failures', async () => {
+    let seenUrl = '';
+    const anthropic = build({
+      fetchFn: fakeFetch(async (url) => {
+        seenUrl = url;
+        return new Response('nope', { status: 401 });
+      }),
+    });
+    await anthropic.upsert({
+      id: 'prv_anthropic',
+      kind: 'anthropic',
+      label: 'Anthropic',
+      config: { baseUrl: 'https://proxy.example.com/anthropic/v1/' },
+      secret: 'sk-ant-live',
+    });
+
+    const result = await anthropic.test('prv_anthropic');
+    expect(seenUrl).toBe('https://proxy.example.com/anthropic/v1/models');
+    expect(result).toEqual({ ok: false, detail: 'endpoint returned HTTP 401' });
+  });
+
+  it('requires an API key for an anthropic provider', async () => {
+    await expect(
+      service.upsert({
+        id: 'prv_anthropic',
+        kind: 'anthropic',
+        label: 'Anthropic',
+        config: {},
+      }),
+    ).rejects.toMatchObject({
+      code: 'bad-request',
+      message: 'anthropic providers require an API key',
+    });
+    expect(ctx.repos.providers.get('prv_anthropic')).toBeUndefined();
+
+    const stored = await service.upsert({
+      id: 'prv_anthropic',
+      kind: 'anthropic',
+      label: 'Anthropic',
+      config: {},
+      secret: 'sk-ant-live',
+    });
+    expect(stored.hasSecret).toBe(true);
+
+    const renamed = await service.upsert({
+      id: 'prv_anthropic',
+      kind: 'anthropic',
+      label: 'Anthropic renamed',
+      config: {},
+    });
+    expect(renamed.hasSecret).toBe(true);
+
+    await expect(
+      service.upsert({
+        id: 'prv_anthropic',
+        kind: 'anthropic',
+        label: 'Anthropic',
+        config: {},
+        secret: '',
+      }),
+    ).rejects.toMatchObject({ code: 'bad-request' });
+    expect(ctx.repos.providers.get('prv_anthropic')?.secretRef).toBe('provider:prv_anthropic');
   });
 });

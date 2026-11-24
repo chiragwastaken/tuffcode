@@ -15,12 +15,12 @@ describe('db migrations', () => {
     env = createTempEnv();
     const db = openDb(join(env.root, 'tuffcode.db'));
     try {
-      expect(migrate(db)).toEqual([1, 2]);
+      expect(migrate(db)).toEqual([1, 2, 3]);
       expect(migrate(db)).toEqual([]);
 
       const versions = db.prepare('SELECT version FROM schema_migrations').all();
-      expect(versions).toHaveLength(2);
-      expect(versions.map((row) => row['version'])).toEqual([1, 2]);
+      expect(versions).toHaveLength(3);
+      expect(versions.map((row) => row['version'])).toEqual([1, 2, 3]);
 
       expect(db.prepare('PRAGMA journal_mode').get()?.['journal_mode']).toBe('wal');
       expect(db.prepare('PRAGMA foreign_keys').get()?.['foreign_keys']).toBe(1);
@@ -52,6 +52,35 @@ describe('db migrations', () => {
       ]) {
         expect(tables).toContain(table);
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('accepts the anthropic provider kind and keeps the model cascade', () => {
+    env = createTempEnv();
+    const db = openDb(join(env.root, 'tuffcode.db'));
+    migrate(db);
+    try {
+      const now = new Date().toISOString();
+      db.prepare(
+        'INSERT INTO providers (id, kind, label, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run('prv_anthropic', 'anthropic', 'Anthropic', '{}', now, now);
+      db.prepare('INSERT INTO provider_models (provider_id, model_id, label) VALUES (?, ?, ?)').run(
+        'prv_anthropic',
+        'claude-opus-4-5',
+        'Opus',
+      );
+      db.prepare('DELETE FROM providers WHERE id = ?').run('prv_anthropic');
+      expect(db.prepare('SELECT COUNT(*) AS total FROM provider_models').get()?.['total']).toBe(0);
+
+      expect(() =>
+        db
+          .prepare(
+            'INSERT INTO providers (id, kind, label, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          )
+          .run('prv_bad', 'gemini', 'Gemini', '{}', now, now),
+      ).toThrow();
     } finally {
       db.close();
     }
