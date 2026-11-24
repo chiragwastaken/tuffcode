@@ -1,4 +1,5 @@
 import type { Model, ProviderKind, ProviderView } from '@tuffcode/contracts';
+import type { ClaudeModelQueryFn } from '@tuffcode/adapters';
 import { newId } from '@tuffcode/shared';
 import type { Repos } from '../db/repos/index.js';
 import { badRequest, notFound, RpcError } from '../errors.js';
@@ -13,7 +14,6 @@ import {
   configuredModelInputs,
   providerModels,
   type CodexModelListFn,
-  type ClaudeModelQueryFn,
   type ModelDiscoveryDeps,
   type ProviderModelsResult,
 } from './models.js';

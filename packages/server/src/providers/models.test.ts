@@ -1,4 +1,5 @@
 import type { ProviderKind } from '@tuffcode/contracts';
+import type { ClaudeModelQueryParams } from '@tuffcode/adapters';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestContext, type TestContext } from '../test-support.js';
 import type { ProviderRecord } from '../db/repos/index.js';
@@ -9,7 +10,6 @@ import {
   discoverModels,
   mergeModels,
   providerModels,
-  type ClaudeModelQueryParams,
   type ModelDiscoveryDeps,
 } from './models.js';
 
