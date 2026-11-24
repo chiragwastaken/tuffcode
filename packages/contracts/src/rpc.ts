@@ -18,6 +18,8 @@ import {
   ProviderConfigSchema,
   ProviderKindSchema,
   ProviderViewSchema,
+  ReviewCommentSchema,
+  ReviewCommentSideSchema,
   ReviewSchema,
   SeqSchema,
   SkillSchema,
@@ -197,6 +199,27 @@ export const methods = {
       checkpointId: IdSchema.optional(),
     }),
     result: z.object({ files: DiffFileSchema.array() }),
+  },
+  'comments.list': {
+    params: threadIdParam,
+    result: ReviewCommentSchema.array(),
+  },
+  'comments.add': {
+    params: z.object({
+      threadId: IdSchema,
+      filePath: z.string().min(1),
+      line: z.number().int().positive(),
+      side: ReviewCommentSideSchema,
+      body: z.string().min(1),
+    }),
+    result: ReviewCommentSchema,
+  },
+  'comments.resolve': {
+    params: z.object({
+      id: IdSchema,
+      resolved: z.boolean(),
+    }),
+    result: ReviewCommentSchema,
   },
   'git.commit': {
     params: z.object({ threadId: IdSchema, message: z.string() }),

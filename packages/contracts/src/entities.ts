@@ -95,6 +95,9 @@ export const DiffFileStatusSchema = z.enum([
 ]);
 export type DiffFileStatus = z.infer<typeof DiffFileStatusSchema>;
 
+export const ReviewCommentSideSchema = z.enum(['old', 'new']);
+export type ReviewCommentSide = z.infer<typeof ReviewCommentSideSchema>;
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: z.string(),
@@ -264,6 +267,18 @@ export const EscalationSchema = z.object({
   resolvedAt: IsoDateTimeSchema.nullable(),
 });
 export type Escalation = z.infer<typeof EscalationSchema>;
+
+export const ReviewCommentSchema = z.object({
+  id: IdSchema,
+  threadId: IdSchema,
+  filePath: z.string(),
+  line: z.number().int().positive(),
+  side: ReviewCommentSideSchema,
+  body: z.string(),
+  resolved: z.boolean(),
+  createdAt: IsoDateTimeSchema,
+});
+export type ReviewComment = z.infer<typeof ReviewCommentSchema>;
 
 export const CommandSchema = z.object({
   name: z.string(),
