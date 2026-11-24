@@ -137,7 +137,7 @@ describe('slash commands', () => {
     expect(deploy).toMatchObject({
       description: 'Deploy the app',
       body: 'Deploy $1',
-      path: join(repo, '.tuffcode', 'commands', 'deploy.md'),
+      path: join(project.path, '.tuffcode', 'commands', 'deploy.md'),
     });
     expect(result.map((command) => command.name)).toContain('model');
     expect(() => handler({ projectId: 'prj_missing' })).toThrow('project not found');

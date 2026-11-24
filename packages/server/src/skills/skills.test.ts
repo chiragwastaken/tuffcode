@@ -122,7 +122,7 @@ describe('skills', () => {
       name: 'deploy',
       description: 'Deploy the app',
       body: '',
-      path: join(repo, '.tuffcode', 'skills', 'deploy', 'SKILL.md'),
+      path: join(added.path, '.tuffcode', 'skills', 'deploy', 'SKILL.md'),
     });
     expect(JSON.stringify(result)).not.toContain('not listed');
     expect(() => handler({ projectId: 'prj_missing' })).toThrow('project not found');
