@@ -40,12 +40,19 @@ test('thread history survives a restart', async ({ session, workspace, mock, rpc
 test('settings persist across a restart', async ({ session }) => {
   const { page } = session;
 
-  await openSettingsSection(page, 'General');
-  await page.getByTestId('settings-shell').fill('pwsh.exe');
-  await page.getByTestId('settings-save').click();
-  await expect(page.getByText('Saved.')).toBeVisible();
+  await openSettingsSection(page, 'Appearance');
+  const toggle = page.getByLabel('Animate panels');
+  const before = await toggle.isChecked();
+  if (before) await toggle.uncheck();
+  else await toggle.check();
+
+  // The save bar only exists while the draft is dirty.
+  await expect(page.getByText('Unsaved changes.')).toBeVisible();
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByText('Settings saved.')).toBeVisible();
+  await expect(page.getByText('Unsaved changes.')).toBeHidden();
 
   await session.relaunch();
-  await openSettingsSection(session.page, 'General');
-  await expect(session.page.getByTestId('settings-shell')).toHaveValue('pwsh.exe');
+  await openSettingsSection(session.page, 'Appearance');
+  await expect(session.page.getByLabel('Animate panels')).toBeChecked({ checked: !before });
 });

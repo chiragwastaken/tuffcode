@@ -24,16 +24,17 @@ export async function addProjectThroughUi(
 
 /** Saves an OpenAI-compatible provider that points at the in-process mock endpoint. */
 export async function addMockProvider(page: Page, mock: MockOpenAI): Promise<void> {
-  await page.getByRole('link', { name: 'Settings', exact: true }).click();
-  await page.getByRole('link', { name: 'Providers', exact: true }).click();
+  await openSettingsSection(page, 'Providers');
   await page.getByRole('button', { name: 'Add provider' }).first().click();
 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await dialog.locator('#provider-kind').click();
-  await page.getByRole('option', { name: 'OpenAI-compatible', exact: true }).click();
-  await dialog.locator('#provider-label').fill(PROVIDER_LABEL);
-  await dialog.locator('#provider-base-url').fill(mock.baseUrl);
+  await dialog.getByTestId('provider-preset-custom-openai').click();
+  await dialog.getByTestId('provider-label-input').fill(PROVIDER_LABEL);
+  await dialog.getByTestId('provider-base-url-input').fill(mock.baseUrl);
+  // No API key: the mock accepts unauthenticated calls, and secret storage is
+  // currently blocked by the utilityProcess MessageEvent bug (reported to Main).
+  await dialog.getByTestId('provider-model-input').fill(MOCK_MODEL_ID);
   await dialog.getByRole('button', { name: 'Add provider' }).click();
 
   await expect(page.getByText('Provider added.')).toBeVisible();
@@ -46,8 +47,8 @@ export async function addMockProvider(page: Page, mock: MockOpenAI): Promise<voi
 }
 
 /**
- * The provider dialog does not seed a model row, so the harness sets the default
- * provider and model through the same `settings.set` RPC the Models page uses.
+ * The mock provider is saved through the gallery, but the harness still pins the
+ * default provider and model through the same `settings.set` RPC the Models page uses.
  */
 export async function seedDefaultModel(rpc: HarnessRpc): Promise<string> {
   const providers = (await rpc.request('providers.list', {})) as ProviderSummary[];
@@ -79,7 +80,7 @@ export async function sendMessage(page: Page, text: string): Promise<void> {
 
 export async function openSettingsSection(
   page: Page,
-  section: 'General' | 'Providers',
+  section: 'Appearance' | 'Providers',
 ): Promise<void> {
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await page.getByRole('link', { name: section, exact: true }).click();

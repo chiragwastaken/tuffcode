@@ -97,7 +97,11 @@ export function ProviderGallery({ checks, onSelect }: ProviderGalleryProps) {
         if (presets.length === 0) return null;
 
         return (
-          <section key={group.id} aria-labelledby={`provider-group-${group.id}`}>
+          <section
+            key={group.id}
+            aria-labelledby={`provider-group-${group.id}`}
+            data-testid={`provider-group-${group.id}`}
+          >
             <div className="flex flex-col gap-0.5 pb-2">
               <h3
                 id={`provider-group-${group.id}`}
@@ -116,6 +120,7 @@ export function ProviderGallery({ checks, onSelect }: ProviderGalleryProps) {
                   <button
                     key={preset.id}
                     type="button"
+                    data-testid={`provider-preset-${preset.id}`}
                     onClick={() => onSelect(preset)}
                     className={cn(
                       'group flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-card p-3 text-left',
