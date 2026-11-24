@@ -117,6 +117,18 @@ describe('server bootstrap', () => {
     expect(server.runner.listActive()).toEqual([]);
   });
 
+  it('registers the terminal handlers from the pty slice', async () => {
+    env = createTempEnv();
+    running = await startServer({
+      dbFile: join(env.root, 'server.db'),
+      writeServerJson: false,
+    });
+
+    for (const method of ['terminal.open', 'terminal.input', 'terminal.resize', 'terminal.close']) {
+      expect(running.handlers.has(method)).toBe(true);
+    }
+  });
+
   it('wires the secret bridge and the runner from a parent port', async () => {
     env = createTempEnv();
     const port = createFakePort();

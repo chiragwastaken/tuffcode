@@ -18,6 +18,8 @@ import { createWarningLog, type DiagnosticsInput } from './diagnostics.js';
 import { createEventBus, type EventBus } from './events.js';
 import { createHttpServer as createHttpSurface } from './http.js';
 import { createProvidersService, type ProvidersService } from './providers/service.js';
+import { createTerminalHandlers } from './pty/handlers.js';
+import { TerminalService } from './pty/service.js';
 import { createRpcHandlers, type RpcHandlers } from './rpc.js';
 import { createRunner, type Runner } from './runner/runner.js';
 import { createSecretBridge, type SecretPort, type Secrets } from './secrets/bridge.js';
@@ -136,6 +138,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     ...createCommandHandlers({ repos, bus }),
     ...createSkillHandlers({ repos, bus }),
   ]);
+  const terminals = new TerminalService({
+    repos,
+    onData: ({ threadId, terminalId, data }) => {
+      bus.emit({ kind: 'event', type: 'terminal.data', threadId, payload: { terminalId, data } });
+    },
+  });
 
   const httpServer = createHttpSurface({ version, startedAt });
   const handlers = createRpcHandlers({
@@ -149,7 +157,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     brain: { repos },
     commands,
     diagnostics,
-    featureHandlers: options.featureHandlers ?? [],
+    featureHandlers: [
+      createTerminalHandlers(terminals),
+      ...(options.featureHandlers ?? []),
+    ],
   });
   const ws: AttachedWebSocket = attachWebSocket(httpServer, { handlers, bus, verifyToken });
 
@@ -159,6 +170,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     closed = true;
     await runner.disposeAll();
     secrets.dispose();
+    await terminals.disposeAll();
     await ws.close();
     httpServer.closeIdleConnections();
     httpServer.closeAllConnections();
