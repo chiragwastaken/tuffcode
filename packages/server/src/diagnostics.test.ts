@@ -5,6 +5,7 @@ import { createEventBus } from './events.js';
 import { createRunner } from './runner/runner.js';
 import { createSecretBridge } from './secrets/bridge.js';
 import { createTestContext, silentLogger, type TestContext } from './test-support.js';
+import { MIGRATIONS } from './db/index.js';
 import { createWarningLog, exportDiagnostics } from './diagnostics.js';
 
 const ISO = '2026-11-24T10:00:00.000Z';
@@ -88,7 +89,7 @@ describe('diagnostics export', () => {
     const text = readFileSync(result.path, 'utf8');
     const payload = JSON.parse(text) as Record<string, unknown>;
 
-    expect(payload['schemaVersion']).toBe(2);
+    expect(payload['schemaVersion']).toBe(Math.max(...MIGRATIONS.map((item) => item.version)));
     expect(payload['appVersion']).toBe('2.0.0');
     expect(payload['dbPath']).toBe(ctx.env.root);
     expect(payload['secretBridgeAvailable']).toBe(false);

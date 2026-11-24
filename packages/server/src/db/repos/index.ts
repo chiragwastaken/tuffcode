@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createApprovalsRepo, type ApprovalsRepo } from './approvals.js';
 import { createBrainRepo, type BrainRepo } from './brain.js';
 import { createCheckpointsRepo, type CheckpointsRepo } from './checkpoints.js';
+import { createReviewCommentsRepo, type ReviewCommentsRepo } from './comments.js';
 import { createCouncilRepo, type CouncilRepo } from './council.js';
 import { createEventsRepo, type EventsRepo } from './events.js';
 import { createMessagesRepo, type MessagesRepo } from './messages.js';
@@ -17,6 +18,7 @@ export interface Repos {
   events: EventsRepo;
   messages: MessagesRepo;
   checkpoints: CheckpointsRepo;
+  comments: ReviewCommentsRepo;
   approvals: ApprovalsRepo;
   providers: ProvidersRepo;
   brain: BrainRepo;
@@ -33,6 +35,7 @@ export function createRepos(db: DatabaseSync): Repos {
     events: createEventsRepo(db),
     messages: createMessagesRepo(db),
     checkpoints: createCheckpointsRepo(db),
+    comments: createReviewCommentsRepo(db),
     approvals: createApprovalsRepo(db),
     providers: createProvidersRepo(db),
     brain: createBrainRepo(db),
@@ -45,6 +48,7 @@ export function createRepos(db: DatabaseSync): Repos {
 export type { ApprovalsRepo } from './approvals.js';
 export type { BrainListOptions, BrainRepo, UpsertBrainInput } from './brain.js';
 export type { CheckpointsRepo, CreateCheckpointInput } from './checkpoints.js';
+export type { CreateReviewCommentInput, ReviewCommentsRepo } from './comments.js';
 export type {
   CouncilRepo,
   CreateEscalationInput,

@@ -1,0 +1,80 @@
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import type { ResolveCommand } from '../adapters/resolveCommand.js';
+
+export interface CommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Runs a vendor CLI and resolves with its exit code and captured output. */
+export type RunCommand = (
+  file: string,
+  args: string[],
+  timeoutMs: number,
+) => Promise<CommandResult>;
+
+/**
+ * Windows cannot start a `.cmd`/`.bat` shim through CreateProcess, so npm-installed
+ * CLIs are launched through ComSpec. Every caller passes fixed literal arguments,
+ * never user text, so the command line needs no escaping.
+ */
+export function windowsInvocation(
+  file: string,
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): { file: string; args: string[] } {
+  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(file)) return { file, args: [...args] };
+  const comspec = process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe';
+  return { file: comspec, args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`] };
+}
+
+/** Default runner: never rejects, so a missing or failing CLI is a result, not a throw. */
+export const runCommand: RunCommand = (file, args, timeoutMs) => {
+  const invocation = windowsInvocation(file, args);
+  const { promise, resolve } = Promise.withResolvers<CommandResult>();
+  execFile(
+    invocation.file,
+    invocation.args,
+    { windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024, encoding: 'utf8' },
+    (error, stdout, stderr) => {
+      const out = typeof stdout === 'string' ? stdout : '';
+      const err = typeof stderr === 'string' ? stderr : '';
+      if (error === null) {
+        resolve({ code: 0, stdout: out, stderr: err });
+        return;
+      }
+      const code = typeof error.code === 'number' ? error.code : 1;
+      resolve({ code, stdout: out, stderr: err.length > 0 ? err : error.message });
+    },
+  );
+  return promise;
+};
+
+/** A configured command may be an executable name or `[executable, ...args]`. */
+export function configuredCommand(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  if (Array.isArray(value)) {
+    const first = value[0];
+    if (typeof first === 'string' && first.trim().length > 0) return first.trim();
+  }
+  return null;
+}
+
+/**
+ * Resolves the vendor CLI a provider should use: an explicit path is checked on disk,
+ * an explicit name or the default name goes through PATH lookup. `null` means the CLI
+ * is not installed.
+ */
+export async function resolveCliPath(
+  resolveCommand: ResolveCommand,
+  configured: string | null,
+  name: string,
+): Promise<string | null> {
+  if (configured === null) return resolveCommand(name);
+  if (configured.includes('/') || configured.includes('\\')) {
+    return existsSync(configured) ? configured : null;
+  }
+  return resolveCommand(configured);
+}
