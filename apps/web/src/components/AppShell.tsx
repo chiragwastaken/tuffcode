@@ -174,13 +174,19 @@ export function AppShell() {
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-2xs text-muted-foreground">Port</span>
-                  <span className="text-xs tabular-nums text-foreground" data-testid="connection-port">
+                  <span
+                    className="text-xs tabular-nums text-foreground"
+                    data-testid="connection-port"
+                  >
                     {bootstrap?.port ?? 'unknown'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-2xs text-muted-foreground">Version</span>
-                  <span className="text-xs tabular-nums text-foreground" data-testid="connection-version">
+                  <span
+                    className="text-xs tabular-nums text-foreground"
+                    data-testid="connection-version"
+                  >
                     {bootstrap?.version ?? 'unknown'}
                   </span>
                 </div>

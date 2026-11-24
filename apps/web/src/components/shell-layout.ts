@@ -24,11 +24,7 @@ export interface RootViewInput {
  * last opened (or most recently updated) thread when one exists, and a no-threads
  * hint in between. Threads whose project was removed are ignored.
  */
-export function resolveRootView({
-  projects,
-  threads,
-  activeThreadId,
-}: RootViewInput): RootView {
+export function resolveRootView({ projects, threads, activeThreadId }: RootViewInput): RootView {
   if (projects.length === 0) return { kind: 'empty-workspace' };
 
   const projectIds = new Set(projects.map((project) => project.id));
