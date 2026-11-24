@@ -12,7 +12,10 @@ import {
   type ThreadEventRow,
 } from '@tuffcode/contracts';
 import type { z } from 'zod';
+import { buildBrainGraph } from './brain/graph.js';
 import { createBrainRpcHandlers, type BrainHandlerDeps } from './brain/handlers.js';
+import { searchMemory } from './brain/search.js';
+import { createBrainStore } from './brain/store.js';
 import { createCommentHandlers } from './comments/rpc.js';
 import { createCouncilHandlers } from './council/rpc.js';
 import type { Council } from './council/types.js';
@@ -185,6 +188,8 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   register(createProviderHandlers({ providers: deps.providers }));
   register(createCommentHandlers({ repos: deps.repos }));
   register(createBrainRpcHandlers(deps.brain));
+  define('brain.graph', (params) => buildBrainGraph(deps.repos.brain, params));
+  define('memory.search', (params) => searchMemory(createBrainStore(deps.repos.brain), params));
   register(deps.commands);
   register(createDiagnosticsHandlers(deps.diagnostics));
   if (deps.council !== undefined) register(createCouncilHandlers({ council: deps.council }));

@@ -7,6 +7,8 @@ import { asRow, boolean, integer, nullableText, real, text, type SqlRow } from '
 export interface BrainListOptions {
   kind?: BrainKind;
   projectId?: string;
+  /** Include global (`project_id IS NULL`) rows alongside the project's own. */
+  includeGlobal?: boolean;
   query?: string;
   limit?: number;
   /** Inspector-only: include entries toggled inactive. Selection never does. */
@@ -26,12 +28,27 @@ export interface UpsertBrainInput {
   active?: boolean;
 }
 
+/** A typed relation between two brain entries, stored in `brain_edges`. */
+export interface BrainEdge {
+  from: string;
+  to: string;
+  relation: string;
+}
+
+export interface UpsertBrainEdgeInput {
+  from: string;
+  to: string;
+  relation: string;
+}
+
 export interface BrainRepo {
   list(options?: BrainListOptions): BrainEntry[];
   get(id: string): BrainEntry | undefined;
   upsert(input: UpsertBrainInput): BrainEntry;
   remove(id: string): void;
   touch(ids: string[], at: string): void;
+  listEdges(): BrainEdge[];
+  upsertEdge(input: UpsertBrainEdgeInput): BrainEdge;
 }
 
 const BRAIN_COLUMNS =
@@ -56,6 +73,14 @@ function mapBrainEntry(row: SqlRow): BrainEntry {
   };
 }
 
+function mapBrainEdge(row: SqlRow): BrainEdge {
+  return {
+    from: text(row, 'from_id'),
+    to: text(row, 'to_id'),
+    relation: text(row, 'relation'),
+  };
+}
+
 /**
  * Turns free text into an FTS5 query of quoted, lowercased terms joined with OR.
  * Only letters, numbers and underscores survive, so no FTS syntax can leak through.
@@ -71,7 +96,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
   const selectPlain = db.prepare(
     `SELECT ${BRAIN_COLUMNS} FROM brain_entries
      WHERE (? IS NULL OR kind = ?)
-       AND (? IS NULL OR project_id = ?)
+       AND (? IS NULL OR project_id = ? OR (? = 1 AND project_id IS NULL))
        AND (? = 1 OR active = 1)
      ORDER BY importance DESC, updated_at DESC
      LIMIT ?`,
@@ -83,7 +108,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
      JOIN brain_fts f ON f.rowid = e.rowid
      WHERE brain_fts MATCH ?
        AND (? IS NULL OR e.kind = ?)
-       AND (? IS NULL OR e.project_id = ?)
+       AND (? IS NULL OR e.project_id = ? OR (? = 1 AND e.project_id IS NULL))
        AND (? = 1 OR e.active = 1)
      ORDER BY rank
      LIMIT ?`,
@@ -107,6 +132,13 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
   const touchRow = db.prepare(
     'UPDATE brain_entries SET use_count = use_count + 1, last_used_at = ? WHERE id = ?',
   );
+  const selectEdges = db.prepare(
+    'SELECT from_id, to_id, relation FROM brain_edges ORDER BY from_id, to_id, relation',
+  );
+  const insertEdge = db.prepare(
+    `INSERT INTO brain_edges (from_id, to_id, relation, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  );
 
   function get(id: string): BrainEntry | undefined {
     const row = selectOne.get(id);
@@ -115,7 +147,8 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
 
   return {
     list: (options = {}) => {
-      const limit = Math.min(200, Math.max(1, Math.floor(options.limit ?? 50)));
+      const limit = Math.min(300, Math.max(1, Math.floor(options.limit ?? 50)));
+      const includeGlobal = options.includeGlobal === true ? 1 : 0;
       const ftsQuery = options.query === undefined ? null : toFtsQuery(options.query);
       if (ftsQuery !== null) {
         return selectFts
@@ -125,6 +158,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
             options.kind ?? null,
             options.projectId ?? null,
             options.projectId ?? null,
+            includeGlobal,
             options.includeInactive === true ? 1 : 0,
             limit,
           )
@@ -136,6 +170,7 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
           options.kind ?? null,
           options.projectId ?? null,
           options.projectId ?? null,
+          includeGlobal,
           options.includeInactive === true ? 1 : 0,
           limit,
         )
@@ -172,5 +207,12 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
       transaction(db, () => {
         for (const id of ids) touchRow.run(at, id);
       }),
+    listEdges: () => selectEdges.all().map((row) => mapBrainEdge(asRow(row))),
+    upsertEdge: (input) => {
+      const relation = input.relation.trim();
+      if (relation.length === 0) throw new Error('brain edge relation must not be empty');
+      insertEdge.run(input.from, input.to, relation, new Date().toISOString());
+      return { from: input.from, to: input.to, relation };
+    },
   };
 }
