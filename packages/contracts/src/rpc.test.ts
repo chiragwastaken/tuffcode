@@ -11,6 +11,7 @@ import {
   ProjectSchema,
   ProviderViewSchema,
   RPC_METHODS,
+  ReviewCommentSchema,
   RpcErrorCodeSchema,
   ServerEventFrameSchema,
   ServerEventSchema,
@@ -30,6 +31,7 @@ import {
   type Project,
   type ProviderView,
   type Review,
+  type ReviewComment,
   type RpcMethod,
   type RpcParams,
   type RpcResult,
@@ -159,6 +161,17 @@ const review: Review = {
   modelId: 'gpt-5',
   verdict: 'pass',
   body: 'Looks correct',
+  createdAt: at,
+};
+
+const reviewComment: ReviewComment = {
+  id: 'rc1',
+  threadId: 't1',
+  filePath: 'packages/contracts/src/rpc.ts',
+  line: 12,
+  side: 'new',
+  body: 'This branch needs a test.',
+  resolved: false,
   createdAt: at,
 };
 
@@ -297,6 +310,18 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
   'checkpoints.list': { params: { threadId: 't1' }, result: [checkpoint] },
   'checkpoints.revert': { params: { threadId: 't1', checkpointId: 'c1' }, result: {} },
   'diff.get': { params: { threadId: 't1', checkpointId: 'c1' }, result: { files: [diffFile] } },
+  'comments.list': { params: { threadId: 't1' }, result: [reviewComment] },
+  'comments.add': {
+    params: {
+      threadId: 't1',
+      filePath: 'packages/contracts/src/rpc.ts',
+      line: 12,
+      side: 'new',
+      body: 'This branch needs a test.',
+    },
+    result: reviewComment,
+  },
+  'comments.resolve': { params: { id: 'rc1', resolved: true }, result: reviewComment },
   'git.commit': {
     params: { threadId: 't1', message: 'feat: contracts' },
     result: { sha: 'abc123' },
@@ -384,6 +409,9 @@ const expectedMethods: RpcMethod[] = [
   'checkpoints.list',
   'checkpoints.revert',
   'commands.list',
+  'comments.add',
+  'comments.list',
+  'comments.resolve',
   'council.cancel',
   'council.start',
   'council.status',
@@ -491,8 +519,8 @@ describe('protocol envelope', () => {
 });
 
 describe('rpc methods', () => {
-  it('exposes exactly 42 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(42);
+  it('exposes exactly 45 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(45);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -544,6 +572,18 @@ describe('rpc methods', () => {
       ['council.status', 'result', { goal, tasks: 'none', reviews: [] }],
       ['providers.test', 'result', { ok: true }],
       ['brain.list', 'result', [brainEntry, { ...brainEntry, importance: 2 }]],
+      [
+        'comments.add',
+        'params',
+        { threadId: 't1', filePath: 'a.ts', line: 1, side: 'both', body: 'x' },
+      ],
+      [
+        'comments.add',
+        'params',
+        { threadId: 't1', filePath: 'a.ts', line: 0, side: 'new', body: 'x' },
+      ],
+      ['comments.resolve', 'params', { id: 'rc1' }],
+      ['comments.list', 'result', [{ ...reviewComment, line: -1 }]],
     ];
 
     for (const [method, side, value] of cases) {
@@ -715,6 +755,7 @@ describe('entity schemas', () => {
     expect(ModelSchema.parse(model)).toEqual(model);
     expect(BrainEntrySchema.parse(brainEntry)).toEqual(brainEntry);
     expect(DiffFileSchema.parse(diffFile)).toEqual(diffFile);
+    expect(ReviewCommentSchema.parse(reviewComment)).toEqual(reviewComment);
     expect(CommandSchema.parse(command)).toEqual(command);
   });
 
@@ -725,5 +766,6 @@ describe('entity schemas', () => {
     expect(ProviderViewSchema.safeParse({ ...provider, kind: 'gemini' }).success).toBe(false);
     expect(BrainEntrySchema.safeParse({ ...brainEntry, kind: 'idea' }).success).toBe(false);
     expect(DiffFileSchema.safeParse({ ...diffFile, status: 'unknown' }).success).toBe(false);
+    expect(ReviewCommentSchema.safeParse({ ...reviewComment, side: 'both' }).success).toBe(false);
   });
 });
