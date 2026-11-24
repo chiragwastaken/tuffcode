@@ -10,8 +10,9 @@ import {
   Spinner,
   Textarea,
   cn,
+  focusRing,
 } from '@tuffcode/ui';
-import { Brain, RefreshCw, Trash2 } from 'lucide-react';
+import { ChevronRight, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import {
@@ -69,6 +70,8 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const addTextRef = useRef<HTMLTextAreaElement | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -252,6 +255,15 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
             onSubmit={(event) => void handleAdd(event)}
             className="flex flex-col gap-1.5 border-b border-border px-3 py-2"
           >
+            <Textarea
+              ref={addTextRef}
+              rows={2}
+              className="min-h-0 text-xs"
+              aria-label="New brain entry"
+              placeholder="Add a rule or preference for every thread"
+              value={addText}
+              onChange={(event) => setAddText(event.target.value)}
+            />
             <div className="flex items-center gap-1.5">
               <div className="w-28 shrink-0">
                 <Select
@@ -274,14 +286,6 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
                 Add
               </Button>
             </div>
-            <Textarea
-              rows={2}
-              className="min-h-0 text-xs"
-              aria-label="New brain entry"
-              placeholder="Add a rule or preference for every thread"
-              value={addText}
-              onChange={(event) => setAddText(event.target.value)}
-            />
             {addError ? (
               <p role="alert" className="text-2xs text-error">
                 {addError}
@@ -289,11 +293,25 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
             ) : null}
           </form>
 
-          <section
-            aria-label="Injection preview"
-            className="flex flex-col gap-2 border-b border-border px-3 py-2"
-          >
-            <div className="flex items-center gap-2">
+          <section aria-label="Injection preview" className="border-b border-border">
+            <button
+              type="button"
+              aria-expanded={previewOpen}
+              onClick={() => setPreviewOpen((open) => !open)}
+              className={cn(
+                'flex h-9 w-full items-center gap-2 px-3 text-left',
+                'transition-colors duration-150 ease-out hover:bg-accent',
+                focusRing,
+              )}
+            >
+              <ChevronRight
+                aria-hidden="true"
+                strokeWidth={1.75}
+                className={cn(
+                  'size-3.5 shrink-0 text-muted-foreground transition-transform duration-150',
+                  previewOpen && 'rotate-90',
+                )}
+              />
               <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
                 Injection preview
               </span>
@@ -303,29 +321,37 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
                   {summarizeBrainSlice(slice)}
                 </span>
               ) : null}
-            </div>
-            <Input
-              className="h-8 text-xs"
-              aria-label="Preview message"
-              placeholder="Preview with a draft message"
-              value={previewMessage}
-              onChange={(event) => setPreviewMessage(event.target.value)}
-            />
-            {projectId === null ? (
-              <p className="text-2xs leading-5 text-muted-foreground">
-                Open a thread to preview the injection for its project.
-              </p>
-            ) : previewError ? (
-              <p role="alert" className="text-2xs text-error">
-                {previewError}
-              </p>
-            ) : slice === null ? null : isBrainSliceEmpty(slice) ? (
-              <p className="text-2xs leading-5 text-muted-foreground">
-                Nothing is injected for this message.
-              </p>
-            ) : (
-              <PreviewGroups slice={slice} />
-            )}
+            </button>
+            {previewOpen ? (
+              <div className="flex flex-col gap-2 px-3 pb-2">
+                <Input
+                  className="h-8 text-xs"
+                  aria-label="Preview message"
+                  placeholder="Preview with a draft message"
+                  value={previewMessage}
+                  onChange={(event) => setPreviewMessage(event.target.value)}
+                />
+                {projectId === null ? (
+                  <p className="text-2xs leading-5 text-muted-foreground">
+                    Open a thread to preview the injection for its project.
+                  </p>
+                ) : previewError ? (
+                  <p role="alert" className="text-2xs text-error">
+                    {previewError}
+                  </p>
+                ) : slice === null ? (
+                  <p className="text-2xs leading-5 text-muted-foreground">
+                    {previewLoading ? 'Loading preview…' : 'No preview available.'}
+                  </p>
+                ) : isBrainSliceEmpty(slice) ? (
+                  <p className="text-2xs leading-5 text-muted-foreground">
+                    Nothing is injected for this message.
+                  </p>
+                ) : (
+                  <PreviewGroups slice={slice} />
+                )}
+              </div>
+            ) : null}
           </section>
 
           <div className="flex items-center gap-2 px-3 py-2">
@@ -337,14 +363,24 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
           </div>
 
           {sorted.length === 0 ? (
-            <div className="px-3 pb-3">
+            <div className="px-3 py-3">
               <EmptyState
-                icon={Brain}
-                title={searching ? 'No matching entries' : 'No brain entries yet'}
-                description={
-                  searching
-                    ? 'Try a different word. Search looks at entry text and tags.'
-                    : 'Add a rule or preference above. The turn runner injects active entries.'
+                variant="inline"
+                title={searching ? 'No entries match that search.' : 'No brain entries yet.'}
+                action={
+                  searching ? (
+                    <Button size="sm" variant="secondary" onClick={() => setQuery('')}>
+                      Clear search
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => addTextRef.current?.focus()}
+                    >
+                      Add entry
+                    </Button>
+                  )
                 }
                 className="w-full"
               />

@@ -1,5 +1,5 @@
 import { Button, EmptyState, IconButton, Spinner, cn, focusRing } from '@tuffcode/ui';
-import { Plus, SquareTerminal, X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { TerminalError, terminalErrorMessage } from './TerminalError';
@@ -181,7 +181,7 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
         ))}
 
         {tabs.tabs.length === 0 ? (
-          <div className="flex h-full items-center justify-center p-4">
+          <div className="flex h-full items-center justify-center px-3">
             {opening ? (
               <span className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Spinner size="sm" label="Opening terminal" />
@@ -189,15 +189,14 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
               </span>
             ) : (
               <EmptyState
-                icon={SquareTerminal}
-                title="No terminal open"
-                description="Open a shell in this thread's worktree."
+                variant="inline"
+                title="No terminal open."
                 action={
                   <Button size="sm" variant="outline" onClick={() => void spawn()}>
                     New terminal
                   </Button>
                 }
-                className="w-full max-w-sm"
+                className="w-full"
               />
             )}
           </div>

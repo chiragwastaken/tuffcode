@@ -21,6 +21,8 @@ export interface DiffViewerProps {
   files: readonly DiffFile[];
   /** Renders a gutter button per line; clicking it reports the hovered line. */
   onLineComment?: (comment: DiffLineComment) => void;
+  /** Suppresses the per-file header when the caller already shows one. */
+  hideFileHeader?: boolean;
   theme?: 'dark' | 'light';
   diffStyle?: 'unified' | 'split';
   className?: string;
@@ -34,6 +36,7 @@ export interface DiffViewerProps {
 export function DiffViewer({
   files,
   onLineComment,
+  hideFileHeader = false,
   theme = 'dark',
   diffStyle = 'unified',
   className,
@@ -65,6 +68,7 @@ export function DiffViewer({
               diffStyle,
               overflow: 'wrap',
               lineDiffType: 'word-alt',
+              disableFileHeader: hideFileHeader,
             }}
             renderGutterUtility={
               onLineComment

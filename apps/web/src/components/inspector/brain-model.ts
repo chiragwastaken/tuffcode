@@ -28,8 +28,10 @@ export function formatTokenCount(tokens: number): string {
   return `${tokenFormatter.format(count)} ${count === 1 ? 'token' : 'tokens'}`;
 }
 
+/** Compact preview summary: injected entry count plus token cost. */
 export function summarizeBrainSlice(slice: BrainSlice): string {
-  return `${slice.always.length} always, ${slice.retrieved.length} retrieved, ${formatTokenCount(slice.tokens)}`;
+  const count = slice.always.length + slice.retrieved.length;
+  return `${count} ${count === 1 ? 'entry' : 'entries'} · ${formatTokenCount(slice.tokens)}`;
 }
 
 export function isBrainSliceEmpty(slice: BrainSlice): boolean {
