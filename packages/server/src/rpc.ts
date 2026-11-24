@@ -17,6 +17,7 @@ import { createBrainRpcHandlers, type BrainHandlerDeps } from './brain/handlers.
 import { searchMemory } from './brain/search.js';
 import { createBrainStore } from './brain/store.js';
 import { createCommentHandlers } from './comments/rpc.js';
+import { createContextHandlers } from './context/rpc.js';
 import { createCouncilHandlers } from './council/rpc.js';
 import type { Council } from './council/types.js';
 import type { Repos } from './db/repos/index.js';
@@ -189,6 +190,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
 
   register(createRunnerHandlers({ runner: deps.runner }));
   register(createPromptHandlers({ repos: deps.repos }));
+  register(createContextHandlers({ repos: deps.repos }));
   register(createProviderHandlers({ providers: deps.providers }));
   register(createCommentHandlers({ repos: deps.repos }));
   register(createBrainRpcHandlers(deps.brain));

@@ -49,6 +49,7 @@ const IMPLEMENTED = [
   'settings.set',
   'skills.list',
   'threads.approve',
+  'threads.context',
   'threads.create',
   'threads.delete',
   'threads.events',

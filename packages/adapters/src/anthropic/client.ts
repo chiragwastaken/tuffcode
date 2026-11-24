@@ -31,7 +31,11 @@ export type AnthropicContentBlock =
   | AnthropicToolResultBlock;
 
 export interface AnthropicMessage {
-  role: 'user' | 'assistant';
+  /**
+   * `system` rows are adapter bookkeeping (compaction summaries); the client lifts them
+   * into the request's top-level `system` field and strips them from `messages`.
+   */
+  role: 'system' | 'user' | 'assistant';
   content: string | AnthropicContentBlock[];
 }
 
@@ -147,14 +151,22 @@ function buildBody(
   config: AnthropicClientConfig,
   request: AnthropicRequestBody,
 ): Record<string, unknown> {
-  const system = request.system?.trim() ?? '';
+  const inlineSystem = request.messages
+    .filter((message) => message.role === 'system')
+    .map((message) => (typeof message.content === 'string' ? message.content.trim() : ''))
+    .filter((part) => part.length > 0)
+    .join('\n\n');
+  const messages = request.messages.filter((message) => message.role !== 'system');
+  const system = [request.system?.trim() ?? '', inlineSystem]
+    .filter((part) => part.length > 0)
+    .join('\n\n');
   const tools = toAnthropicTools(request.toolAllowlist, {
     subagent: request.subagentTool === true,
   });
   return {
     model: request.model,
     max_tokens: request.max_tokens,
-    messages: request.messages,
+    messages,
     ...(tools.length > 0 ? { tools } : {}),
     stream: true,
     ...(system.length > 0 ? { system } : {}),

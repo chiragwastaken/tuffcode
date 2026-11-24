@@ -106,6 +106,22 @@ describe('OpenAIClient', () => {
     expect(bodies[1]?.tool_choice).toBeUndefined();
   });
 
+  it('lets the request override the configured max tokens', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchFn = async (_url: string, init: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return response(200);
+    };
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null, maxTokens: 64 },
+      { fetchFn, sleep: async () => {}, logger },
+    );
+
+    await client.stream({ ...request, maxTokens: 512 }, new AbortController().signal);
+
+    expect(bodies[0]?.max_tokens).toBe(512);
+  });
+
   it('maps 401 to a non-retryable error', async () => {
     const client = new OpenAIClient(
       { baseUrl: 'http://x/v1', headers: {}, secret: null },

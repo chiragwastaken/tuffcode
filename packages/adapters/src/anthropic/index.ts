@@ -13,7 +13,7 @@ import {
   type AnthropicMessage,
   type FetchFn,
 } from './client.js';
-import { DEFAULT_MAX_TOOL_ITERATIONS, runTurn } from './loop.js';
+import { DEFAULT_MAX_TOOL_ITERATIONS, compactHistory, runTurn } from './loop.js';
 import { createToolSessionState, type ToolSessionState } from '../openai/tools.js';
 
 const LF = String.fromCharCode(10);
@@ -53,8 +53,9 @@ class AnthropicAdapter implements AdapterSession {
   private readonly messages: AnthropicMessage[] = [];
   private readonly state: ToolSessionState = createToolSessionState();
   private readonly approvals = new Map<string, (choice: ApprovalChoice) => void>();
-  private readonly model: string;
+  private model: string;
   private controller: AbortController | null = null;
+  private compaction: AbortController | null = null;
   private disposed = false;
 
   constructor(
@@ -81,6 +82,7 @@ class AnthropicAdapter implements AdapterSession {
     else ctx.signal.addEventListener('abort', onAbort, { once: true });
 
     const model = ctx.model.trim().length > 0 ? ctx.model : this.model;
+    this.model = model;
     const turnCtx: TurnContext = { ...ctx, model, signal: controller.signal };
     const turnId = ctx.turnId;
     this.messages.push({ role: 'user', content: userContent(text, ctx) });
@@ -117,12 +119,32 @@ class AnthropicAdapter implements AdapterSession {
     this.denyApprovals();
   }
 
+  async compact(): Promise<{ removed: number }> {
+    if (this.disposed) return { removed: 0 };
+    const controller = new AbortController();
+    this.compaction = controller;
+    try {
+      return await compactHistory({
+        client: this.client,
+        messages: this.messages,
+        model: this.model,
+        maxTokens: this.maxTokens,
+        deps: this.deps,
+        signal: controller.signal,
+      });
+    } finally {
+      if (this.compaction === controller) this.compaction = null;
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.controller?.abort();
+    this.compaction?.abort();
     this.denyApprovals();
     this.controller = null;
+    this.compaction = null;
     this.messages.length = 0;
     this.state.readSet.clear();
     this.deps.logger.debug('anthropic adapter disposed', { providerId: this.providerId });

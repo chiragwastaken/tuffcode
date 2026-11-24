@@ -118,7 +118,14 @@ function parseChunk(value: unknown): ChunkDelta | null {
   }
   const choices = record.choices;
   if (!Array.isArray(choices) || choices.length === 0) {
-    return { content: '', reasoning: '', toolCalls: [], finishReason: null, inputTokens, outputTokens };
+    return {
+      content: '',
+      reasoning: '',
+      toolCalls: [],
+      finishReason: null,
+      inputTokens,
+      outputTokens,
+    };
   }
   const choice = choices[0];
   if (typeof choice !== 'object' || choice === null) return null;
@@ -165,6 +172,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           {
             model: ctx.model,
             messages: requestMessages(ctx, messages),
+            ...(ctx.maxOutputTokens !== undefined ? { maxTokens: ctx.maxOutputTokens } : {}),
             ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
             ...(deps.spawnSubagent !== undefined && ctx.permissionMode !== 'read-only'
               ? { subagentTool: true }
@@ -372,4 +380,84 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
   }
 
   yield { type: 'turn.finished', turnId, reason };
+}
+
+/** Kept short: the summary is a fact sheet, not prose the model should imitate. */
+export const COMPACTION_SYSTEM_PROMPT =
+  'You compress conversation history for another model. Reply with a compact factual ' +
+  'summary: decisions made, files and symbols touched, tool results that still matter, ' +
+  'and any open questions. No preamble, no markdown headings.';
+
+const MAX_TRANSCRIPT_CHARS = 60_000;
+
+export interface CompactHistoryOptions {
+  client: ChatStreamer;
+  messages: ChatMessage[];
+  model: string;
+  deps: AdapterDeps;
+  signal: AbortSignal;
+}
+
+function renderTranscriptMessage(message: ChatMessage): string {
+  const lines = [`[${message.role}] ${message.content ?? ''}`];
+  if (message.tool_calls !== undefined && message.tool_calls.length > 0) {
+    const calls = message.tool_calls
+      .map((call) => `${call.function.name}(${call.function.arguments})`)
+      .join('; ');
+    lines.push(`tool calls: ${calls}`);
+  }
+  if (message.tool_call_id !== undefined) lines.push(`tool_call_id: ${message.tool_call_id}`);
+  return lines.join(LF);
+}
+
+/**
+ * Folds every message except the last two into one system message using the same
+ * client. A tool result can only follow the assistant message that requested it, so
+ * the keep window widens past leading `tool` rows instead of slicing a pair apart.
+ */
+export async function compactHistory(options: CompactHistoryOptions): Promise<{ removed: number }> {
+  const { messages, deps } = options;
+  if (messages.length <= 2 || options.model.trim().length === 0) return { removed: 0 };
+  let start = messages.length - 2;
+  while (start > 0 && messages[start]?.role === 'tool') start -= 1;
+  if (start <= 0) return { removed: 0 };
+
+  const older = messages.slice(0, start);
+  const keep = messages.slice(start);
+  let transcript = older.map(renderTranscriptMessage).join(LF + LF);
+  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+    transcript = '[earlier history omitted]' + LF + transcript.slice(-MAX_TRANSCRIPT_CHARS);
+  }
+
+  try {
+    const stream = await options.client.stream(
+      {
+        model: options.model,
+        messages: [
+          { role: 'system', content: COMPACTION_SYSTEM_PROMPT },
+          { role: 'user', content: transcript },
+        ],
+        toolAllowlist: [],
+      },
+      options.signal,
+    );
+    const parts: string[] = [];
+    for await (const raw of streamSse(stream, { signal: options.signal, logger: deps.logger })) {
+      const chunk = parseChunk(raw);
+      if (chunk === null || chunk.content.length === 0) continue;
+      parts.push(chunk.content);
+    }
+    const summary = parts.join('').trim();
+    if (summary.length === 0) return { removed: 0 };
+    messages.splice(
+      0,
+      messages.length,
+      { role: 'system', content: `Summary of the earlier conversation:${LF}${summary}` },
+      ...keep,
+    );
+    return { removed: older.length };
+  } catch (error) {
+    deps.logger.warn('openai compaction failed', { reason: errorMessage(error) });
+    return { removed: 0 };
+  }
 }

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AdapterDeps, AdapterEvent, AdapterLogger, TurnContext } from '@tuffcode/contracts';
 import type { AnthropicMessage, AnthropicRequestBody, MessagesStreamer } from './client.js';
-import { mapStopReason, runTurn } from './loop.js';
+import { compactHistory, mapStopReason, runTurn } from './loop.js';
 import { createToolSessionState } from '../openai/tools.js';
 
 const LF = String.fromCharCode(10);
@@ -355,5 +355,110 @@ describe('mapStopReason', () => {
     expect(mapStopReason('stop_sequence')).toBe('complete');
     expect(mapStopReason(null)).toBe('complete');
     expect(mapStopReason('refusal')).toBe('error');
+  });
+});
+
+describe('compactHistory', () => {
+  it('folds all but the last two messages into one system message', async () => {
+    const client = new FakeClient([streamOf(fixture('text-stream'))]);
+    const messages: AnthropicMessage[] = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'two' },
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ];
+
+    const result = await compactHistory({
+      client,
+      messages,
+      model: 'claude-test',
+      maxTokens: 256,
+      deps,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ removed: 2 });
+    expect(messages).toHaveLength(3);
+    expect(messages[0]?.role).toBe('system');
+    expect(messages[0]?.content).toContain('Hello');
+    expect(messages.slice(1)).toEqual([
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ]);
+    expect(client.requests[0]?.toolAllowlist).toEqual([]);
+    expect(client.requests[0]?.system).toContain('compress conversation history');
+  });
+
+  it('keeps a leading tool result with the tool_use it answers', async () => {
+    const client = new FakeClient([streamOf(fixture('text-stream'))]);
+    const messages: AnthropicMessage[] = [
+      { role: 'user', content: 'one' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_1', name: 'read', input: { path: 'a' } }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'file body' }],
+      },
+      { role: 'assistant', content: 'done' },
+    ];
+
+    const result = await compactHistory({
+      client,
+      messages,
+      model: 'claude-test',
+      maxTokens: 256,
+      deps,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ removed: 1 });
+    expect(messages.map((message) => message.role)).toEqual([
+      'system',
+      'assistant',
+      'user',
+      'assistant',
+    ]);
+  });
+
+  it('keeps history and reports zero when the summary request fails', async () => {
+    const client = new FakeClient([]);
+    const messages: AnthropicMessage[] = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'two' },
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ];
+
+    const result = await compactHistory({
+      client,
+      messages,
+      model: 'claude-test',
+      maxTokens: 256,
+      deps,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ removed: 0 });
+    expect(messages).toHaveLength(4);
+  });
+
+  it('sends the turn output cap when it is set', async () => {
+    const client = new FakeClient([streamOf(fixture('text-stream'))]);
+    await collect(
+      runTurn({
+        ctx: context({ maxOutputTokens: 512 }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.max_tokens).toBe(512);
   });
 });

@@ -14,6 +14,8 @@ export interface TurnContext {
   toolAllowlist?: string[];
   /** Per-turn cap on tool round-trips; unset leaves the adapter's own cap in force. */
   maxToolIterations?: number;
+  /** Output token cap for this turn; unset leaves the adapter's configured default. */
+  maxOutputTokens?: number;
 }
 
 export interface AdapterCapabilities {
@@ -30,7 +32,19 @@ export interface AdapterSession {
   send(text: string, ctx: TurnContext): AsyncIterable<AdapterEvent>;
   approve(approvalId: string, decision: ApprovalChoice): void;
   interrupt(): Promise<void>;
+  /**
+   * Trims the adapter's in-memory history to a summary plus the last two messages.
+   * Only the harness adapters implement this; vendor CLIs report their own usage and
+   * leave history to the vendor. A failed summary leaves history untouched and
+   * reports zero removed.
+   */
+  compact?(): Promise<CompactResult>;
   dispose(): Promise<void>;
+}
+
+export interface CompactResult {
+  /** Messages folded into the summary; zero when nothing was trimmed. */
+  removed: number;
 }
 
 export interface AdapterLogger {

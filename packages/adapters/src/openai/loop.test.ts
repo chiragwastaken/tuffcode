@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AdapterDeps, AdapterEvent, AdapterLogger, TurnContext } from '@tuffcode/contracts';
 import type { ChatMessage, ChatRequestBody, ChatStreamer } from './client.js';
 import { createOpenAIChatAdapter } from './index.js';
-import { runTurn } from './loop.js';
+import { compactHistory, runTurn } from './loop.js';
 import { createToolSessionState } from './tools.js';
 
 const LF = String.fromCharCode(10);
@@ -214,6 +214,115 @@ describe('runTurn', () => {
       turnId: 'turn_1',
       reason: 'error',
     });
+  });
+});
+
+describe('compactHistory', () => {
+  it('folds all but the last two messages into one system message', async () => {
+    const client = new FakeClient([
+      streamOf([{ choices: [{ delta: { content: 'summary text' }, finish_reason: 'stop' }] }]),
+    ]);
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'two' },
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ];
+
+    const result = await compactHistory({
+      client,
+      messages,
+      model: 'test-model',
+      deps,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ removed: 2 });
+    expect(messages).toHaveLength(3);
+    expect(messages[0]?.role).toBe('system');
+    expect(messages[0]?.content).toContain('summary text');
+    expect(messages.slice(1)).toEqual([
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ]);
+    expect(client.requests[0]?.toolAllowlist).toEqual([]);
+    expect(client.requests[0]?.messages[0]?.role).toBe('system');
+  });
+
+  it('keeps a leading tool result with the assistant call it answers', async () => {
+    const client = new FakeClient([
+      streamOf([{ choices: [{ delta: { content: 'summary' }, finish_reason: 'stop' }] }]),
+    ]);
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'one' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'read', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'file body' },
+      { role: 'assistant', content: 'done' },
+    ];
+
+    const result = await compactHistory({
+      client,
+      messages,
+      model: 'test-model',
+      deps,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ removed: 1 });
+    expect(messages.map((message) => message.role)).toEqual([
+      'system',
+      'assistant',
+      'tool',
+      'assistant',
+    ]);
+  });
+
+  it('keeps history and reports zero when the summary request fails', async () => {
+    const client = new FakeClient([]);
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'two' },
+      { role: 'user', content: 'three' },
+      { role: 'assistant', content: 'four' },
+    ];
+
+    const result = await compactHistory({
+      client,
+      messages,
+      model: 'test-model',
+      deps,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({ removed: 0 });
+    expect(messages).toHaveLength(4);
+  });
+});
+
+describe('max tokens', () => {
+  it('sends the turn output cap on the request', async () => {
+    const client = new FakeClient([
+      streamOf([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]),
+    ]);
+    await collect(
+      runTurn({
+        ctx: context({ maxOutputTokens: 777 }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.maxTokens).toBe(777);
   });
 });
 

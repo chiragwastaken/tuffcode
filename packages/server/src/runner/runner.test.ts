@@ -35,6 +35,7 @@ class FakeAdapter implements AdapterSession {
   readonly approvals: { approvalId: string; decision: ApprovalChoice }[] = [];
   interrupts = 0;
   disposes = 0;
+  compactCalls = 0;
 
   private queue: AdapterEvent[] = [];
   private waiter: (() => void) | null = null;
@@ -93,6 +94,11 @@ class FakeAdapter implements AdapterSession {
     this.end();
   }
 
+  async compact(): Promise<{ removed: number }> {
+    this.compactCalls += 1;
+    return { removed: 2 };
+  }
+
   async dispose(): Promise<void> {
     this.disposes += 1;
     this.end();
@@ -105,10 +111,7 @@ class FakeAdapter implements AdapterSession {
   }
 }
 
-function waitFor(
-  bus: EventBus,
-  predicate: (event: ServerEvent) => boolean,
-): Promise<ServerEvent> {
+function waitFor(bus: EventBus, predicate: (event: ServerEvent) => boolean): Promise<ServerEvent> {
   const { promise, resolve } = Promise.withResolvers<ServerEvent>();
   const unsubscribe = bus.subscribe((event) => {
     if (!predicate(event)) return;
@@ -124,6 +127,12 @@ function waitForTurnEnd(bus: EventBus): Promise<ServerEvent> {
     (event) => event.type === 'thread.event' && event.payload.type === 'turn.finished',
   );
 }
+
+function contextEvents(events: readonly ServerEvent[]): ContextUpdatedEvent[] {
+  return events.filter((event): event is ContextUpdatedEvent => event.type === 'context.updated');
+}
+
+type ContextUpdatedEvent = Extract<ServerEvent, { type: 'context.updated' }>;
 
 interface Fixture {
   ctx: TestContext;
@@ -284,6 +293,93 @@ describe('thread runner', () => {
     const ctx = f.adapter.sends[0]?.ctx;
     expect(ctx?.toolAllowlist).toEqual(['read']);
     expect(ctx?.maxToolIterations).toBe(7);
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+  });
+
+  it('passes the settings output cap into the turn', async () => {
+    const f = setup();
+    f.ctx.repos.settings.patch({ maxOutputTokens: 4096 });
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    expect(f.adapter.sends[0]?.ctx.maxOutputTokens).toBe(4096);
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+  });
+
+  it('lets a per-model output cap override the settings default', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { models: [{ id: 'model-x', label: 'Model X', maxOutputTokens: 2048 }] },
+    });
+    f.ctx.repos.settings.patch({ maxOutputTokens: 4096 });
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    expect(f.adapter.sends[0]?.ctx.maxOutputTokens).toBe(2048);
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+  });
+
+  it('emits context.updated before and after a turn', async () => {
+    const f = setup();
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    const before = contextEvents(f.events);
+    expect(before).toHaveLength(1);
+    expect(before[0]?.payload).toMatchObject({ threadId: 'thr_a', compacted: false });
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+
+    await vi.waitFor(() => expect(contextEvents(f.events)).toHaveLength(2));
+    const after = contextEvents(f.events);
+    expect(after[1]?.payload.compacted).toBe(false);
+    expect(after[1]?.payload.usedTokens).toBeGreaterThan(0);
+  });
+
+  it('compacts once before a turn when usage crosses the warning threshold', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { contextWindow: 100 },
+    });
+    f.ctx.repos.settings.patch({ contextWarningThreshold: 0.5, autoCompact: true });
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    expect(f.adapter.compactCalls).toBe(1);
+    const compacted = contextEvents(f.events).filter((event) => event.payload.compacted);
+    expect(compacted).toHaveLength(1);
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+  });
+
+  it('leaves history alone when auto-compaction is off', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { contextWindow: 100 },
+    });
+    f.ctx.repos.settings.patch({ contextWarningThreshold: 0.5, autoCompact: false });
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    expect(f.adapter.compactCalls).toBe(0);
+    expect(contextEvents(f.events).some((event) => event.payload.compacted)).toBe(false);
 
     f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
     await ended;

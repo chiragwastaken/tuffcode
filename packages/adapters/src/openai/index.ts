@@ -8,7 +8,7 @@ import {
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
 import { OpenAIClient, readClientConfig, type ChatMessage, type FetchFn } from './client.js';
-import { runTurn } from './loop.js';
+import { compactHistory, runTurn } from './loop.js';
 import { createToolSessionState, type ToolSessionState } from './tools.js';
 
 const LF = String.fromCharCode(10);
@@ -36,6 +36,8 @@ class OpenAIChatAdapter implements AdapterSession {
   private readonly state: ToolSessionState = createToolSessionState();
   private readonly approvals = new Map<string, (choice: ApprovalChoice) => void>();
   private controller: AbortController | null = null;
+  private compaction: AbortController | null = null;
+  private model = '';
   private disposed = false;
 
   constructor(
@@ -61,6 +63,7 @@ class OpenAIChatAdapter implements AdapterSession {
 
     const turnCtx: TurnContext = { ...ctx, signal: controller.signal };
     const turnId = ctx.turnId;
+    this.model = ctx.model;
     this.messages.push({ role: 'user', content: userContent(text, ctx) });
 
     try {
@@ -94,12 +97,31 @@ class OpenAIChatAdapter implements AdapterSession {
     this.denyApprovals();
   }
 
+  async compact(): Promise<{ removed: number }> {
+    if (this.disposed) return { removed: 0 };
+    const controller = new AbortController();
+    this.compaction = controller;
+    try {
+      return await compactHistory({
+        client: this.client,
+        messages: this.messages,
+        model: this.model,
+        deps: this.deps,
+        signal: controller.signal,
+      });
+    } finally {
+      if (this.compaction === controller) this.compaction = null;
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.controller?.abort();
+    this.compaction?.abort();
     this.denyApprovals();
     this.controller = null;
+    this.compaction = null;
     this.messages.length = 0;
     this.state.readSet.clear();
     this.deps.logger.debug('openai adapter disposed', { providerId: this.providerId });
