@@ -3,7 +3,10 @@ import { createSecretBridge, type SecretPort } from './bridge.js';
 
 interface FakePort extends SecretPort {
   sent: unknown[];
+  /** Replies the way Electron's utility process does: wrapped in a MessageEvent. */
   reply(message: unknown): void;
+  /** Replies the way Node's process.on('message') does: the payload itself. */
+  replyRaw(message: unknown): void;
   close(): void;
 }
 
@@ -21,6 +24,10 @@ function createFakePort(): FakePort {
       else closers.push(listener);
     },
     reply: (message) => {
+      const event = new MessageEvent('message', { data: message });
+      for (const listener of listeners) listener(event);
+    },
+    replyRaw: (message) => {
       for (const listener of listeners) listener(message);
     },
     close: () => {
@@ -58,6 +65,22 @@ describe('secret bridge', () => {
 
     port.reply({ id: request['id'], type: 'secret.result', ok: true, value: 'sk-live' });
     await expect(pending).resolves.toBe('sk-live');
+  });
+
+  it('resolves a MessageEvent-wrapped reply and a raw payload alike', async () => {
+    const port = createFakePort();
+    const bridge = createSecretBridge(port);
+    bridges.push(bridge);
+
+    // Electron's utility process wraps parentPort payloads in a MessageEvent.
+    const wrapped = bridge.get('provider:prv_wrapped');
+    port.reply({ id: lastRequest(port)['id'], type: 'secret.result', ok: true, value: 'sk-wrapped' });
+    await expect(wrapped).resolves.toBe('sk-wrapped');
+
+    // Node's process.on('message') and older test seams deliver the payload itself.
+    const raw = bridge.get('provider:prv_raw');
+    port.replyRaw({ id: lastRequest(port)['id'], type: 'secret.result', ok: true, value: 'sk-raw' });
+    await expect(raw).resolves.toBe('sk-raw');
   });
 
   it('accepts the desktop reply shape without a type discriminator', async () => {
