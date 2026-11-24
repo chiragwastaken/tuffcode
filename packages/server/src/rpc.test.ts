@@ -14,6 +14,7 @@ import { createTestContext, silentLogger, type TestContext } from './test-suppor
 const IMPLEMENTED = [
   'app.health',
   'brain.delete',
+  'brain.graph',
   'brain.list',
   'brain.preview',
   'brain.upsert',
@@ -29,6 +30,7 @@ const IMPLEMENTED = [
   'git.commit',
   'git.pr',
   'git.push',
+  'memory.search',
   'messages.list',
   'models.list',
   'projects.add',
@@ -67,10 +69,12 @@ interface HandlersFixture {
   events: ServerEvent[];
 }
 
-function makeHandlers(options: {
-  createAdapter?: () => Promise<AdapterSession>;
-  featureHandlers?: readonly RpcHandlers[];
-} = {}): HandlersFixture {
+function makeHandlers(
+  options: {
+    createAdapter?: () => Promise<AdapterSession>;
+    featureHandlers?: readonly RpcHandlers[];
+  } = {},
+): HandlersFixture {
   const ctx = createTestContext();
   const bus = createEventBus();
   const events: ServerEvent[] = [];

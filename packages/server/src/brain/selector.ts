@@ -57,7 +57,7 @@ function ruleApplies(entry: BrainEntry, mode: ExecutionMode | undefined): boolea
     .includes(mode);
 }
 
-function belongsToProject(entry: BrainEntry, projectId: string): boolean {
+function belongsToProject(entry: BrainEntry, projectId: string | undefined): boolean {
   return entry.projectId === null || entry.projectId === projectId;
 }
 
@@ -171,9 +171,48 @@ function fitAlways(groups: AlwaysGroups): BrainEntry[] {
   return ordered();
 }
 
-interface RetrievalCandidate {
+export interface ScoredBrainEntry {
   entry: BrainEntry;
   score: number;
+  /** Query terms found in the entry text or tags. */
+  matchedTerms: string[];
+  /** Recency component in 0..1, already part of `score`. */
+  recency: number;
+}
+
+/**
+ * Ranks retrieval candidates with the selector's own score. `memory.search` reuses
+ * this so a tool call ranks exactly like the next turn would.
+ */
+export function scoreBrainCandidates(
+  store: BrainStore,
+  input: { projectId: string | undefined; query: string; now?: Date },
+): ScoredBrainEntry[] {
+  const terms = termsOf(input.query);
+  if (terms.length === 0) return [];
+  const now = input.now ?? new Date();
+  const seen = new Set<string>();
+  const scored: ScoredBrainEntry[] = [];
+  for (const entry of store.list({ query: input.query, limit: CANDIDATE_LIMIT })) {
+    if (seen.has(entry.id)) continue;
+    if (entry.kind === 'rule' || entry.kind === 'identity') continue;
+    if (!belongsToProject(entry, input.projectId)) continue;
+    seen.add(entry.id);
+    const haystack = `${entry.text} ${entry.tags}`.toLowerCase();
+    const recency = recencyScore(entry, now);
+    scored.push({
+      entry,
+      score: 0.5 * matchScore(entry, terms) + 0.3 * entry.importance + 0.2 * recency,
+      matchedTerms: terms.filter((term) => haystack.includes(term)),
+      recency,
+    });
+  }
+  return scored.toSorted(
+    (a, b) =>
+      b.score - a.score ||
+      b.entry.updatedAt.localeCompare(a.entry.updatedAt) ||
+      a.entry.id.localeCompare(b.entry.id),
+  );
 }
 
 function collectRetrieval(
@@ -181,30 +220,13 @@ function collectRetrieval(
   input: BrainSelectionInput,
   excluded: ReadonlySet<string>,
 ): BrainEntry[] {
-  const terms = termsOf(input.message);
-  if (terms.length === 0 || input.retrieval === false) return [];
+  if (termsOf(input.message).length === 0 || input.retrieval === false) return [];
 
-  const candidates: RetrievalCandidate[] = [];
-  const seen = new Set<string>();
-  const now = input.now ?? new Date();
-  for (const entry of store.list({ query: input.message, limit: CANDIDATE_LIMIT })) {
-    if (seen.has(entry.id) || excluded.has(entry.id)) continue;
-    if (entry.kind === 'rule' || entry.kind === 'identity') continue;
-    if (!belongsToProject(entry, input.projectId)) continue;
-    seen.add(entry.id);
-    candidates.push({
-      entry,
-      score:
-        0.5 * matchScore(entry, terms) + 0.3 * entry.importance + 0.2 * recencyScore(entry, now),
-    });
-  }
-
-  const ranked = candidates.toSorted(
-    (a, b) =>
-      b.score - a.score ||
-      b.entry.updatedAt.localeCompare(a.entry.updatedAt) ||
-      a.entry.id.localeCompare(b.entry.id),
-  );
+  const ranked = scoreBrainCandidates(store, {
+    projectId: input.projectId,
+    query: input.message,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  }).filter((candidate) => !excluded.has(candidate.entry.id));
 
   const selected: BrainEntry[] = [];
   for (const { entry } of ranked) {
