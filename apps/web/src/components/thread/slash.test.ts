@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterPalette, parseTrigger, triggerInsert } from './slash';
+import { filterPalette, parseTrigger, slashCommandName, triggerInsert } from './slash';
 
 describe('parseTrigger', () => {
   it('matches a leading slash command and its query', () => {
@@ -20,6 +20,23 @@ describe('parseTrigger', () => {
     expect(parseTrigger('/review now')).toBeNull();
     expect(parseTrigger('/review ')).toBeNull();
     expect(parseTrigger('$skill extra')).toBeNull();
+  });
+});
+
+describe('slashCommandName', () => {
+  it('returns the leading command name', () => {
+    expect(slashCommandName('/plan')).toBe('plan');
+    expect(slashCommandName('/plan build it')).toBe('plan');
+    expect(slashCommandName('/subagent explorer map')).toBe('subagent');
+    expect(slashCommandName('/pr-2')).toBe('pr-2');
+  });
+
+  it('ignores text that does not start with a command token', () => {
+    expect(slashCommandName('plan')).toBeNull();
+    expect(slashCommandName(' /plan')).toBeNull();
+    expect(slashCommandName('please /plan')).toBeNull();
+    expect(slashCommandName('/')).toBeNull();
+    expect(slashCommandName('$skill')).toBeNull();
   });
 });
 

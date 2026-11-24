@@ -18,6 +18,10 @@ export interface MessagesRepo {
    */
   addIfAbsent(input: AddMessageInput): Message;
   list(threadId: string, limit?: number): Message[];
+  /** Deletes every message of one thread; returns the number of rows removed. */
+  removeByThread(threadId: string): number;
+  /** Deletes the given message ids; returns the number of rows removed. */
+  removeMany(ids: readonly string[]): number;
 }
 
 const MESSAGE_COLUMNS = 'id, thread_id, role, content, created_at';
@@ -43,6 +47,8 @@ export function createMessagesRepo(db: DatabaseSync): MessagesRepo {
   const selectByThread = db.prepare(
     `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?`,
   );
+  const deleteByThread = db.prepare('DELETE FROM messages WHERE thread_id = ?');
+  const deleteOne = db.prepare('DELETE FROM messages WHERE id = ?');
 
   function readBack(id: string): Message {
     const row = selectOne.get(id);
@@ -63,5 +69,11 @@ export function createMessagesRepo(db: DatabaseSync): MessagesRepo {
       selectByThread
         .all(threadId, Math.max(1, Math.floor(limit)))
         .map((row) => mapMessage(asRow(row))),
+    removeByThread: (threadId) => Number(deleteByThread.run(threadId).changes),
+    removeMany: (ids) => {
+      let removed = 0;
+      for (const id of ids) removed += Number(deleteOne.run(id).changes);
+      return removed;
+    },
   };
 }

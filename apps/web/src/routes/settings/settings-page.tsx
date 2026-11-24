@@ -10,6 +10,7 @@ import {
   RefreshCw,
   ScrollText,
   Server,
+  ScrollText,
   ShieldCheck,
   SquareTerminal,
   Table2,
@@ -29,6 +30,7 @@ import { BrainSection } from './brain-section';
 import { CapabilitiesSection } from './capabilities-section';
 import { CustomPromptSection } from './custom-prompt-section';
 import { DiagnosticsSection } from './diagnostics-section';
+import { InstructionsSection } from './instructions-section';
 import { KeybindingsSection } from './keybindings-section';
 import { ModelsSection } from '../../components/settings/models-section';
 import { PermissionsSection } from './permissions-section';
@@ -42,6 +44,7 @@ const SECTION_ICON: Record<SettingsSection, LucideIcon> = {
   models: Boxes,
   instructions: ScrollText,
   agents: Wrench,
+  instructions: ScrollText,
   permissions: ShieldCheck,
   terminal: SquareTerminal,
   brain: Brain,
@@ -64,6 +67,8 @@ function renderSection(section: SettingsSection) {
       return <CustomPromptSection />;
     case 'agents':
       return <AgentsSection />;
+    case 'instructions':
+      return <InstructionsSection />;
     case 'permissions':
       return <PermissionsSection />;
     case 'terminal':

@@ -158,7 +158,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   };
 
   const commands: RpcHandlers = new Map([
-    ...createCommandHandlers({ repos, bus }),
+    ...createCommandHandlers({ repos, bus, council, subagents, runner }),
     ...createSkillHandlers({ repos, bus }),
   ]);
   const terminals = new TerminalService({

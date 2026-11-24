@@ -13,6 +13,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
 import { InspectorPanel } from './inspector/InspectorPanel';
+import { subscribePanelRequests } from './inspector/panel-requests';
 import { CommandPalette } from './menu/CommandPalette';
 import { MenuProvider } from './menu/Menu';
 import { Sidebar } from './sidebar/Sidebar';
@@ -86,6 +87,10 @@ export function AppShell() {
       cancelled = true;
     };
   }, [bootstrap?.platform]);
+
+  // A slash command that shows an inspector tab also reveals the column when it
+  // was collapsed, so the result is never invisible.
+  useEffect(() => subscribePanelRequests(() => setInspectorOpen(true)), []);
 
   useEffect(() => {
     const query = window.matchMedia(WIDE_LAYOUT_QUERY);

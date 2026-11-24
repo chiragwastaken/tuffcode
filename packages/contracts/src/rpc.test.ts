@@ -198,6 +198,7 @@ const command: Command = {
   description: 'Review the current diff',
   body: 'Review the diff and report findings',
   path: null,
+  argumentHint: '[path]',
 };
 
 const skill: Skill = {
@@ -503,6 +504,19 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
   'subagents.cancel': { params: { childId: 'child-1' }, result: {} },
   'subagents.list': { params: { threadId: 't1' }, result: [subagentView] },
   'commands.list': { params: { projectId: 'p1' }, result: [command] },
+  'commands.run': {
+    params: { threadId: 't1', input: '/context' },
+    result: {
+      kind: 'ui',
+      action: {
+        type: 'show-context',
+        preview: {
+          sections: [{ name: 'base', text: 'You are Tuffcode.', tokens: 6 }],
+          total: 6,
+        },
+      },
+    },
+  },
   'skills.list': { params: { projectId: 'p1' }, result: [skill] },
   'diagnostics.export': {
     params: {},
@@ -521,6 +535,7 @@ const expectedMethods: RpcMethod[] = [
   'checkpoints.list',
   'checkpoints.revert',
   'commands.list',
+  'commands.run',
   'comments.add',
   'comments.list',
   'comments.resolve',
@@ -640,6 +655,10 @@ describe('protocol envelope', () => {
   });
 });
 
+function parseCommandRunResult(result: unknown) {
+  return methods['commands.run'].result.safeParse(result);
+}
+
 describe('rpc methods', () => {
   it('exposes exactly 56 methods with the documented names', () => {
     expect(RPC_METHODS).toHaveLength(56);
@@ -711,6 +730,46 @@ describe('rpc methods', () => {
         config: { contextWindow: 200000, maxOutputTokens: 8192, baseUrl: 'http://127.0.0.1:1/v1' },
       }).success,
     ).toBe(true);
+  });
+
+  it('parses every commands.run result kind', () => {
+    expect(parseCommandRunResult({ kind: 'text', text: '/model opens the picker.' }).success).toBe(
+      true,
+    );
+    expect(parseCommandRunResult({ kind: 'turn', text: '/review src/app.ts' }).success).toBe(true);
+    expect(parseCommandRunResult({ kind: 'error', message: 'Unknown subagent type' }).success).toBe(
+      true,
+    );
+    expect(
+      parseCommandRunResult({ kind: 'ui', action: { type: 'open-model-picker' } }).success,
+    ).toBe(true);
+    expect(
+      parseCommandRunResult({ kind: 'ui', action: { type: 'switch-mode', mode: 'council' } })
+        .success,
+    ).toBe(true);
+    expect(
+      parseCommandRunResult({
+        kind: 'ui',
+        action: { type: 'open-settings', section: 'instructions' },
+      }).success,
+    ).toBe(true);
+    expect(
+      parseCommandRunResult({
+        kind: 'ui',
+        action: { type: 'reload-transcript', text: 'Cleared 3 messages.' },
+      }).success,
+    ).toBe(true);
+    expect(
+      parseCommandRunResult({ kind: 'ui', action: { type: 'switch-mode', mode: 'turbo' } }).success,
+    ).toBe(false);
+    expect(
+      parseCommandRunResult({ kind: 'ui', action: { type: 'open-settings', section: 'billing' } })
+        .success,
+    ).toBe(false);
+    expect(parseCommandRunResult({ kind: 'ui', action: { type: 'show-context' } }).success).toBe(
+      false,
+    );
+    expect(parseCommandRunResult({ kind: 'text' }).success).toBe(false);
   });
 
   it('rejects null params and results for every method', () => {
@@ -849,6 +908,11 @@ describe('rpc methods', () => {
         },
       ],
       ['brain.graph', 'result', { nodes: [], edges: [{ from: 'b1', to: 'b2', relation: '' }] }],
+      ['commands.run', 'params', { threadId: 't1', input: '' }],
+      ['commands.run', 'params', { threadId: '', input: '/help' }],
+      ['commands.run', 'result', { kind: 'turn' }],
+      ['commands.run', 'result', { kind: 'ui', action: { type: 'open-settings' } }],
+      ['commands.run', 'result', { kind: 'nope', text: 'x' }],
       ['memory.search', 'params', { query: '' }],
       ['memory.search', 'params', { projectId: 'p1', query: 'emdash', limit: -1 }],
       [

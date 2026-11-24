@@ -10,7 +10,7 @@ import {
 function select(
   state: InspectorTabsState,
   threadId: string,
-  tab: 'diff' | 'terminal' | 'brain' | 'council',
+  tab: 'diff' | 'terminal' | 'brain' | 'council' | 'context',
 ): InspectorTabsState {
   return inspectorTabsReducer(state, { type: 'select', threadId, tab });
 }
@@ -54,8 +54,9 @@ describe('inspector tab reducer', () => {
     expect(select(state, 'thr_b', 'brain').lastTab).toBe('brain');
   });
 
-  it('recognizes only the four inspector tabs', () => {
+  it('recognizes only the known inspector tabs', () => {
     expect(isInspectorTab('brain')).toBe(true);
+    expect(isInspectorTab('context')).toBe(true);
     expect(isInspectorTab('settings')).toBe(false);
     expect(isInspectorTab(null)).toBe(false);
   });

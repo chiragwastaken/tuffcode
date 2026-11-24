@@ -45,6 +45,9 @@ export interface ModelPickerProps {
   disabled?: boolean;
   align?: 'start' | 'end';
   className?: string;
+  /** Controlled popup state; omit to let the picker own it. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -60,12 +63,19 @@ export function ModelPicker({
   disabled = false,
   align = 'start',
   className,
+  open: openProp,
+  onOpenChange,
 }: ModelPickerProps) {
   const { models, status, error, warning, refreshing, refresh, addManualModel } = useProviderModels(
     provider?.id,
   );
 
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = openProp ?? uncontrolledOpen;
+  const setOpen = (next: boolean): void => {
+    if (openProp === undefined) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [manualDraft, setManualDraft] = useState('');
@@ -109,12 +119,20 @@ export function ModelPicker({
 
   function handleOpenChange(next: boolean): void {
     setOpen(next);
-    if (!next) return;
-    setQuery('');
-    setManualDraft('');
-    setManualError(null);
-    setActiveIndex(initialActiveIndex(allModels, value));
   }
+
+  // A controlled open (the /model command) does not go through handleOpenChange, so
+  // seed the search and the active row on the transition either way.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      setQuery('');
+      setManualDraft('');
+      setManualError(null);
+      setActiveIndex(initialActiveIndex(allModels, value));
+    }
+    wasOpen.current = open;
+  }, [allModels, open, value]);
 
   function choose(modelId: string): void {
     onSelect(modelId);
