@@ -660,8 +660,8 @@ function parseCommandRunResult(result: unknown) {
 }
 
 describe('rpc methods', () => {
-  it('exposes exactly 56 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(56);
+  it('exposes exactly 57 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(57);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
