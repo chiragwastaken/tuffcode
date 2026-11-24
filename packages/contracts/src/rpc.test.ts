@@ -110,6 +110,7 @@ const model: Model = {
   modelId: 'claude-opus-4-5',
   label: 'Opus 4.5',
   contextWindow: 200000,
+  maxOutputTokens: 8192,
   isDefault: true,
 };
 
@@ -328,6 +329,19 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     params: { id: 't1', sinceSeq: 0, limit: 100 },
     result: { events: [threadEventRow], hasMore: false },
   },
+  'threads.context': {
+    params: { threadId: 't1' },
+    result: {
+      usedTokens: 42000,
+      maxTokens: 200000,
+      percent: 0.21,
+      compactedAt: at,
+      segments: [
+        { name: 'system', tokens: 640 },
+        { name: 'messages', tokens: 41360 },
+      ],
+    },
+  },
   'messages.list': { params: { threadId: 't1' }, result: [message] },
   'checkpoints.create': {
     params: { threadId: 't1', label: 'before review fixes' },
@@ -544,6 +558,7 @@ const expectedMethods: RpcMethod[] = [
   'terminal.open',
   'terminal.resize',
   'threads.approve',
+  'threads.context',
   'threads.create',
   'threads.delete',
   'threads.events',
@@ -626,8 +641,8 @@ describe('protocol envelope', () => {
 });
 
 describe('rpc methods', () => {
-  it('exposes exactly 55 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(55);
+  it('exposes exactly 56 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(56);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -675,6 +690,27 @@ describe('rpc methods', () => {
     expect(methods['brain.graph'].result.safeParse({ nodes: [], edges: [] }).success).toBe(true);
     expect(methods['memory.search'].params.safeParse({ query: 'emdash' }).success).toBe(true);
     expect(methods['memory.search'].result.safeParse({ entries: [] }).success).toBe(true);
+    expect(
+      methods['threads.context'].result.safeParse({
+        usedTokens: 0,
+        maxTokens: 200000,
+        percent: 0,
+        segments: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      methods['providers.models'].result.safeParse({
+        models: [{ providerId: 'prov-claude', modelId: 'm', label: 'M', isDefault: false }],
+        source: 'manual',
+      }).success,
+    ).toBe(true);
+    expect(
+      methods['providers.upsert'].params.safeParse({
+        kind: 'openai-compatible',
+        label: 'Local',
+        config: { contextWindow: 200000, maxOutputTokens: 8192, baseUrl: 'http://127.0.0.1:1/v1' },
+      }).success,
+    ).toBe(true);
   });
 
   it('rejects null params and results for every method', () => {
@@ -736,6 +772,55 @@ describe('rpc methods', () => {
       ['providers.models', 'params', { providerId: '' }],
       ['providers.models', 'result', { models: [], source: 'guess' }],
       ['providers.models', 'result', { models: [{ ...model, contextWindow: 0 }], source: 'cache' }],
+      [
+        'providers.models',
+        'result',
+        { models: [{ ...model, maxOutputTokens: 0 }], source: 'cache' },
+      ],
+      [
+        'providers.models',
+        'result',
+        { models: [{ ...model, maxOutputTokens: 1.5 }], source: 'cache' },
+      ],
+      ['threads.context', 'params', { threadId: '' }],
+      [
+        'threads.context',
+        'result',
+        { usedTokens: -1, maxTokens: 200000, percent: 0, segments: [] },
+      ],
+      ['threads.context', 'result', { usedTokens: 1, maxTokens: 0, percent: 0, segments: [] }],
+      [
+        'threads.context',
+        'result',
+        { usedTokens: 1, maxTokens: 200000, percent: 1.5, segments: [] },
+      ],
+      [
+        'threads.context',
+        'result',
+        { usedTokens: 1, maxTokens: 200000, percent: 0.5, segments: [{ name: 'x', tokens: -1 }] },
+      ],
+      ['threads.context', 'result', { usedTokens: 1, maxTokens: 200000, percent: 0.5 }],
+      [
+        'threads.context',
+        'result',
+        {
+          usedTokens: 1,
+          maxTokens: 200000,
+          percent: 0.5,
+          compactedAt: 'yesterday',
+          segments: [],
+        },
+      ],
+      [
+        'providers.upsert',
+        'params',
+        { kind: 'openai-compatible', label: 'x', config: { contextWindow: 0 } },
+      ],
+      [
+        'providers.upsert',
+        'params',
+        { kind: 'openai-compatible', label: 'x', config: { maxOutputTokens: -1 } },
+      ],
       ['prompt.preview', 'params', { threadId: 't1' }],
       [
         'prompt.preview',
@@ -921,10 +1006,21 @@ describe('server events', () => {
         payload: { loginId: 'login-1', providerId: 'prov-claude', ok: true, detail: 'signed in' },
       },
       { kind: 'event', type: 'settings.updated', payload: DEFAULT_SETTINGS },
+      {
+        kind: 'event',
+        type: 'context.updated',
+        payload: {
+          threadId: 't1',
+          usedTokens: 42000,
+          maxTokens: 200000,
+          percent: 0.21,
+          compacted: false,
+        },
+      },
       { kind: 'event', type: 'server.warning', payload: { message: 'disk low', code: 'disk' } },
     ];
 
-    expect(frames).toHaveLength(13);
+    expect(frames).toHaveLength(14);
     for (const frame of frames) {
       expect(ServerEventSchema.safeParse(frame).success, frame.type).toBe(true);
     }
@@ -995,6 +1091,39 @@ describe('server events', () => {
         payload: { childId: 'child-1', status: 'done' },
       }).success,
     ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'context.updated',
+        payload: {
+          threadId: 't1',
+          usedTokens: 42000,
+          maxTokens: 200000,
+          percent: 1.2,
+          compacted: false,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'context.updated',
+        payload: { usedTokens: 42000, maxTokens: 200000, percent: 0.2, compacted: false },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'context.updated',
+        payload: {
+          threadId: 't1',
+          usedTokens: 42000,
+          maxTokens: 200000,
+          percent: 0.2,
+          compacted: 'yes',
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -1030,6 +1159,10 @@ describe('settings', () => {
         planner: {},
       },
       subagentConcurrency: 4,
+      contextWarningThreshold: 0.8,
+      autoCompact: true,
+      maxOutputTokens: 8192,
+      showContextMeter: true,
     });
     expect(SettingsSchema.parse({})).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
@@ -1073,6 +1206,49 @@ describe('settings', () => {
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, enabledTools: 'bash' }).success).toBe(
       false,
     );
+    expect(
+      SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, contextWarningThreshold: 0.4 }).success,
+    ).toBe(false);
+    expect(
+      SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, contextWarningThreshold: 0.96 }).success,
+    ).toBe(false);
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, autoCompact: 'yes' }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, maxOutputTokens: 255 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, maxOutputTokens: 65537 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, maxOutputTokens: 8192.5 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, showContextMeter: 1 }).success).toBe(
+      false,
+    );
+  });
+
+  it('parses context limit settings and patches', () => {
+    const parsed = SettingsSchema.parse({
+      contextWarningThreshold: 0.95,
+      autoCompact: false,
+      maxOutputTokens: 256,
+      showContextMeter: false,
+    });
+    expect(parsed.contextWarningThreshold).toBe(0.95);
+    expect(parsed.autoCompact).toBe(false);
+    expect(parsed.maxOutputTokens).toBe(256);
+    expect(parsed.showContextMeter).toBe(false);
+
+    expect(SettingsSchema.parse({ contextWarningThreshold: 0.5 }).contextWarningThreshold).toBe(
+      0.5,
+    );
+    expect(SettingsSchema.parse({ maxOutputTokens: 65536 }).maxOutputTokens).toBe(65536);
+    expect(SettingsPatchSchema.parse({ autoCompact: false })).toEqual({ autoCompact: false });
+    expect(SettingsPatchSchema.safeParse({ contextWarningThreshold: 0.99 }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ maxOutputTokens: 100 }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ showContextMeter: 'on' }).success).toBe(false);
   });
 
   it('parses custom instructions, subagent models and concurrency', () => {
@@ -1132,6 +1308,26 @@ describe('entity schemas', () => {
     expect(DiffFileSchema.parse(diffFile)).toEqual(diffFile);
     expect(ReviewCommentSchema.parse(reviewComment)).toEqual(reviewComment);
     expect(CommandSchema.parse(command)).toEqual(command);
+  });
+
+  it('keeps model token limits optional and positive', () => {
+    const withoutLimits = {
+      providerId: 'prov-claude',
+      modelId: 'claude-opus-4-5',
+      label: 'Opus 4.5',
+      isDefault: false,
+    };
+    expect(ModelSchema.parse(withoutLimits)).toEqual(withoutLimits);
+    expect(ModelSchema.parse({ ...model, contextWindow: null })).toEqual({
+      ...model,
+      contextWindow: null,
+    });
+    expect(ModelSchema.safeParse({ ...model, maxOutputTokens: null }).success).toBe(false);
+    expect(ModelSchema.safeParse({ ...model, contextWindow: 0 }).success).toBe(false);
+    expect(ModelSchema.safeParse({ ...model, contextWindow: -1 }).success).toBe(false);
+    expect(ModelSchema.safeParse({ ...model, contextWindow: 1.5 }).success).toBe(false);
+    expect(ModelSchema.safeParse({ ...model, maxOutputTokens: 0 }).success).toBe(false);
+    expect(ModelSchema.safeParse({ ...model, maxOutputTokens: 255.5 }).success).toBe(false);
   });
 
   it('rejects entities with invalid enum values', () => {

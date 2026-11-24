@@ -182,7 +182,16 @@ export const ApprovalSchema = z.object({
 });
 export type Approval = z.infer<typeof ApprovalSchema>;
 
-export const ProviderConfigSchema = z.record(z.string(), z.unknown());
+/**
+ * Free-form provider config with the token limits presets seed and users override.
+ * Unknown keys stay untouched so adapters can read their own settings.
+ */
+export const ProviderConfigSchema = z
+  .object({
+    contextWindow: z.number().int().positive().optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+  })
+  .catchall(z.unknown());
 
 export const ProviderViewSchema = z.object({
   id: IdSchema,
@@ -200,7 +209,8 @@ export const ModelSchema = z.object({
   providerId: IdSchema,
   modelId: z.string(),
   label: z.string(),
-  contextWindow: z.number().int().positive().nullable(),
+  contextWindow: z.number().int().positive().nullable().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
   isDefault: z.boolean(),
 });
 export type Model = z.infer<typeof ModelSchema>;

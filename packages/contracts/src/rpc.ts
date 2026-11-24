@@ -12,6 +12,7 @@ import {
   GoalAutonomySchema,
   GoalSchema,
   IdSchema,
+  IsoDateTimeSchema,
   MessageSchema,
   ModelSchema,
   PermissionModeSchema,
@@ -182,6 +183,21 @@ export const methods = {
     result: z.object({
       events: ThreadEventRowSchema.array(),
       hasMore: z.boolean(),
+    }),
+  },
+  'threads.context': {
+    params: threadIdParam,
+    result: z.object({
+      usedTokens: z.number().int().nonnegative(),
+      maxTokens: z.number().int().positive(),
+      percent: z.number().min(0).max(1),
+      compactedAt: IsoDateTimeSchema.optional(),
+      segments: z
+        .object({
+          name: z.string(),
+          tokens: z.number().int().nonnegative(),
+        })
+        .array(),
     }),
   },
   'messages.list': {
