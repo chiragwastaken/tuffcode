@@ -65,6 +65,10 @@ const SettingsFields = {
   customInstructions: z.string().max(4000),
   subagentModels: SubagentModelsSchema,
   subagentConcurrency: z.number().int().min(1).max(8),
+  contextWarningThreshold: z.number().min(0.5).max(0.95),
+  autoCompact: z.boolean(),
+  maxOutputTokens: z.number().int().min(256).max(65536),
+  showContextMeter: z.boolean(),
   paneLayout: z.unknown().optional(),
 };
 
@@ -99,6 +103,10 @@ export const SettingsSchema = z.object({
   customInstructions: SettingsFields.customInstructions.default(''),
   subagentModels: SettingsFields.subagentModels.default(emptySubagentModels),
   subagentConcurrency: SettingsFields.subagentConcurrency.default(4),
+  contextWarningThreshold: SettingsFields.contextWarningThreshold.default(0.8),
+  autoCompact: SettingsFields.autoCompact.default(true),
+  maxOutputTokens: SettingsFields.maxOutputTokens.default(8192),
+  showContextMeter: SettingsFields.showContextMeter.default(true),
   paneLayout: SettingsFields.paneLayout,
 });
 export type Settings = z.infer<typeof SettingsSchema>;

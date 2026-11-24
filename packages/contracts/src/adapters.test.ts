@@ -111,12 +111,14 @@ describe('adapter session contract', () => {
       id: 'claude-opus-4-5',
       label: 'Opus 4.5',
       contextWindow: 200000,
+      maxOutputTokens: 8192,
       isDefault: true,
     };
 
     expect(provider.kind).toBe('claude');
     expect(provider.secret).toBeNull();
     expect(model.contextWindow).toBe(200000);
+    expect(model.maxOutputTokens).toBe(8192);
     expect(model.isDefault).toBe(true);
 
     // @ts-expect-error kind must be a ProviderKind
@@ -159,6 +161,22 @@ describe('adapter session contract', () => {
     expect(ProviderConfigSchema.parse({})).toEqual({});
     expect(ProviderConfigSchema.safeParse('not-a-row').success).toBe(false);
     expect(ProviderConfigSchema.safeParse(['family']).success).toBe(false);
+  });
+
+  it('types the provider token limits presets seed', () => {
+    const seeded = { contextWindow: 200000, maxOutputTokens: 8192, family: 'openai' };
+    expect(ProviderConfigSchema.parse(seeded)).toEqual(seeded);
+    expect(ProviderConfigSchema.parse({ contextWindow: 200000 })).toEqual({
+      contextWindow: 200000,
+    });
+    expect(ProviderConfigSchema.parse({ maxOutputTokens: 8192 })).toEqual({
+      maxOutputTokens: 8192,
+    });
+    expect(ProviderConfigSchema.safeParse({ contextWindow: 0 }).success).toBe(false);
+    expect(ProviderConfigSchema.safeParse({ contextWindow: -1 }).success).toBe(false);
+    expect(ProviderConfigSchema.safeParse({ contextWindow: 1.5 }).success).toBe(false);
+    expect(ProviderConfigSchema.safeParse({ maxOutputTokens: 0 }).success).toBe(false);
+    expect(ProviderConfigSchema.safeParse({ maxOutputTokens: '8192' }).success).toBe(false);
   });
 });
 

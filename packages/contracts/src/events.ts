@@ -172,6 +172,16 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
       detail: z.string(),
     }),
   ),
+  serverEvent(
+    'context.updated',
+    z.object({
+      threadId: IdSchema,
+      usedTokens: z.number().int().nonnegative(),
+      maxTokens: z.number().int().positive(),
+      percent: z.number().min(0).max(1),
+      compacted: z.boolean(),
+    }),
+  ),
   serverEvent('settings.updated', SettingsSchema),
   serverEvent(
     'server.warning',

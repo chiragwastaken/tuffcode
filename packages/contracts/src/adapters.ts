@@ -77,6 +77,7 @@ export interface ModelInfo {
   id: string;
   label: string;
   contextWindow?: number;
+  maxOutputTokens?: number;
   isDefault?: boolean;
 }
 

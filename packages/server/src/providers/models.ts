@@ -461,7 +461,7 @@ export function mergeModels(
     rows.set(model.modelId, {
       modelId: model.modelId,
       label: model.label,
-      contextWindow: model.contextWindow,
+      contextWindow: model.contextWindow ?? null,
       isDefault: model.isDefault,
     });
   }
