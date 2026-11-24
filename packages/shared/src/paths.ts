@@ -21,24 +21,27 @@ export function tuffcodeHome(): string {
   return envValue('TUFFCODE_HOME') ?? join(homeDir(), '.tuffcode');
 }
 
-/** Per-user application data directory: `%APPDATA%/Tuffcode` or the XDG config dir. */
-export function appDataDir(): string {
+/**
+ * Per-user application data: `%LOCALAPPDATA%/Tuffcode` on win32, the XDG data dir
+ * elsewhere. Holds logs, the database, and worktrees (D13, D19).
+ */
+export function localAppDataDir(): string {
   if (process.platform === 'win32') {
-    const appData = envValue('APPDATA');
-    return appData === undefined
-      ? join(homeDir(), 'AppData', 'Roaming', 'Tuffcode')
-      : join(appData, 'Tuffcode');
+    const localAppData = envValue('LOCALAPPDATA');
+    return localAppData === undefined
+      ? join(homeDir(), 'AppData', 'Local', 'Tuffcode')
+      : join(localAppData, 'Tuffcode');
   }
-  const xdg = envValue('XDG_CONFIG_HOME');
-  return xdg === undefined ? join(homeDir(), '.config', 'Tuffcode') : join(xdg, 'Tuffcode');
+  const xdg = envValue('XDG_DATA_HOME');
+  return xdg === undefined ? join(homeDir(), '.local', 'share', 'Tuffcode') : join(xdg, 'Tuffcode');
 }
 
 export function logsDir(): string {
-  return join(appDataDir(), 'logs');
+  return join(localAppDataDir(), 'logs');
 }
 
 export function dbPath(): string {
-  return join(appDataDir(), 'tuffcode.db');
+  return join(localAppDataDir(), 'tuffcode.db');
 }
 
 export function serverJsonPath(): string {
@@ -50,7 +53,7 @@ export function tokenPath(): string {
 }
 
 export function worktreesRoot(): string {
-  return join(tuffcodeHome(), 'worktrees');
+  return join(localAppDataDir(), 'worktrees');
 }
 
 export function brainDir(): string {

@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  appDataDir,
   brainDir,
   dbPath,
+  localAppDataDir,
   logsDir,
   secretsPath,
   serverJsonPath,
@@ -14,7 +14,7 @@ import {
   worktreesRoot,
 } from '@tuffcode/shared';
 
-const ENV_KEYS = ['TUFFCODE_HOME', 'USERPROFILE', 'HOME', 'APPDATA', 'XDG_CONFIG_HOME'] as const;
+const ENV_KEYS = ['TUFFCODE_HOME', 'USERPROFILE', 'HOME', 'LOCALAPPDATA', 'XDG_DATA_HOME'] as const;
 const saved = new Map<string, string | undefined>();
 const tempDirs: string[] = [];
 
@@ -39,14 +39,13 @@ afterEach(() => {
 });
 
 describe('tuffcodeHome', () => {
-  it('honors TUFFCODE_HOME for every home-scoped path', () => {
+  it('honors TUFFCODE_HOME for user config paths', () => {
     const home = join(tempDir(), 'custom-home');
     process.env.TUFFCODE_HOME = home;
 
     expect(tuffcodeHome()).toBe(home);
     expect(serverJsonPath()).toBe(join(home, 'server.json'));
     expect(tokenPath()).toBe(join(home, 'token'));
-    expect(worktreesRoot()).toBe(join(home, 'worktrees'));
     expect(brainDir()).toBe(join(home, 'brain'));
     expect(secretsPath()).toBe(join(home, 'secrets.bin'));
   });
@@ -64,34 +63,57 @@ describe('tuffcodeHome', () => {
     const home = join(tempDir(), 'missing-home');
     process.env.TUFFCODE_HOME = home;
     void serverJsonPath();
-    void worktreesRoot();
     void brainDir();
     expect(existsSync(home)).toBe(false);
   });
 });
 
-describe('appDataDir', () => {
-  it('places app data under APPDATA on win32 and XDG elsewhere', () => {
+describe('localAppDataDir', () => {
+  it('places app data under LOCALAPPDATA on win32 and XDG_DATA_HOME elsewhere', () => {
     const base = tempDir();
     if (process.platform === 'win32') {
-      process.env.APPDATA = base;
+      process.env.LOCALAPPDATA = base;
     } else {
-      process.env.XDG_CONFIG_HOME = base;
+      process.env.XDG_DATA_HOME = base;
     }
 
-    expect(appDataDir()).toBe(join(base, 'Tuffcode'));
+    expect(localAppDataDir()).toBe(join(base, 'Tuffcode'));
     expect(logsDir()).toBe(join(base, 'Tuffcode', 'logs'));
     expect(dbPath()).toBe(join(base, 'Tuffcode', 'tuffcode.db'));
+    expect(worktreesRoot()).toBe(join(base, 'Tuffcode', 'worktrees'));
   });
 
-  it('keeps logs and db independent of TUFFCODE_HOME', () => {
+  it('falls back to the platform default data directory', () => {
+    const home = tempDir();
+    process.env.USERPROFILE = home;
+    process.env.HOME = home;
+    delete process.env.LOCALAPPDATA;
+    delete process.env.XDG_DATA_HOME;
+
+    const expected =
+      process.platform === 'win32'
+        ? join(home, 'AppData', 'Local', 'Tuffcode')
+        : join(home, '.local', 'share', 'Tuffcode');
+    expect(localAppDataDir()).toBe(expected);
+  });
+
+  it('keeps logs, db, and worktrees independent of TUFFCODE_HOME', () => {
     const base = tempDir();
     const home = join(tempDir(), 'home');
     process.env.TUFFCODE_HOME = home;
-    if (process.platform === 'win32') process.env.APPDATA = base;
-    else process.env.XDG_CONFIG_HOME = base;
+    if (process.platform === 'win32') process.env.LOCALAPPDATA = base;
+    else process.env.XDG_DATA_HOME = base;
 
     expect(logsDir().startsWith(home)).toBe(false);
     expect(dbPath().startsWith(home)).toBe(false);
+    expect(worktreesRoot().startsWith(home)).toBe(false);
+    expect(logsDir().startsWith(join(base, 'Tuffcode'))).toBe(true);
+    expect(dbPath().startsWith(join(base, 'Tuffcode'))).toBe(true);
+    expect(worktreesRoot().startsWith(join(base, 'Tuffcode'))).toBe(true);
+
+    expect(tokenPath().startsWith(home)).toBe(true);
+    expect(serverJsonPath().startsWith(home)).toBe(true);
+    expect(brainDir().startsWith(home)).toBe(true);
+    expect(secretsPath().startsWith(home)).toBe(true);
   });
 });
