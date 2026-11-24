@@ -11,9 +11,13 @@ export interface SaveBarProps {
 }
 
 /**
- * Sticky footer for a settings form. While the draft is clean it collapses to a
- * single saved line so the page still shows its state; with unsaved changes it
- * grows the reset and save actions, and save stays disabled when the draft is invalid.
+ * Footer for a settings form. `mt-auto` pushes it to the bottom of the full-height
+ * settings column, so at rest it sits at the window bottom instead of mid-page.
+ * `sticky bottom-6` keeps it there while a long section scrolls; the 24px offset is
+ * the settings column's own `p-6` gutter, so the bar does not jump when the scroll
+ * reaches the end. While the draft is clean it collapses to a single saved line so
+ * the page still shows its state; with unsaved changes it grows the reset and save
+ * actions, and save stays disabled when the draft is invalid.
  */
 export function SaveBar({ dirty, saving, invalid, error, onReset, className }: SaveBarProps) {
   if (!dirty && !saving) {
@@ -22,7 +26,7 @@ export function SaveBar({ dirty, saving, invalid, error, onReset, className }: S
         data-testid="save-bar"
         data-state="saved"
         className={cn(
-          'sticky bottom-0 z-10 flex items-center gap-1.5 border-t border-border bg-background/95 px-3 py-2 text-xs leading-5 text-muted-foreground backdrop-blur',
+          'sticky bottom-6 z-10 mt-auto flex items-center gap-1.5 border-t border-border bg-background/95 px-3 py-2 text-xs leading-5 text-muted-foreground backdrop-blur',
           className,
         )}
       >
@@ -37,7 +41,7 @@ export function SaveBar({ dirty, saving, invalid, error, onReset, className }: S
       data-testid="save-bar"
       data-state="dirty"
       className={cn(
-        'sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur',
+        'sticky bottom-6 z-10 mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur',
         className,
       )}
     >

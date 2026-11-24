@@ -309,38 +309,44 @@ export function Composer({ thread }: ComposerProps) {
               </span>
             </div>
             <div className="relative min-h-0">
-              <ul className="max-h-64 overflow-y-auto p-1" aria-label={paletteLabel[triggerKind]}>
-                {paletteEntries.map((entry, index) => (
-                  <li key={entry.name}>
-                    <button
-                      type="button"
-                      data-active={index === activeIndex}
-                      aria-current={index === activeIndex}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => choose(entry)}
-                      className={cn(
-                        'flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left',
-                        'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-                        index === activeIndex
-                          ? 'bg-foreground/[0.08] ring-1 ring-border/60 ring-inset'
-                          : 'hover:bg-accent',
-                      )}
-                    >
-                      <span className="font-mono text-xs text-foreground">
-                        {triggerKind === 'command' ? '/' : '$'}
-                        {entry.name}
-                      </span>
-                      <span className="line-clamp-1 text-2xs text-muted-foreground">
-                        {entry.description}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-popover to-transparent"
-              />
+              <div className="max-h-64 overflow-y-auto">
+                <ul className="p-1 pb-2" aria-label={paletteLabel[triggerKind]}>
+                  {paletteEntries.map((entry, index) => (
+                    <li key={entry.name}>
+                      <button
+                        type="button"
+                        data-active={index === activeIndex}
+                        aria-current={index === activeIndex}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => choose(entry)}
+                        className={cn(
+                          'flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left',
+                          // Keeps scrollIntoView from parking the active row under the fade.
+                          'scroll-mb-6',
+                          'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                          index === activeIndex
+                            ? 'bg-foreground/[0.08] ring-1 ring-border/60 ring-inset'
+                            : 'hover:bg-accent',
+                        )}
+                      >
+                        <span className="font-mono text-xs text-foreground">
+                          {triggerKind === 'command' ? '/' : '$'}
+                          {entry.name}
+                        </span>
+                        <span className="line-clamp-1 text-2xs text-muted-foreground">
+                          {entry.description}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {/* Sticky, so it masks the edge while scrolling and sits below the
+                    last row (after the list's 8px bottom padding) at the end. */}
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none sticky bottom-0 h-6 bg-gradient-to-t from-popover to-transparent"
+                />
+              </div>
             </div>
             <div className="flex items-center gap-3 border-t border-border px-2.5 py-1.5 text-2xs text-muted-foreground">
               <span className="flex items-center gap-1">

@@ -61,7 +61,7 @@ export function AppearanceSection() {
   }
 
   return (
-    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+    <form className="flex flex-1 flex-col gap-4" onSubmit={handleSubmit}>
       <SettingsSectionHeader
         title="Appearance"
         description="Theme, text size, and how much room the sidebar takes. Changes apply as you make them and are saved with the rest of settings."

@@ -70,7 +70,7 @@ export function BrainSection() {
   }
 
   return (
-    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+    <form className="flex flex-1 flex-col gap-4" onSubmit={handleSubmit}>
       <SettingsSectionHeader
         title="Brain"
         description="Standing rules and preferences the harness retrieves before a turn. Entries live in the local database and never leave this machine."

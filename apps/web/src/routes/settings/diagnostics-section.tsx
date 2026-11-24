@@ -96,7 +96,7 @@ export function DiagnosticsSection() {
   }
 
   return (
-    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+    <form className="flex flex-1 flex-col gap-4" onSubmit={handleSubmit}>
       <SettingsSectionHeader
         title="Diagnostics"
         description="Log verbosity and the files to attach to a bug report. Nothing here leaves the machine on its own."
