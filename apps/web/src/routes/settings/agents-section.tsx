@@ -1,5 +1,25 @@
-import { Card, CardDescription, CardHeader, CardTitle, Input } from '@tuffcode/ui';
+import type { ProviderView, SubagentModelChoice } from '@tuffcode/contracts';
+import { Card, CardDescription, CardHeader, CardTitle, Input, Select } from '@tuffcode/ui';
 import type { FormEvent } from 'react';
+import {
+  INHERIT_MODEL_VALUE,
+  PARENT_PROVIDER_VALUE,
+  SUBAGENT_CONCURRENCY_MAX,
+  SUBAGENT_CONCURRENCY_MIN,
+  SUBAGENT_DESCRIPTION,
+  SUBAGENT_LABEL,
+  SUBAGENT_TYPES,
+  modelIdFromSelect,
+  modelSelectValue,
+  providerIdFromSelect,
+  providerSelectValue,
+  setSubagentChoice,
+  setSubagentProvider,
+  subagentChoice,
+  type SubagentTypeName,
+} from '../../components/settings/custom-prompt';
+import { modelDisplayLabel, withCurrentModel } from '../../components/models/model-picker';
+import { useProviderModels } from '../../components/models/use-provider-models';
 import { SaveBar } from '../../components/settings/save-bar';
 import { SettingsRow } from '../../components/settings/settings-row';
 import { SettingsSectionHeader } from '../../components/settings/settings-section-header';
@@ -7,16 +27,97 @@ import { SettingsSlider } from '../../components/settings/settings-slider';
 import { shellFieldError } from '../../components/settings/settings-draft';
 import { TOOL_CATALOG, toggleEnabledTool } from '../../components/settings/tool-catalog';
 import { useSettingsDraft } from '../../components/settings/use-settings-draft';
+import { useAppStore } from '../../store/app-store';
 
-const KEYS = ['enabledTools', 'maxToolIterations', 'shell'] as const;
+const KEYS = [
+  'enabledTools',
+  'maxToolIterations',
+  'shell',
+  'subagentModels',
+  'subagentConcurrency',
+] as const;
+
+interface SubagentModelRowProps {
+  type: SubagentTypeName;
+  choice: SubagentModelChoice;
+  providers: readonly ProviderView[];
+  onProviderChange(providerId: string | undefined): void;
+  onChoiceChange(patch: SubagentModelChoice): void;
+}
+
+/**
+ * One subagent type's routing. The model lists load per provider through the same
+ * cached discovery the Models page uses, so a provider is only queried once.
+ */
+function SubagentModelRow({
+  type,
+  choice,
+  providers,
+  onProviderChange,
+  onChoiceChange,
+}: SubagentModelRowProps) {
+  const { models } = useProviderModels(choice.providerId);
+  const providerId = choice.providerId ?? '';
+  const listed = withCurrentModel(models, providerId, choice.model ?? null);
+  const fallbackListed = withCurrentModel(models, providerId, choice.fallbackModel ?? null);
+
+  const providerOptions = [
+    { value: PARENT_PROVIDER_VALUE, label: 'Parent thread provider' },
+    ...providers
+      .filter((provider) => provider.enabled)
+      .map((provider) => ({ value: provider.id, label: provider.label })),
+  ];
+  const modelOptions = [
+    { value: INHERIT_MODEL_VALUE, label: 'Inherit from thread' },
+    ...listed.map((model) => ({ value: model.modelId, label: modelDisplayLabel(model) })),
+  ];
+  const fallbackOptions = [
+    { value: INHERIT_MODEL_VALUE, label: 'No fallback' },
+    ...fallbackListed.map((model) => ({ value: model.modelId, label: modelDisplayLabel(model) })),
+  ];
+  const needsProvider = choice.providerId === undefined;
+
+  return (
+    <li className="flex flex-col gap-2 px-4 py-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-1">
+        <span className="text-sm font-medium text-foreground">{SUBAGENT_LABEL[type]}</span>
+        <span className="text-2xs text-muted-foreground">{SUBAGENT_DESCRIPTION[type]}</span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <Select
+          aria-label={`${SUBAGENT_LABEL[type]} provider`}
+          options={providerOptions}
+          value={providerSelectValue(choice)}
+          onValueChange={(value) => onProviderChange(providerIdFromSelect(value))}
+        />
+        <Select
+          aria-label={`${SUBAGENT_LABEL[type]} model`}
+          options={modelOptions}
+          value={modelSelectValue(choice.model)}
+          onValueChange={(value) => onChoiceChange({ model: modelIdFromSelect(value) })}
+          disabled={needsProvider}
+        />
+        <Select
+          aria-label={`${SUBAGENT_LABEL[type]} fallback model`}
+          options={fallbackOptions}
+          value={modelSelectValue(choice.fallbackModel)}
+          onValueChange={(value) => onChoiceChange({ fallbackModel: modelIdFromSelect(value) })}
+          disabled={needsProvider}
+        />
+      </div>
+    </li>
+  );
+}
 
 export function AgentsSection() {
   const { draft, dirty, saving, error, update, reset, submit } = useSettingsDraft(KEYS);
+  const providers = useAppStore((state) => state.providers);
 
   const enabledTools = draft?.enabledTools ?? [];
   const shellMessage = draft ? shellFieldError(draft.shell ?? '') : undefined;
   const toolsMessage = enabledTools.length === 0 ? 'Enable at least one tool.' : undefined;
   const invalid = Boolean(shellMessage ?? toolsMessage);
+  const subagentModels = draft?.subagentModels;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -96,6 +197,21 @@ export function AgentsSection() {
           </SettingsRow>
 
           <SettingsRow
+            label="Parallel subagents"
+            htmlFor="agents-subagent-concurrency"
+            description="How many subagents may run at the same time. Each one is a separate turn with its own worktree and token budget."
+          >
+            <SettingsSlider
+              id="agents-subagent-concurrency"
+              value={draft?.subagentConcurrency ?? 4}
+              min={SUBAGENT_CONCURRENCY_MIN}
+              max={SUBAGENT_CONCURRENCY_MAX}
+              unit="agents"
+              onChange={(subagentConcurrency) => update({ subagentConcurrency })}
+            />
+          </SettingsRow>
+
+          <SettingsRow
             label="Shell"
             htmlFor="agents-shell"
             description="Executable used for the bash tool and the terminal. Leave blank for the system default."
@@ -113,6 +229,40 @@ export function AgentsSection() {
             />
           </SettingsRow>
         </div>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Subagent models</CardTitle>
+          <CardDescription>
+            Each subagent type can run on its own provider and model. The fallback runs when the
+            first choice is unavailable; inherit keeps the parent thread's provider and model. Pick
+            a provider to choose a model.
+          </CardDescription>
+        </CardHeader>
+
+        <ul className="divide-y divide-border border-t border-border">
+          {subagentModels
+            ? SUBAGENT_TYPES.map((type) => (
+                <SubagentModelRow
+                  key={type}
+                  type={type}
+                  choice={subagentChoice(subagentModels, type)}
+                  providers={providers}
+                  onProviderChange={(providerId) =>
+                    update({
+                      subagentModels: setSubagentProvider(subagentModels, type, providerId),
+                    })
+                  }
+                  onChoiceChange={(patch) =>
+                    update({
+                      subagentModels: setSubagentChoice(subagentModels, type, patch),
+                    })
+                  }
+                />
+              ))
+            : null}
+        </ul>
       </Card>
 
       <SaveBar dirty={dirty} saving={saving} invalid={invalid} error={error} onReset={reset} />
