@@ -31,3 +31,4 @@ Thumbs.db
 playwright-report/
 test-results/
 *.tsbuildinfo
+spec-ui.md
