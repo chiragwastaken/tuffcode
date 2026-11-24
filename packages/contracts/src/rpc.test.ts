@@ -19,6 +19,7 @@ import {
   ServerResponseSchema,
   SettingsPatchSchema,
   SettingsSchema,
+  SubagentViewSchema,
   ThreadSchema,
   methods,
   type AdapterEvent,
@@ -38,6 +39,7 @@ import {
   type RpcParams,
   type RpcResult,
   type Skill,
+  type SubagentView,
   type Task,
   type Thread,
   type ThreadEventRow,
@@ -109,6 +111,19 @@ const model: Model = {
   label: 'Opus 4.5',
   contextWindow: 200000,
   isDefault: true,
+};
+
+const subagentView: SubagentView = {
+  childId: 'child-1',
+  threadId: 't1',
+  type: 'explorer',
+  model: 'claude-opus-4-5',
+  providerId: 'prov-claude',
+  status: 'running',
+  task: 'Map the contracts package',
+  summary: 'Found the RPC registry',
+  createdAt: at,
+  updatedAt: at,
 };
 
 const brainEntry: BrainEntry = {
@@ -382,10 +397,25 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     result: {},
   },
   'models.list': { params: { providerId: 'prov-claude' }, result: [model] },
+  'providers.models': {
+    params: { providerId: 'prov-claude', refresh: true },
+    result: { models: [model], source: 'sdk' },
+  },
   'settings.get': { params: {}, result: DEFAULT_SETTINGS },
   'settings.set': {
     params: { patch: { theme: 'light', brainEnabled: false } },
     result: DEFAULT_SETTINGS,
+  },
+  'prompt.preview': {
+    params: { threadId: 't1', message: 'how do I run tests' },
+    result: {
+      sections: [
+        { name: 'base', text: 'You are Tuffcode.', tokens: 640 },
+        { name: 'custom', text: 'Prefer pnpm.', tokens: 12 },
+        { name: 'user', text: 'how do I run tests', tokens: 8 },
+      ],
+      total: 660,
+    },
   },
   'brain.list': {
     params: { kind: 'rule', projectId: 'p1', query: 'emdash', limit: 8, includeInactive: true },
@@ -409,6 +439,30 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     params: { projectId: 'p1', threadId: 't1', message: 'how do I run tests' },
     result: { always: [brainEntry], retrieved: [brainEntry], tokens: 120 },
   },
+  'brain.graph': {
+    params: { projectId: 'p1', limit: 300 },
+    result: {
+      nodes: [
+        { id: 'b1', kind: 'rule', label: 'Never use emdash', importance: 0.9, degree: 2 },
+        { id: 'b2', kind: 'preference', label: 'Prefer pnpm', importance: 0.8, degree: 1 },
+      ],
+      edges: [{ from: 'b1', to: 'b2', relation: 'about' }],
+    },
+  },
+  'memory.search': {
+    params: { projectId: 'p1', query: 'emdash', limit: 8 },
+    result: {
+      entries: [
+        {
+          id: 'b1',
+          kind: 'rule',
+          text: 'Never use emdash characters',
+          score: 0.87,
+          reason: 'keyword match on "emdash"',
+        },
+      ],
+    },
+  },
   'council.start': {
     params: { threadId: 't1', goal: 'Ship the contracts package', autonomy: 'auto' },
     result: { goalId: 'g1' },
@@ -418,6 +472,22 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     params: { goalId: 'g1' },
     result: { goal, tasks: [task], reviews: [review] },
   },
+  'subagents.spawn': {
+    params: {
+      threadId: 't1',
+      spec: {
+        type: 'worker',
+        task: 'Implement the subagent RPC',
+        model: 'claude-opus-4-5',
+        providerId: 'prov-claude',
+        worktree: true,
+        budgetTokens: 20000,
+      },
+    },
+    result: { childId: 'child-1' },
+  },
+  'subagents.cancel': { params: { childId: 'child-1' }, result: {} },
+  'subagents.list': { params: { threadId: 't1' }, result: [subagentView] },
   'commands.list': { params: { projectId: 'p1' }, result: [command] },
   'skills.list': { params: { projectId: 'p1' }, result: [skill] },
   'diagnostics.export': {
@@ -429,6 +499,7 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
 const expectedMethods: RpcMethod[] = [
   'app.health',
   'brain.delete',
+  'brain.graph',
   'brain.list',
   'brain.preview',
   'brain.upsert',
@@ -447,21 +518,27 @@ const expectedMethods: RpcMethod[] = [
   'git.commit',
   'git.pr',
   'git.push',
+  'memory.search',
   'messages.list',
   'models.list',
   'projects.add',
   'projects.list',
   'projects.refresh',
   'projects.remove',
+  'prompt.preview',
   'providers.list',
   'providers.login',
   'providers.loginCancel',
+  'providers.models',
   'providers.remove',
   'providers.test',
   'providers.upsert',
   'settings.get',
   'settings.set',
   'skills.list',
+  'subagents.cancel',
+  'subagents.list',
+  'subagents.spawn',
   'terminal.close',
   'terminal.input',
   'terminal.open',
@@ -549,8 +626,8 @@ describe('protocol envelope', () => {
 });
 
 describe('rpc methods', () => {
-  it('exposes exactly 48 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(48);
+  it('exposes exactly 55 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(55);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -565,6 +642,39 @@ describe('rpc methods', () => {
         fixture.result,
       );
     }
+  });
+
+  it('accepts the round 2 methods with optional fields omitted', () => {
+    expect(
+      methods['providers.models'].params.safeParse({ providerId: 'prov-claude' }).success,
+    ).toBe(true);
+    expect(
+      methods['providers.models'].result.safeParse({ models: [], source: 'manual' }).success,
+    ).toBe(true);
+    expect(
+      methods['providers.models'].result.safeParse({
+        models: [],
+        source: 'cache',
+        error: 'claude CLI not found',
+      }).success,
+    ).toBe(true);
+    expect(methods['prompt.preview'].result.safeParse({ sections: [], total: 0 }).success).toBe(
+      true,
+    );
+    expect(
+      methods['subagents.spawn'].params.safeParse({
+        threadId: 't1',
+        spec: { type: 'notetaker', task: 'Distill the thread' },
+      }).success,
+    ).toBe(true);
+    expect(methods['subagents.list'].result.safeParse([]).success).toBe(true);
+    expect(
+      methods['subagents.list'].result.safeParse([{ ...subagentView, summary: undefined }]).success,
+    ).toBe(true);
+    expect(methods['brain.graph'].params.safeParse({}).success).toBe(true);
+    expect(methods['brain.graph'].result.safeParse({ nodes: [], edges: [] }).success).toBe(true);
+    expect(methods['memory.search'].params.safeParse({ query: 'emdash' }).success).toBe(true);
+    expect(methods['memory.search'].result.safeParse({ entries: [] }).success).toBe(true);
   });
 
   it('rejects null params and results for every method', () => {
@@ -623,6 +733,49 @@ describe('rpc methods', () => {
       ['providers.loginCancel', 'params', { loginId: '' }],
       ['messages.list', 'params', { threadId: '' }],
       ['messages.list', 'result', [{ ...message, role: 'bot' }]],
+      ['providers.models', 'params', { providerId: '' }],
+      ['providers.models', 'result', { models: [], source: 'guess' }],
+      ['providers.models', 'result', { models: [{ ...model, contextWindow: 0 }], source: 'cache' }],
+      ['prompt.preview', 'params', { threadId: 't1' }],
+      [
+        'prompt.preview',
+        'result',
+        { sections: [{ name: 'base', text: 'x', tokens: -1 }], total: 0 },
+      ],
+      ['prompt.preview', 'result', { sections: [], total: 1.5 }],
+      ['subagents.spawn', 'params', { threadId: 't1', spec: { type: 'janitor', task: 'x' } }],
+      ['subagents.spawn', 'params', { threadId: 't1', spec: { type: 'worker', task: '' } }],
+      [
+        'subagents.spawn',
+        'params',
+        { threadId: 't1', spec: { type: 'worker', task: 'x', budgetTokens: 0 } },
+      ],
+      ['subagents.spawn', 'result', { childId: '' }],
+      ['subagents.cancel', 'params', { childId: '' }],
+      ['subagents.list', 'params', { threadId: '' }],
+      ['subagents.list', 'result', [{ ...subagentView, status: 'paused' }]],
+      ['brain.graph', 'params', { limit: 0 }],
+      [
+        'brain.graph',
+        'result',
+        {
+          nodes: [{ id: 'b1', kind: 'rule', label: 'x', importance: 2, degree: 0 }],
+          edges: [],
+        },
+      ],
+      ['brain.graph', 'result', { nodes: [], edges: [{ from: 'b1', to: 'b2', relation: '' }] }],
+      ['memory.search', 'params', { query: '' }],
+      ['memory.search', 'params', { projectId: 'p1', query: 'emdash', limit: -1 }],
+      [
+        'memory.search',
+        'result',
+        { entries: [{ id: 'b1', kind: 'rule', text: 'x', score: -1, reason: 'r' }] },
+      ],
+      [
+        'memory.search',
+        'result',
+        { entries: [{ id: 'b1', kind: 'idea', text: 'x', score: 1, reason: 'r' }] },
+      ],
     ];
 
     for (const [method, side, value] of cases) {
@@ -727,6 +880,35 @@ describe('server events', () => {
       { kind: 'event', type: 'approval.requested', payload: approval },
       { kind: 'event', type: 'terminal.data', payload: { terminalId: 'term1', data: 'ok' } },
       { kind: 'event', type: 'council.updated', payload: { goalId: 'g1', state: 'reviewing' } },
+      {
+        kind: 'event',
+        type: 'subagent.started',
+        payload: {
+          childId: 'child-1',
+          threadId: 't1',
+          type: 'explorer',
+          model: 'claude-opus-4-5',
+        },
+      },
+      {
+        kind: 'event',
+        type: 'subagent.event',
+        payload: {
+          childId: 'child-1',
+          threadId: 't1',
+          event: { type: 'text.delta', turnId: 'turn-1', text: 'mapping files' },
+        },
+      },
+      {
+        kind: 'event',
+        type: 'subagent.finished',
+        payload: {
+          childId: 'child-1',
+          threadId: 't1',
+          status: 'done',
+          summary: 'Mapped 5 files',
+        },
+      },
       { kind: 'event', type: 'providers.updated', payload: [provider] },
       {
         kind: 'event',
@@ -742,7 +924,7 @@ describe('server events', () => {
       { kind: 'event', type: 'server.warning', payload: { message: 'disk low', code: 'disk' } },
     ];
 
-    expect(frames).toHaveLength(10);
+    expect(frames).toHaveLength(13);
     for (const frame of frames) {
       expect(ServerEventSchema.safeParse(frame).success, frame.type).toBe(true);
     }
@@ -778,6 +960,41 @@ describe('server events', () => {
         payload: { loginId: 'login-1', providerId: 'prov-claude', ok: 'yes', detail: 'signed in' },
       }).success,
     ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'subagent.started',
+        payload: { childId: 'child-1', threadId: 't1', type: 'janitor', model: 'm' },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'subagent.started',
+        payload: { childId: 'child-1', threadId: 't1', type: 'explorer' },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'subagent.event',
+        payload: { childId: 'child-1', threadId: 't1', event: { type: 'nope' } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'subagent.finished',
+        payload: { childId: 'child-1', threadId: 't1', status: 'paused' },
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'subagent.finished',
+        payload: { childId: 'child-1', status: 'done' },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -804,11 +1021,22 @@ describe('settings', () => {
       terminalFontSize: 13,
       cursorStyle: 'bar',
       checkUpdatesOnStart: true,
+      customInstructions: '',
+      subagentModels: {
+        explorer: {},
+        reviewer: {},
+        notetaker: {},
+        worker: {},
+        planner: {},
+      },
+      subagentConcurrency: 4,
     });
     expect(SettingsSchema.parse({})).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse({}).keybindings).not.toBe(DEFAULT_SETTINGS.keybindings);
     expect(SettingsSchema.parse({}).enabledTools).not.toBe(DEFAULT_SETTINGS.enabledTools);
+    expect(SettingsSchema.parse({}).subagentModels).not.toBe(DEFAULT_SETTINGS.subagentModels);
+    expect(SettingsSchema.parse({})).not.toHaveProperty('paneLayout');
   });
 
   it('parses partial patches without filling defaults', () => {
@@ -846,6 +1074,50 @@ describe('settings', () => {
       false,
     );
   });
+
+  it('parses custom instructions, subagent models and concurrency', () => {
+    const parsed = SettingsSchema.parse({
+      customInstructions: 'Prefer pnpm and never use emdash.',
+      subagentModels: { worker: { model: 'claude-opus-4-5', fallbackModel: 'gpt-5' } },
+      subagentConcurrency: 6,
+    });
+    expect(parsed.customInstructions).toBe('Prefer pnpm and never use emdash.');
+    expect(parsed.subagentModels).toEqual({
+      explorer: {},
+      reviewer: {},
+      notetaker: {},
+      worker: { model: 'claude-opus-4-5', fallbackModel: 'gpt-5' },
+      planner: {},
+    });
+    expect(parsed.subagentConcurrency).toBe(6);
+
+    expect(
+      SettingsSchema.parse({ customInstructions: 'x'.repeat(4000) }).customInstructions,
+    ).toHaveLength(4000);
+    expect(SettingsSchema.parse({ subagentConcurrency: 1 }).subagentConcurrency).toBe(1);
+    expect(SettingsSchema.parse({ subagentConcurrency: 8 }).subagentConcurrency).toBe(8);
+    expect(SettingsSchema.safeParse({ customInstructions: 'x'.repeat(4001) }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ customInstructions: 12 }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ subagentConcurrency: 0 }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ subagentConcurrency: 9 }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ subagentConcurrency: 4.5 }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ subagentModels: { explorer: { model: 7 } } }).success).toBe(
+      false,
+    );
+    expect(
+      SettingsSchema.safeParse({ subagentModels: { explorer: { providerId: 'p1' } } }).success,
+    ).toBe(true);
+    expect(SettingsPatchSchema.parse({ customInstructions: 'be brief' })).toEqual({
+      customInstructions: 'be brief',
+    });
+    expect(SettingsPatchSchema.safeParse({ subagentConcurrency: 9 }).success).toBe(false);
+  });
+
+  it('keeps paneLayout optional and opaque', () => {
+    const layout = { panes: [{ id: 'pane-1', kind: 'thread', threadId: 't1', width: 0.5 }] };
+    expect(SettingsSchema.parse({ paneLayout: layout }).paneLayout).toEqual(layout);
+    expect(SettingsPatchSchema.parse({ paneLayout: layout })).toEqual({ paneLayout: layout });
+  });
 });
 
 describe('entity schemas', () => {
@@ -855,6 +1127,7 @@ describe('entity schemas', () => {
     expect(MessageSchema.parse(message)).toEqual(message);
     expect(ProviderViewSchema.parse(provider)).toEqual(provider);
     expect(ModelSchema.parse(model)).toEqual(model);
+    expect(SubagentViewSchema.parse(subagentView)).toEqual(subagentView);
     expect(BrainEntrySchema.parse(brainEntry)).toEqual(brainEntry);
     expect(DiffFileSchema.parse(diffFile)).toEqual(diffFile);
     expect(ReviewCommentSchema.parse(reviewComment)).toEqual(reviewComment);

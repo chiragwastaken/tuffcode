@@ -6,6 +6,8 @@ import {
   IdSchema,
   ProviderViewSchema,
   SeqSchema,
+  SubagentStatusSchema,
+  SubagentTypeSchema,
   ThreadSchema,
 } from './entities.js';
 import { SettingsSchema } from './settings.js';
@@ -124,6 +126,32 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     z.object({
       goalId: IdSchema,
       state: GoalStateSchema,
+    }),
+  ),
+  serverEvent(
+    'subagent.started',
+    z.object({
+      childId: IdSchema,
+      threadId: IdSchema,
+      type: SubagentTypeSchema,
+      model: z.string(),
+    }),
+  ),
+  serverEvent(
+    'subagent.event',
+    z.object({
+      childId: IdSchema,
+      threadId: IdSchema,
+      event: AdapterEventSchema,
+    }),
+  ),
+  serverEvent(
+    'subagent.finished',
+    z.object({
+      childId: IdSchema,
+      threadId: IdSchema,
+      status: SubagentStatusSchema,
+      summary: z.string().optional(),
     }),
   ),
   serverEvent('providers.updated', ProviderViewSchema.array()),

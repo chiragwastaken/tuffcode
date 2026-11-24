@@ -16,6 +16,31 @@ export type InterfaceSize = z.infer<typeof InterfaceSizeSchema>;
 export const CursorStyleSchema = z.enum(['block', 'bar', 'underline']);
 export type CursorStyle = z.infer<typeof CursorStyleSchema>;
 
+export const SubagentModelChoiceSchema = z.object({
+  providerId: z.string().optional(),
+  model: z.string().optional(),
+  fallbackModel: z.string().optional(),
+});
+export type SubagentModelChoice = z.infer<typeof SubagentModelChoiceSchema>;
+
+export const SubagentModelsSchema = z.object({
+  explorer: SubagentModelChoiceSchema.default({}),
+  reviewer: SubagentModelChoiceSchema.default({}),
+  notetaker: SubagentModelChoiceSchema.default({}),
+  worker: SubagentModelChoiceSchema.default({}),
+  planner: SubagentModelChoiceSchema.default({}),
+});
+export type SubagentModels = z.infer<typeof SubagentModelsSchema>;
+
+/** Every subagent type starts with an empty model choice. */
+export const emptySubagentModels = (): SubagentModels => ({
+  explorer: {},
+  reviewer: {},
+  notetaker: {},
+  worker: {},
+  planner: {},
+});
+
 const SettingsFields = {
   theme: ThemeSchema,
   shell: z.string().nullable(),
@@ -37,6 +62,10 @@ const SettingsFields = {
   terminalFontSize: z.number().int().min(11).max(20),
   cursorStyle: CursorStyleSchema,
   checkUpdatesOnStart: z.boolean(),
+  customInstructions: z.string().max(4000),
+  subagentModels: SubagentModelsSchema,
+  subagentConcurrency: z.number().int().min(1).max(8),
+  paneLayout: z.unknown().optional(),
 };
 
 export const SettingsSchema = z.object({
@@ -67,6 +96,10 @@ export const SettingsSchema = z.object({
   terminalFontSize: SettingsFields.terminalFontSize.default(13),
   cursorStyle: SettingsFields.cursorStyle.default('bar'),
   checkUpdatesOnStart: SettingsFields.checkUpdatesOnStart.default(true),
+  customInstructions: SettingsFields.customInstructions.default(''),
+  subagentModels: SettingsFields.subagentModels.default(emptySubagentModels),
+  subagentConcurrency: SettingsFields.subagentConcurrency.default(4),
+  paneLayout: SettingsFields.paneLayout,
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
