@@ -12,6 +12,7 @@ import {
   GoalAutonomySchema,
   GoalSchema,
   IdSchema,
+  MessageSchema,
   ModelSchema,
   PermissionModeSchema,
   ProjectSchema,
@@ -180,6 +181,10 @@ export const methods = {
       events: ThreadEventRowSchema.array(),
       hasMore: z.boolean(),
     }),
+  },
+  'messages.list': {
+    params: threadIdParam,
+    result: MessageSchema.array(),
   },
   'checkpoints.create': {
     params: z.object({ threadId: IdSchema, label: z.string() }),
