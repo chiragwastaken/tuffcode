@@ -193,6 +193,7 @@ export function ModelPicker({
         side="top"
         align={align}
         className="w-80 p-0"
+        data-testid="model-picker-popup"
         aria-label={`Choose a model${provider ? ` for ${provider.label}` : ''}`}
       >
         <div className="flex flex-col">
