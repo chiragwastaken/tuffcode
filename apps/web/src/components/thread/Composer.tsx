@@ -606,7 +606,7 @@ export function Composer({ thread }: ComposerProps) {
                 className="max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-64"
               />
 
-              <div className="flex items-center gap-1.5 pt-2">
+              <div className="flex flex-wrap items-center gap-1.5 pt-2">
                 <SegmentedControl
                   ariaLabel="Execution mode"
                   testId="mode-select"
@@ -618,7 +618,7 @@ export function Composer({ thread }: ComposerProps) {
                   }}
                 />
 
-                <div data-testid="model-picker-trigger" className="min-w-0">
+                <div data-testid="model-picker-trigger" className="max-w-52 min-w-20">
                   <ModelPicker
                     provider={provider}
                     value={thread?.modelId ?? null}
@@ -628,7 +628,7 @@ export function Composer({ thread }: ComposerProps) {
                     onSelect={(modelId) => {
                       if (modelId !== thread?.modelId) void applyUpdate({ modelId });
                     }}
-                    className="max-w-52 min-w-0"
+                    className="w-full min-w-0"
                   />
                 </div>
 

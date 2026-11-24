@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router';
 import type { ExecutionMode, Thread, ThreadEventRow } from '@tuffcode/contracts';
 import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
 import { FolderOpen, GitBranch, MessagesSquare, Users, Wrench } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../store/app-store';
 import { runAction, type ActionContext } from '../actions';
@@ -38,9 +38,19 @@ export interface ThreadViewProps {
   threadId: string;
   thread?: Thread;
   projectName?: string;
+  /** Shared with the pane row so a subagent surface can measure its connector. */
+  stageRef?: RefObject<HTMLDivElement | null>;
+  /** A split pane already hosts the subagent surface; keep the cards, not the pane. */
+  externalSubagentPane?: boolean;
 }
 
-export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
+export function ThreadView({
+  threadId,
+  thread,
+  projectName,
+  stageRef: sharedStageRef,
+  externalSubagentPane = false,
+}: ThreadViewProps) {
   useThreadStream(threadId);
   useSubagentList(threadId);
 
@@ -67,7 +77,8 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   const openSubagent = useAppStore((state) => state.openSubagent);
   const selectSubagent = useAppStore((state) => state.selectSubagent);
   const closeSubagentPane = useAppStore((state) => state.closeSubagentPane);
-  const stageRef = useRef<HTMLDivElement>(null);
+  const localStageRef = useRef<HTMLDivElement>(null);
+  const stageRef = sharedStageRef ?? localStageRef;
   const dockRef = useRef<HTMLDivElement>(null);
   useDockInset(stageRef, dockRef, subagentPaneOpen);
 
@@ -247,7 +258,7 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
           </div>
         </div>
 
-        {subagentPaneOpen ? (
+        {subagentPaneOpen && !externalSubagentPane ? (
           <SubagentPane
             threadId={threadId}
             stageRef={stageRef}
