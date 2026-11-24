@@ -3,10 +3,14 @@ import { useSyncExternalStore } from 'react';
 import type { ApprovalDecisionMap, LocalUserMessage } from './grouping';
 
 const EMPTY_MESSAGES: readonly LocalUserMessage[] = [];
+const EMPTY_TURNS: ReadonlySet<string> = new Set();
 
 const messagesByThread = new Map<string, LocalUserMessage[]>();
+const supersededTurnsByThread = new Map<string, ReadonlySet<string>>();
 const approvals = new Map<string, ApprovalChoice>();
 const listeners = new Set<() => void>();
+
+let localMessageSeq = 0;
 
 let approvalSnapshot: ApprovalDecisionMap = {};
 let approvalVersion = 0;
@@ -26,18 +30,25 @@ function emit(): void {
 function updateMessage(
   messageId: string,
   patch: (message: LocalUserMessage) => LocalUserMessage,
-): void {
+): boolean {
   for (const [threadId, list] of messagesByThread) {
     const index = list.findIndex((message) => message.id === messageId);
     if (index === -1) continue;
     const current = list[index];
-    if (!current) return;
+    if (!current) return false;
     const next = list.slice();
     next[index] = patch(current);
     messagesByThread.set(threadId, next);
     emit();
-    return;
+    return true;
   }
+  return false;
+}
+
+/** A fresh echo id; the server only assigns ids once a turn is persisted. */
+export function nextLocalUserMessageId(threadId: string): string {
+  localMessageSeq += 1;
+  return `${threadId}-${Date.now().toString(36)}-${localMessageSeq.toString(36)}`;
 }
 
 /** Session-local echo of a sent message; the event log has no user message row. */
@@ -60,6 +71,32 @@ export function failLocalUserMessage(messageId: string): void {
 /** A retry is in flight again. */
 export function retryLocalUserMessage(messageId: string): void {
   updateMessage(messageId, (message) => ({ ...message, status: 'pending' }));
+}
+
+/** Rewrites an echo in place; returns false when the id belongs to a persisted row. */
+export function updateLocalUserMessageText(messageId: string, text: string): boolean {
+  return updateMessage(messageId, (message) => ({ ...message, text }));
+}
+
+/**
+ * Hides a turn whose prompt was edited and resent. The event log cannot be
+ * rewritten, so the replaced turn is filtered out of the render for this session.
+ */
+export function supersedeTurn(threadId: string, turnId: string): void {
+  const current = supersededTurnsByThread.get(threadId) ?? EMPTY_TURNS;
+  if (current.has(turnId)) return;
+  const next = new Set(current);
+  next.add(turnId);
+  supersededTurnsByThread.set(threadId, next);
+  emit();
+}
+
+export function supersededTurns(threadId: string): ReadonlySet<string> {
+  return supersededTurnsByThread.get(threadId) ?? EMPTY_TURNS;
+}
+
+export function useSupersededTurns(threadId: string): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => supersededTurns(threadId));
 }
 
 /**

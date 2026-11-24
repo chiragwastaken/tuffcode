@@ -7,6 +7,9 @@ import {
   pruneResolvedLocalUserMessages,
   resolveLocalUserMessage,
   retryLocalUserMessage,
+  supersedeTurn,
+  supersededTurns,
+  updateLocalUserMessageText,
 } from './local-messages';
 
 function echo(overrides: Partial<LocalUserMessage> = {}): LocalUserMessage {
@@ -81,5 +84,26 @@ describe('local message status', () => {
 
     expect(localUserMessages('thread-a')[0]?.status).toBe('failed');
     expect(localUserMessages('thread-b')[0]?.status).toBe('pending');
+  });
+
+  it('rewrites an echo text and reports a persisted id as unknown', () => {
+    const message = echo();
+    addLocalUserMessage(message);
+
+    expect(updateLocalUserMessageText(message.id, 'Edited text')).toBe(true);
+    expect(localUserMessages(message.threadId)[0]?.text).toBe('Edited text');
+    expect(updateLocalUserMessageText('msg_turn-1_user', 'nope')).toBe(false);
+  });
+
+  it('records superseded turns with a new snapshot for subscribers', () => {
+    const threadId = 'thread-supersede';
+    const first = supersededTurns(threadId);
+    expect(first.size).toBe(0);
+
+    supersedeTurn(threadId, 'turn-1');
+
+    const next = supersededTurns(threadId);
+    expect(next).not.toBe(first);
+    expect(next.has('turn-1')).toBe(true);
   });
 });

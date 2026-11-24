@@ -15,12 +15,12 @@ describe('db migrations', () => {
     env = createTempEnv();
     const db = openDb(join(env.root, 'tuffcode.db'));
     try {
-      expect(migrate(db)).toEqual([1, 2, 3, 4]);
+      expect(migrate(db)).toEqual([1, 2, 3, 4, 5]);
       expect(migrate(db)).toEqual([]);
 
       const versions = db.prepare('SELECT version FROM schema_migrations').all();
-      expect(versions).toHaveLength(4);
-      expect(versions.map((row) => row['version'])).toEqual([1, 2, 3, 4]);
+      expect(versions).toHaveLength(5);
+      expect(versions.map((row) => row['version'])).toEqual([1, 2, 3, 4, 5]);
 
       expect(db.prepare('PRAGMA journal_mode').get()?.['journal_mode']).toBe('wal');
       expect(db.prepare('PRAGMA foreign_keys').get()?.['foreign_keys']).toBe(1);
@@ -46,6 +46,7 @@ describe('db migrations', () => {
         'reviews',
         'escalations',
         'brain_entries',
+        'brain_edges',
         'brain_fts',
         'terminal_sessions',
         'turns',

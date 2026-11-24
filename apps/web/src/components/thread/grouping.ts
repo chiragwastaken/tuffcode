@@ -18,6 +18,7 @@ export interface UserItem {
   kind: 'user';
   key: string;
   messageId: string;
+  turnId: string | null;
   text: string;
   attachments: Attachment[];
   status: LocalMessageStatus;
@@ -37,6 +38,9 @@ export interface ReasoningItem {
   turnId: string;
   text: string;
   streaming: boolean;
+  /** First reasoning delta, used for the "Thought for Ns" label. */
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 export interface ToolItem {
@@ -49,6 +53,8 @@ export interface ToolItem {
   output: string;
   isError: boolean;
   running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 /** Consecutive tool calls folded under one expandable summary row. */
@@ -91,11 +97,17 @@ export interface GroupTimelineInput {
   messages?: readonly Message[];
   userMessages: readonly LocalUserMessage[];
   approvals: ApprovalDecisionMap;
+  /** Turns replaced by an edited prompt; their rows and events stay hidden. */
+  supersededTurns?: ReadonlySet<string>;
 }
 
 interface TurnState {
   usersPlaced: boolean;
   assistant: AssistantItem | null;
+  /** Text of assistant rows already closed by a tool call, in order. */
+  closedTexts: string[];
+  /** Distinguishes the prose and answer rows of one turn. */
+  assistantSeq: number;
   reasoning: ReasoningItem | null;
   tools: Map<string, ToolItem>;
   /** The assistant text came from the persisted row, so later deltas are stale. */
@@ -193,6 +205,7 @@ function userItem(message: LocalUserMessage): UserItem {
     kind: 'user',
     key: `user-${message.id}`,
     messageId: message.id,
+    turnId: message.turnId,
     text: message.text,
     attachments: message.attachments,
     status: message.status,
@@ -208,24 +221,30 @@ function beforeEvent(message: Message, event: ThreadEventRow): boolean {
 /**
  * Folds the per-thread event log into render rows. Persisted message rows are
  * interleaved by `createdAt`, so a reopened thread keeps its user turns and any
- * assistant text the replay does not cover. One assistant row per turn accumulates
- * text deltas; the persisted row replaces that text instead of adding a second row.
+ * assistant text the replay does not cover. Text deltas accumulate into one row
+ * until a tool starts; the persisted row replaces the closing text instead of
+ * adding a duplicate.
  */
 export function groupTimeline({
   events,
   messages = [],
   userMessages,
   approvals,
+  supersededTurns,
 }: GroupTimelineInput): TimelineItem[] {
   const items: TimelineItem[] = [];
   const turns = new Map<string, TurnState>();
   const usersByTurn = new Map<string, LocalUserMessage[]>();
   const pending: LocalUserMessage[] = [];
+  const superseded = supersededTurns ?? new Set<string>();
 
   const persistedUsers = messages
     .filter((message) => message.role === 'user')
-    .map(persistedUserMessage);
-  const users = mergeUserMessages(persistedUsers, userMessages);
+    .map(persistedUserMessage)
+    .filter((message) => message.turnId === null || !superseded.has(message.turnId));
+  const users = mergeUserMessages(persistedUsers, userMessages).filter(
+    (message) => message.turnId === null || !superseded.has(message.turnId),
+  );
 
   for (const message of users) {
     if (message.turnId === null) {
@@ -243,6 +262,8 @@ export function groupTimeline({
       state = {
         usersPlaced: false,
         assistant: null,
+        closedTexts: [],
+        assistantSeq: 0,
         reasoning: null,
         tools: new Map(),
         assistantFinal: false,
@@ -281,25 +302,38 @@ export function groupTimeline({
       return;
     }
     const state = turnState(turnId);
+    // The server stores the whole turn text, prose included; the closed rows
+    // already show that part, so the answer row keeps only the remainder.
+    const closed = state.closedTexts.join('');
+    const content =
+      closed.length > 0 && message.content.startsWith(closed)
+        ? message.content.slice(closed.length)
+        : message.content;
     if (state.assistant) {
-      state.assistant.text = message.content;
+      state.assistant.text = content;
       state.assistant.streaming = false;
       state.assistantFinal = true;
       return;
     }
+    state.assistantFinal = true;
+    if (content.length === 0) return;
     state.assistant = {
       kind: 'assistant',
-      key: `assistant-${turnId}`,
+      key: `assistant-${turnId}-${state.assistantSeq}`,
       turnId,
-      text: message.content,
+      text: content,
       streaming: false,
     };
-    state.assistantFinal = true;
+    state.assistantSeq += 1;
     items.push(state.assistant);
   }
 
   const persisted = messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .filter((message) => {
+      const turnId = turnIdForMessage(message);
+      return turnId === null || !superseded.has(turnId);
+    })
     .toSorted((left, right) => {
       if (left.createdAt === right.createdAt) return left.id.localeCompare(right.id);
       return left.createdAt < right.createdAt ? -1 : 1;
@@ -331,21 +365,29 @@ export function groupTimeline({
 
     const event = entry;
     const payload = event.payload;
-    if ('turnId' in payload) placeUsers(payload.turnId);
+    if ('turnId' in payload) {
+      if (superseded.has(payload.turnId)) continue;
+      placeUsers(payload.turnId);
+    }
 
     switch (payload.type) {
       case 'text.delta': {
         if (payload.text.length === 0) break;
         const state = turnState(payload.turnId);
+        if (state.reasoning?.finishedAt === null) {
+          state.reasoning.finishedAt = event.createdAt;
+          state.reasoning.streaming = false;
+        }
         if (state.assistantFinal) break;
         if (!state.assistant) {
           state.assistant = {
             kind: 'assistant',
-            key: `assistant-${payload.turnId}`,
+            key: `assistant-${payload.turnId}-${state.assistantSeq}`,
             turnId: payload.turnId,
             text: '',
             streaming: true,
           };
+          state.assistantSeq += 1;
           items.push(state.assistant);
         }
         state.assistant.text += payload.text;
@@ -361,6 +403,8 @@ export function groupTimeline({
             turnId: payload.turnId,
             text: '',
             streaming: true,
+            startedAt: event.createdAt,
+            finishedAt: null,
           };
           items.push(state.reasoning);
         }
@@ -369,6 +413,16 @@ export function groupTimeline({
       }
       case 'tool.started': {
         const state = turnState(payload.turnId);
+        if (state.reasoning?.finishedAt === null) {
+          state.reasoning.finishedAt = event.createdAt;
+          state.reasoning.streaming = false;
+        }
+        // Text before a tool is prose, not the answer; the next delta starts a new row.
+        if (state.assistant) {
+          state.assistant.streaming = false;
+          state.closedTexts.push(state.assistant.text);
+        }
+        state.assistant = null;
         const item: ToolItem = {
           kind: 'tool',
           key: `tool-${payload.toolCallId}`,
@@ -379,6 +433,8 @@ export function groupTimeline({
           output: '',
           isError: false,
           running: true,
+          startedAt: event.createdAt,
+          finishedAt: null,
         };
         state.tools.set(payload.toolCallId, item);
         items.push(item);
@@ -395,6 +451,7 @@ export function groupTimeline({
           item.output = payload.output;
           item.isError = payload.isError;
           item.running = false;
+          item.finishedAt = event.createdAt;
         }
         break;
       }
@@ -413,7 +470,10 @@ export function groupTimeline({
       case 'turn.finished': {
         const state = turns.get(payload.turnId);
         if (state?.assistant) state.assistant.streaming = false;
-        if (state?.reasoning) state.reasoning.streaming = false;
+        if (state?.reasoning) {
+          state.reasoning.streaming = false;
+          if (state.reasoning.finishedAt === null) state.reasoning.finishedAt = event.createdAt;
+        }
         break;
       }
       case 'error': {

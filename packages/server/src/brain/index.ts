@@ -1,5 +1,19 @@
 export { createBrainStore, type BrainStore } from './store.js';
 export {
+  GRAPH_MAX_NODES,
+  buildBrainGraph,
+  type BrainGraph,
+  type BrainGraphEdge,
+  type BrainGraphInput,
+  type BrainGraphNode,
+} from './graph.js';
+export {
+  searchMemory,
+  type MemorySearchEntry,
+  type MemorySearchInput,
+  type MemorySearchResult,
+} from './search.js';
+export {
   ALWAYS_TOKEN_BUDGET,
   RETRIEVAL_MAX_ENTRIES,
   RETRIEVAL_TOKEN_BUDGET,

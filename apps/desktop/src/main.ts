@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from 'electron';
-import { serverJsonPath, tuffcodeHome } from '@tuffcode/shared';
+import { dbPath, serverJsonPath, tuffcodeHome } from '@tuffcode/shared';
 import {
   BOOTSTRAP_CHANNEL,
   PICK_FOLDER_CHANNEL,
@@ -22,6 +22,13 @@ import {
   stopServer,
   type RunningServer,
 } from './server';
+import {
+  applyThemeChrome,
+  readPersistedTheme,
+  resolveTheme,
+  windowChromeOptions,
+  type ResolvedTheme,
+} from './theme';
 import { setupUpdater } from './updater';
 import { resolveUserDataPath } from './user-data';
 
@@ -50,20 +57,17 @@ function rendererIndexFile(): string {
     : resolve(app.getAppPath(), '../web/dist/index.html');
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(theme: ResolvedTheme): BrowserWindow {
+  const { backgroundColor, titleBarOverlay } = windowChromeOptions(theme);
   const window = new BrowserWindow({
     width: 1100,
     height: 780,
     minWidth: 400,
     minHeight: 360,
-    backgroundColor: '#000000',
+    backgroundColor,
     show: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#01000000',
-      symbolColor: '#f8fafc',
-      height: 40,
-    },
+    titleBarOverlay,
     webPreferences: {
       preload: join(currentDir, '../preload/preload.cjs'),
       sandbox: true,
@@ -107,9 +111,15 @@ function registerIpcHandlers(): void {
     return result.canceled || folder === undefined ? null : folder;
   });
 
-  ipcMain.on(SET_THEME_CHANNEL, (_event, theme: unknown) => {
+  ipcMain.on(SET_THEME_CHANNEL, (event, theme: unknown) => {
     if (!isTheme(theme)) return;
+    // `shouldUseDarkColors` follows `themeSource`, so ask for `system` before resolving.
     nativeTheme.themeSource = theme;
+    const resolved = resolveTheme(theme, nativeTheme.shouldUseDarkColors);
+    const target =
+      BrowserWindow.getFocusedWindow() ?? BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (target === null || target.isDestroyed()) return;
+    applyThemeChrome(target, resolved);
   });
 }
 
@@ -193,7 +203,7 @@ async function bootstrapApplication(): Promise<void> {
   app.setAppUserModelId('net.tuffcode.app');
 
   registerIpcHandlers();
-  const window = createWindow();
+  const window = createWindow(readPersistedTheme(dbPath()));
   mainWindow = window;
   createApplicationMenu(window);
 

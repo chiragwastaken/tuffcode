@@ -535,6 +535,8 @@ describe('tool grouping', () => {
         output: '',
         isError: false,
         running: false,
+        startedAt: null,
+        finishedAt: null,
       },
       {
         kind: 'notice',
@@ -552,6 +554,8 @@ describe('tool grouping', () => {
         output: '',
         isError: false,
         running: false,
+        startedAt: null,
+        finishedAt: null,
       },
     ];
 

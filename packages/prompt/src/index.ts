@@ -34,6 +34,15 @@ export type {
 } from './subagents';
 export { buildTurnContext, estimateTokens } from './context';
 export type { ExecutionMode, TurnContextInput } from './context';
+export {
+  assemblePrompt,
+  CUSTOM_INSTRUCTIONS_HEADING,
+  type AssembledPrompt,
+  type PromptAssemblyInput,
+  type PromptSection,
+  type PromptSectionName,
+} from './assemble';
+export { buildCustomInstructions, CUSTOM_INSTRUCTION_TOKEN_BUDGET } from './custom';
 
 import { BASE_SYSTEM_PROMPT } from './base';
 

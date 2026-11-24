@@ -22,7 +22,14 @@ const bridge: TuffcodeBridge = {
     };
   },
   setTheme: (theme: Theme): void => {
-    ipcRenderer.send(SET_THEME_CHANNEL, theme);
+    const resolved =
+      theme === 'system'
+        ? window.matchMedia('(prefers-color-scheme: light)').matches
+          ? 'light'
+          : 'dark'
+        : theme;
+    document.documentElement.dataset.theme = resolved;
+    ipcRenderer.send(SET_THEME_CHANNEL, resolved);
   },
 };
 

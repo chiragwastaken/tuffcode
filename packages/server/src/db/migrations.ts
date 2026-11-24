@@ -219,6 +219,21 @@ CREATE INDEX idx_turns_status ON turns(status);
 `;
 
 /**
+ * Typed relations between brain entries. The graph RPC reads this table; entries
+ * remain the only node source, so an edge whose endpoint is deleted cascades away.
+ */
+const BRAIN_EDGES_SQL = `
+CREATE TABLE brain_edges (
+  from_id TEXT NOT NULL REFERENCES brain_entries(id) ON DELETE CASCADE,
+  to_id TEXT NOT NULL REFERENCES brain_entries(id) ON DELETE CASCADE,
+  relation TEXT NOT NULL CHECK (length(trim(relation)) > 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (from_id, to_id, relation)
+);
+CREATE INDEX idx_brain_edges_to ON brain_edges(to_id);
+`;
+
+/**
  * `anthropic` is an API-key provider kind, but the original providers CHECK constraint
  * only listed the CLI kinds. SQLite cannot alter a CHECK, so both tables are rebuilt:
  * the copy keeps every row, and renaming `providers_new` rewrites the model FK back to
@@ -290,6 +305,11 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 4,
+    name: 'brain-edges',
+    sql: BRAIN_EDGES_SQL,
+  },
+  {
+    version: 5,
     name: 'subagents',
     sql: SUBAGENTS_SQL,
   },

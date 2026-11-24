@@ -53,7 +53,13 @@ export function createRepos(db: DatabaseSync): Repos {
 }
 
 export type { ApprovalsRepo } from './approvals.js';
-export type { BrainListOptions, BrainRepo, UpsertBrainInput } from './brain.js';
+export type {
+  BrainEdge,
+  BrainListOptions,
+  BrainRepo,
+  UpsertBrainEdgeInput,
+  UpsertBrainInput,
+} from './brain.js';
 export type { CheckpointsRepo, CreateCheckpointInput } from './checkpoints.js';
 export type { CreateReviewCommentInput, ReviewCommentsRepo } from './comments.js';
 export type {
