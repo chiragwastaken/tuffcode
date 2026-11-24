@@ -77,7 +77,6 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
   }, [rpc, goalId]);
 
   const resolveLatest = useCallback(async (): Promise<void> => {
-    setResolving(true);
     try {
       const latest = await rpc.request('council.latest', { threadId });
       setGoalId(goalIdFromLatest(latest, dismissedGoal.current));
@@ -85,10 +84,19 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
     } catch {
       // A failed lookup must not block the composer from starting a goal.
       setGoalId(null);
+    }
+  }, [rpc, threadId]);
+
+  // Only the first lookup for a thread shows the resolving state; the adoption poll
+  // stays silent so the empty board does not flash every few seconds.
+  const refreshGoal = useCallback(async (): Promise<void> => {
+    setResolving(true);
+    try {
+      await resolveLatest();
     } finally {
       setResolving(false);
     }
-  }, [rpc, threadId]);
+  }, [resolveLatest]);
 
   // A goal id lives on the server, so a reload reattaches to whatever the thread ran
   // last. Work-mode threads have no council goal, so they never ask.
@@ -97,9 +105,8 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
       setResolving(false);
       return;
     }
-    setResolving(true);
-    void resolveLatest();
-  }, [executionMode, resolveLatest]);
+    void refreshGoal();
+  }, [executionMode, refreshGoal]);
 
   useEffect(() => {
     if (goalId === null) {
