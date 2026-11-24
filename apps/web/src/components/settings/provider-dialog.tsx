@@ -586,7 +586,7 @@ export function ProviderDialog({ open, onOpenChange, provider }: ProviderDialogP
   return (
     <DialogRoot open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-3xl p-0">
-        <div className="flex max-h-[85vh] flex-col">
+        <div className="relative flex max-h-[85vh] flex-col">
           <div className="flex items-start justify-between gap-3 border-b border-border p-5">
             <div className="flex min-w-0 items-start gap-3">
               {preset ? (
@@ -603,9 +603,15 @@ export function ProviderDialog({ open, onOpenChange, provider }: ProviderDialogP
           </div>
 
           {selected === null ? (
-            <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              <ProviderGallery checks={checks} onSelect={handleSelect} />
-            </div>
+            <>
+              <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-8">
+                <ProviderGallery checks={checks} onSelect={handleSelect} />
+              </div>
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-popover to-transparent"
+              />
+            </>
           ) : (
             <form
               className="flex min-h-0 flex-1 flex-col"

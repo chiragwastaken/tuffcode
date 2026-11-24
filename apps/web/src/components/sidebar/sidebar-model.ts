@@ -105,7 +105,7 @@ export function sidebarItemKey(item: SidebarItem): string {
 
 export const SIDEBAR_ITEM_HEIGHT: Record<SidebarItem['kind'], number> = {
   project: 30,
-  thread: 34,
+  thread: 44,
   empty: 30,
 };
 

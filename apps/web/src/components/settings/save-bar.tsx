@@ -1,4 +1,5 @@
 import { Button, Spinner, cn } from '@tuffcode/ui';
+import { Check } from 'lucide-react';
 
 export interface SaveBarProps {
   dirty: boolean;
@@ -10,14 +11,31 @@ export interface SaveBarProps {
 }
 
 /**
- * Sticky footer for a settings form. It only exists while there are unsaved
- * changes, and its save button stays disabled when the draft is invalid.
+ * Sticky footer for a settings form. While the draft is clean it collapses to a
+ * single saved line so the page still shows its state; with unsaved changes it
+ * grows the reset and save actions, and save stays disabled when the draft is invalid.
  */
 export function SaveBar({ dirty, saving, invalid, error, onReset, className }: SaveBarProps) {
-  if (!dirty && !saving) return null;
+  if (!dirty && !saving) {
+    return (
+      <div
+        data-testid="save-bar"
+        data-state="saved"
+        className={cn(
+          'sticky bottom-0 z-10 flex items-center gap-1.5 border-t border-border bg-background/95 px-3 py-2 text-xs leading-5 text-muted-foreground backdrop-blur',
+          className,
+        )}
+      >
+        <Check aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0 text-success" />
+        <span>All changes saved</span>
+      </div>
+    );
+  }
 
   return (
     <div
+      data-testid="save-bar"
+      data-state="dirty"
       className={cn(
         'sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur',
         className,

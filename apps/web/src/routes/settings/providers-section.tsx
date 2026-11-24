@@ -197,6 +197,9 @@ export function ProvidersSection() {
                     const auth = providerAuthMode(provider);
                     const defaultModel = defaultModelOf(provider);
                     const isDefault = settings?.defaultProviderId === provider.id;
+                    const kindLabel = providerKindLabel(provider.kind);
+                    const kindDiffers =
+                      kindLabel.toLowerCase() !== provider.label.trim().toLowerCase();
 
                     return (
                       <Card key={provider.id}>
@@ -204,7 +207,7 @@ export function ProvidersSection() {
                           <div className="flex min-w-0 flex-col gap-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <CardTitle className="truncate">{provider.label}</CardTitle>
-                              <Badge>{providerKindLabel(provider.kind)}</Badge>
+                              {kindDiffers ? <Badge>{kindLabel}</Badge> : null}
                               <Badge variant={auth === 'subscription' ? 'primary' : 'neutral'}>
                                 {authModeLabel(auth)}
                               </Badge>
@@ -266,15 +269,17 @@ export function ProvidersSection() {
                               <RefreshCw strokeWidth={1.75} />
                               Test
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => void setDefault(provider)}
-                              disabled={isDefault || pendingDefault !== null}
-                            >
-                              <Star strokeWidth={1.75} />
-                              {isDefault ? 'Default' : 'Set default'}
-                            </Button>
+                            {isDefault ? null : (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => void setDefault(provider)}
+                                disabled={pendingDefault !== null}
+                              >
+                                <Star strokeWidth={1.75} />
+                                Set default
+                              </Button>
+                            )}
                             <Button size="sm" variant="ghost" onClick={() => openEdit(provider)}>
                               <Pencil strokeWidth={1.75} />
                               Edit
