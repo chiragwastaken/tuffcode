@@ -12,7 +12,12 @@ import {
   type ServerEvent,
   type ThreadEventRow,
 } from '@tuffcode/contracts';
-import { useAppStore } from '../store/app-store';
+import {
+  useAppStore,
+  type SubagentEventInput,
+  type SubagentFinishedInput,
+  type SubagentStartedInput,
+} from '../store/app-store';
 import type { ConnectionStatus } from '../types';
 
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -54,6 +59,9 @@ export type RpcSocketFactory = (url: string, protocols: string[]) => RpcSocket;
 export interface EventSink {
   getState(): {
     appendEvent(threadId: string, event: ThreadEventRow): void;
+    subagentStarted(input: SubagentStartedInput): void;
+    subagentEvent(input: SubagentEventInput): void;
+    subagentFinished(input: SubagentFinishedInput): void;
   };
 }
 
@@ -197,12 +205,34 @@ export function createRpcClient(options: RpcClientOptions): RpcClient {
     entry.resolve(parsed.data);
   }
 
+  /**
+   * Subagent frames are routed into the store here, next to thread replay, so every
+   * surface reads one child registry and a pane does not need its own subscription.
+   */
+  function routeEvent(event: ServerEvent): void {
+    const state = store.getState();
+    switch (event.type) {
+      case 'subagent.started':
+        state.subagentStarted(event.payload);
+        break;
+      case 'subagent.event':
+        state.subagentEvent(event.payload);
+        break;
+      case 'subagent.finished':
+        state.subagentFinished(event.payload);
+        break;
+      default:
+        break;
+    }
+  }
+
   function handleEventFrame(frame: unknown): void {
     const event = ServerEventSchema.safeParse(frame);
     if (!event.success) {
       signalProtocolError('Dropped an invalid server event.', frame);
       return;
     }
+    routeEvent(event.data);
     for (const listener of eventListeners) listener(event.data);
   }
 

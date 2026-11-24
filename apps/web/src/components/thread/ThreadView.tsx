@@ -2,11 +2,16 @@ import { Link } from '@tanstack/react-router';
 import type { ExecutionMode, Thread, ThreadEventRow } from '@tuffcode/contracts';
 import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
 import { FolderOpen, GitBranch, MessagesSquare } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../store/app-store';
 import { runAction, type ActionContext } from '../actions';
 import { useActionPorts } from '../menu/action-context';
+import { SubagentPane } from '../subagents/SubagentPane';
+import { SubagentStack } from '../subagents/SubagentStack';
+import { SubagentStrip } from '../subagents/SubagentStrip';
+import { useDockInset } from '../subagents/use-dock-inset';
+import { useSubagentList } from '../subagents/use-subagents';
 import { Composer } from './Composer';
 import { groupTimeline, type UserItem } from './grouping';
 import { useApprovalDecisions, useLocalUserMessages, useSupersededTurns } from './local-messages';
@@ -37,6 +42,7 @@ export interface ThreadViewProps {
 
 export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   useThreadStream(threadId);
+  useSubagentList(threadId);
 
   const ports = useActionPorts();
   const events = useAppStore((state) => state.events[threadId]);
@@ -46,6 +52,24 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   const supersededTurns = useSupersededTurns(threadId);
   const theme = useAppStore((state) => state.settings?.theme ?? 'dark');
   const [switchingMode, setSwitchingMode] = useState(false);
+
+  // Boolean and string selectors only: child frames mutate `subagents` on every
+  // token, and this view must not re-render the parent timeline for them.
+  const hasSubagents = useAppStore((state) =>
+    Object.values(state.subagents).some((child) => child.threadId === threadId),
+  );
+  const subagentPaneOpen = useAppStore((state) => {
+    const pane = state.subagentPane;
+    if (!pane.open || pane.activeChildId === null) return false;
+    return state.subagents[pane.activeChildId]?.threadId === threadId;
+  });
+  const activeChildId = useAppStore((state) => state.subagentPane.activeChildId);
+  const openSubagent = useAppStore((state) => state.openSubagent);
+  const selectSubagent = useAppStore((state) => state.selectSubagent);
+  const closeSubagentPane = useAppStore((state) => state.closeSubagentPane);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  useDockInset(stageRef, dockRef, subagentPaneOpen);
 
   const items = useMemo(
     () =>
@@ -161,44 +185,75 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        {items.length === 0 ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-            {thread ? (
-              <EmptyState
-                icon={MessagesSquare}
-                title="Start the conversation"
-                action={
-                  <Button size="sm" variant="secondary" onClick={focusComposer}>
-                    Write a message
-                  </Button>
-                }
-                className="w-full max-w-md"
-              />
-            ) : (
-              <EmptyState
-                icon={MessagesSquare}
-                title="Thread not loaded"
-                action={
-                  <Link to="/" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
-                    Back to projects
-                  </Link>
-                }
-                className="w-full max-w-md"
-              />
-            )}
-          </div>
-        ) : (
-          <Timeline
-            items={items}
-            theme={theme}
-            threadId={threadId}
-            onRetryUserMessage={retryUserMessage}
-            onEditUserMessage={editUserMessage}
-          />
-        )}
+      <div
+        ref={stageRef}
+        data-subagent-stage
+        className="@container relative flex min-h-0 flex-1 overflow-hidden"
+      >
+        <div className="flex min-w-0 flex-1 flex-col">
+          {items.length === 0 ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+              {thread ? (
+                <EmptyState
+                  icon={MessagesSquare}
+                  title="Start the conversation"
+                  action={
+                    <Button size="sm" variant="secondary" onClick={focusComposer}>
+                      Write a message
+                    </Button>
+                  }
+                  className="w-full max-w-md"
+                />
+              ) : (
+                <EmptyState
+                  icon={MessagesSquare}
+                  title="Thread not loaded"
+                  action={
+                    <Link to="/" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+                      Back to projects
+                    </Link>
+                  }
+                  className="w-full max-w-md"
+                />
+              )}
+            </div>
+          ) : (
+            <Timeline
+              items={items}
+              theme={theme}
+              threadId={threadId}
+              onRetryUserMessage={retryUserMessage}
+              onEditUserMessage={editUserMessage}
+            />
+          )}
 
-        <Composer thread={thread} />
+          <div ref={dockRef} className="flex shrink-0 flex-col">
+            {hasSubagents ? (
+              subagentPaneOpen ? (
+                <SubagentStack
+                  threadId={threadId}
+                  events={events ?? EMPTY_EVENTS}
+                  activeChildId={activeChildId}
+                  onOpen={openSubagent}
+                />
+              ) : (
+                <SubagentStrip threadId={threadId} onOpen={openSubagent} />
+              )
+            ) : null}
+
+            <Composer thread={thread} />
+          </div>
+        </div>
+
+        {subagentPaneOpen ? (
+          <SubagentPane
+            threadId={threadId}
+            stageRef={stageRef}
+            theme={theme}
+            onSelect={selectSubagent}
+            onClose={closeSubagentPane}
+          />
+        ) : null}
       </div>
     </div>
   );

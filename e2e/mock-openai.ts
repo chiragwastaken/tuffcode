@@ -19,6 +19,9 @@ export const MOCK_PROSE = 'I will inspect the project before editing it.';
 export const MOCK_TIMELINE_FINAL = 'The project looks healthy and ready for changes.';
 export const MOCK_TIMELINE_FILE = 'timeline-added.txt';
 export const MOCK_TIMELINE_FILE_CONTENT = 'alpha\nbeta';
+export const MOCK_SUBAGENT_TASK = 'map the project structure';
+export const MOCK_SUBAGENT_FINAL = 'Spawned an explorer to map the project.';
+export const MOCK_SUBAGENT_TWO_TASK = 'review the project';
 
 const LF = String.fromCharCode(10);
 const DONE = String.fromCharCode(91, 68, 79, 78, 69, 93);
@@ -214,12 +217,38 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
     const output = contentOf(last);
     const reply = output.includes('denied')
       ? MOCK_DENIED_TEXT
-      : prompt.includes('show-timeline')
-        ? MOCK_TIMELINE_FINAL
-        : output.startsWith('wrote ')
-          ? MOCK_WROTE_TEXT
-          : MOCK_ALLOWED_TEXT;
+      : prompt.includes('spawn-subagent')
+        ? MOCK_SUBAGENT_FINAL
+        : prompt.includes('show-timeline')
+          ? MOCK_TIMELINE_FINAL
+          : output.startsWith('wrote ')
+            ? MOCK_WROTE_TEXT
+            : MOCK_ALLOWED_TEXT;
     await streamText(response, reply);
+    response.end();
+    return;
+  }
+
+  if (prompt.includes('spawn-subagent-two')) {
+    finishWithToolCalls(response, [
+      {
+        id: 'call_e2e_subagent_two',
+        name: 'subagent',
+        args: { type: 'reviewer', task: MOCK_SUBAGENT_TWO_TASK },
+      },
+    ]);
+    response.end();
+    return;
+  }
+
+  if (prompt.includes('spawn-subagent')) {
+    finishWithToolCalls(response, [
+      {
+        id: 'call_e2e_subagent',
+        name: 'subagent',
+        args: { type: 'explorer', task: MOCK_SUBAGENT_TASK },
+      },
+    ]);
     response.end();
     return;
   }
