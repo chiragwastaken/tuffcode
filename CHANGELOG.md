@@ -23,6 +23,9 @@ the project uses semantic versioning.
 - Split panes with draggable splitters and persisted layout.
 
 ### Memory and settings
+- Context meter, per-model context window and max output tokens, warning threshold,
+  auto-compaction, and GitHub Copilot and Azure OpenAI presets.
+- Council node board with planner, task, reviewer and report nodes.
 - Custom instructions injected per turn within budget, with a prompt preview.
 - Interactive brain graph and a memory search tool.
 - Light mode caption buttons and window chrome follow the theme.
