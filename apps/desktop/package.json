@@ -3,17 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./out/main/index.js",
-  "exports": {
-    ".": "./src/index.ts"
-  },
+  "main": "./out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "cd ../.. && vitest run apps/desktop/src"
   },
   "dependencies": {
-    "@tuffcode/contracts": "workspace:*",
-    "@tuffcode/shared": "workspace:*"
+    "@tuffcode/shared": "workspace:*",
+    "electron-updater": "catalog:"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "electron": "catalog:",
+    "electron-vite": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }
