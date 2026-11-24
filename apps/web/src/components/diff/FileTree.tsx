@@ -43,6 +43,8 @@ export function FileTree({ directories, selectedPath, onSelect, className }: Fil
                 <li key={file.path}>
                   <button
                     type="button"
+                    data-testid="diff-file"
+                    data-path={file.path}
                     title={file.path}
                     aria-label={`${file.path}, ${meta.label}`}
                     aria-current={selected ? 'true' : undefined}

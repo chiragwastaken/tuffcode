@@ -9,7 +9,7 @@
     "build:server": "node scripts/build-server.mjs",
     "smoke:server": "node scripts/smoke-server.mjs",
     "build:win": "pnpm build && electron-builder --win",
-    "typecheck": "pnpm -r --if-present run typecheck",
+    "typecheck": "pnpm -r --if-present run typecheck && tsc --noEmit -p e2e/tsconfig.json",
     "lint": "oxlint .",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",

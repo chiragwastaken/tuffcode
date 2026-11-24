@@ -33,8 +33,14 @@ export function ThreadView({ threadId, thread, projectName }: ThreadViewProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border px-4">
-        <span className="truncate text-xs font-medium">{thread?.title ?? threadId}</span>
-        {thread ? <StatusDot status={thread.status} withLabel /> : null}
+        <span data-testid="thread-title" className="truncate text-xs font-medium">
+          {thread?.title ?? threadId}
+        </span>
+        {thread ? (
+          <span data-testid="thread-status" data-status={thread.status}>
+            <StatusDot status={thread.status} withLabel />
+          </span>
+        ) : null}
         <div className="ml-auto flex min-w-0 items-center gap-2">
           {thread?.branch ? (
             <span className="truncate font-mono text-2xs text-muted-foreground">

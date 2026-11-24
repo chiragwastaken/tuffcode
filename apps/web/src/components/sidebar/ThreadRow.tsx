@@ -16,6 +16,8 @@ export function ThreadRow({ thread, selected, onSelect }: ThreadRowProps) {
 
   return (
     <Link
+      data-testid="thread-row"
+      data-thread-id={thread.id}
       to="/project/$projectId/thread/$threadId"
       params={{ projectId: thread.projectId, threadId: thread.id }}
       onClick={() => onSelect(thread.id)}
