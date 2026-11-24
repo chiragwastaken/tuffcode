@@ -6,7 +6,7 @@ export function EmptyWorkspace() {
   const { addProject, adding } = useAddProject();
 
   return (
-    <div className="flex h-full items-center justify-center p-6">
+    <div data-testid="empty-workspace" className="flex h-full items-center justify-center p-6">
       <EmptyState
         icon={FolderOpen}
         title="No projects yet"

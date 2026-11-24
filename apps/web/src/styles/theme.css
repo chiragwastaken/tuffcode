@@ -5,6 +5,11 @@
 @source '../../../../packages/ui/src';
 
 @layer base {
+  :root {
+    /* Right edge reserved for native caption buttons; set from the bootstrap platform. */
+    --window-controls-inset: 0px;
+  }
+
   html,
   body,
   #root {

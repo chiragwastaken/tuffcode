@@ -38,6 +38,11 @@ export async function addMockProvider(page: Page, mock: MockOpenAI): Promise<voi
 
   await expect(page.getByText('Provider added.')).toBeVisible();
   await expect(page.getByText(PROVIDER_LABEL)).toBeVisible();
+
+  // Settings hides the thread sidebar, so leave through the header control before
+  // the caller creates a thread.
+  await page.getByRole('link', { name: 'Back to workspace' }).click();
+  await expect(page.getByTestId('sidebar-new-thread')).toBeVisible();
 }
 
 /**
