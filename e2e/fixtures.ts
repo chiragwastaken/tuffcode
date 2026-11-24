@@ -70,15 +70,37 @@ export interface AppSession {
   relaunch(): Promise<void>;
 }
 
+/**
+ * A force-killed Electron can leave its crashpad handler behind. A stale handler
+ * makes the next launch abort with 0x80000003, so clear only the handlers that
+ * point at this suite's temp app-data tree.
+ */
+function killOrphanCrashpad(): void {
+  if (process.platform !== 'win32') return;
+  const script =
+    'Get-CimInstance Win32_Process -Filter "Name=\'crashpad_handler.exe\'" | ' +
+    "Where-Object { $_.CommandLine -like '*tuffcode-e2e-*' } | " +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
+  try {
+    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      stdio: 'ignore',
+      timeout: 15_000,
+    });
+  } catch {
+    // Best effort: a missing handler is the normal case.
+  }
+}
+
 async function launchOnce(workspace: E2EWorkspace): Promise<{
   app: ElectronApplication;
   page: Page;
   consoleErrors: string[];
   pageErrors: string[];
 }> {
+  killOrphanCrashpad();
   const app = await electron.launch({
-    // The renderer is software-only in the harness: GPU init is flaky on Windows
-    // builders and nothing here asserts pixels.
+    // Software rendering only: GPU init is flaky on Windows builders and no test
+    // asserts pixels. The renderer sandbox stays enabled.
     args: ['--disable-gpu', 'apps/desktop'],
     cwd: repoRoot,
     env: {

@@ -10,9 +10,7 @@ import {
 } from './helpers';
 import { MOCK_FILE_PATH, MOCK_WROTE_TEXT } from './mock-openai';
 
-// Enabled once the inspector mount lands (feat/inspector). The panel itself already
-// carries data-testid="diff-panel"; the tab trigger is data-testid="inspector-tab-diff".
-test.fixme('diff panel shows the file the mock provider wrote', async ({
+test('diff panel shows the file the mock provider wrote', async ({
   session,
   workspace,
   mock,
@@ -33,6 +31,7 @@ test.fixme('diff panel shows the file the mock provider wrote', async ({
   await page.getByTestId('inspector-tab-diff').click();
   const panel = page.getByTestId('diff-panel');
   await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Refresh diff' }).click();
   const added = panel.getByTestId('diff-file').filter({ hasText: MOCK_FILE_PATH });
   await expect(added).toBeVisible();
   await added.click();

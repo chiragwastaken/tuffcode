@@ -160,7 +160,12 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
   const last = messages.at(-1);
   if (last?.role === 'tool') {
     const output = contentOf(last);
-    await streamText(response, output.includes('denied') ? MOCK_DENIED_TEXT : MOCK_ALLOWED_TEXT);
+    const reply = output.includes('denied')
+      ? MOCK_DENIED_TEXT
+      : output.startsWith('wrote ')
+        ? MOCK_WROTE_TEXT
+        : MOCK_ALLOWED_TEXT;
+    await streamText(response, reply);
     response.end();
     return;
   }
