@@ -1,39 +1,23 @@
-import { Button, Card, CardDescription, CardHeader, CardTitle, Spinner } from '@tuffcode/ui';
-import { Download } from 'lucide-react';
-import { useState } from 'react';
-import { InlineAlert } from '../../components/settings/inline-alert';
+import { Card, CardDescription, CardHeader, CardTitle, buttonVariants } from '@tuffcode/ui';
+import { BookOpen, ExternalLink, GitBranch, LifeBuoy } from 'lucide-react';
 import { SettingsRow } from '../../components/settings/settings-row';
 import { SettingsSectionHeader } from '../../components/settings/settings-section-header';
-import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 
-type ExportState =
-  | { status: 'idle' }
-  | { status: 'exporting' }
-  | { status: 'done'; path: string }
-  | { status: 'error'; message: string };
+const REPOSITORY_URL = 'https://github.com/tuffcode-net/tuffcode';
+const RELEASES_URL = `${REPOSITORY_URL}/releases`;
+const ISSUES_URL = `${REPOSITORY_URL}/issues`;
 
 export function AboutSection() {
   const version = useAppStore((state) => state.bootstrap?.version);
-  const rpc = useRpc();
-  const [exportState, setExportState] = useState<ExportState>({ status: 'idle' });
-
-  async function exportDiagnostics(): Promise<void> {
-    setExportState({ status: 'exporting' });
-    try {
-      const result = await rpc.request('diagnostics.export', {});
-      setExportState({ status: 'done', path: result.path });
-    } catch (error) {
-      setExportState({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Could not export diagnostics.',
-      });
-    }
-  }
+  const platform = useAppStore((state) => state.bootstrap?.platform);
 
   return (
     <div className="flex flex-col gap-4">
-      <SettingsSectionHeader title="About" description="Build information and local diagnostics." />
+      <SettingsSectionHeader
+        title="About"
+        description="Build information and where to report a problem. Everything the app stores stays on this machine."
+      />
 
       <Card>
         <CardHeader>
@@ -42,45 +26,67 @@ export function AboutSection() {
         </CardHeader>
 
         <div className="divide-y divide-border border-t border-border">
-          <SettingsRow label="Version" description="Desktop app version.">
-            <span className="text-sm tabular-nums text-foreground">{version ?? 'Unknown'}</span>
+          <SettingsRow label="Version" description="Version reported by the desktop app.">
+            <span className="flex h-9 items-center text-sm tabular-nums text-foreground">
+              {version ?? 'Unknown'}
+            </span>
           </SettingsRow>
 
-          <SettingsRow
-            label="Diagnostics"
-            description="Bundle logs, versions, and redacted configuration into a zip on this machine."
+          <SettingsRow label="Platform" description="Operating system this build runs on.">
+            <span className="flex h-9 items-center text-sm text-foreground">
+              {platform ?? 'Unknown'}
+            </span>
+          </SettingsRow>
+
+          <SettingsRow label="License" description="Tuffcode is released under the MIT license.">
+            <span className="flex h-9 items-center text-sm text-foreground">MIT</span>
+          </SettingsRow>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Links</CardTitle>
+          <CardDescription>Source, releases, and the issue tracker.</CardDescription>
+        </CardHeader>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
+          <a
+            href={REPOSITORY_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
           >
-            <div className="flex flex-col gap-2">
-              <div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void exportDiagnostics()}
-                  disabled={exportState.status === 'exporting'}
-                >
-                  {exportState.status === 'exporting' ? (
-                    <Spinner size="sm" />
-                  ) : (
-                    <Download strokeWidth={1.75} />
-                  )}
-                  Export diagnostics
-                </Button>
-              </div>
-
-              {exportState.status === 'done' ? (
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Saved to{' '}
-                  <code className="break-all font-mono text-2xs text-foreground">
-                    {exportState.path}
-                  </code>
-                </p>
-              ) : null}
-
-              {exportState.status === 'error' ? (
-                <InlineAlert>{exportState.message}</InlineAlert>
-              ) : null}
-            </div>
-          </SettingsRow>
+            <GitBranch strokeWidth={1.75} />
+            Source
+          </a>
+          <a
+            href={RELEASES_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          >
+            <ExternalLink strokeWidth={1.75} />
+            Releases
+          </a>
+          <a
+            href={ISSUES_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          >
+            <LifeBuoy strokeWidth={1.75} />
+            Report an issue
+          </a>
+          <a
+            href={`${REPOSITORY_URL}#readme`}
+            target="_blank"
+            rel="noreferrer"
+            className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+          >
+            <BookOpen strokeWidth={1.75} />
+            Readme
+          </a>
         </div>
       </Card>
     </div>
