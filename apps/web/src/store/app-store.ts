@@ -37,6 +37,8 @@ export interface AppState {
   upsertThread(thread: Thread): void;
   removeThread(threadId: string): void;
   appendEvent(threadId: string, event: ThreadEventRow): void;
+  /** Replaces the event list, for a transcript the server rewrote (clear or compact). */
+  setEvents(threadId: string, events: ThreadEventRow[]): void;
   setMessages(threadId: string, messages: Message[]): void;
   removeMessage(threadId: string, messageId: string): void;
   setSettings(settings: Settings): void;
@@ -160,6 +162,11 @@ export function createAppStore() {
           threads,
         };
       }),
+
+    setEvents: (threadId, events) =>
+      set((state) => ({
+        events: { ...state.events, [threadId]: events },
+      })),
 
     setMessages: (threadId, messages) =>
       set((state) => ({

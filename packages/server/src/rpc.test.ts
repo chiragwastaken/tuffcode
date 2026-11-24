@@ -22,6 +22,7 @@ const IMPLEMENTED = [
   'checkpoints.list',
   'checkpoints.revert',
   'commands.list',
+  'commands.run',
   'comments.add',
   'comments.list',
   'comments.resolve',

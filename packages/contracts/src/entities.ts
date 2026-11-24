@@ -332,6 +332,8 @@ export const CommandSchema = z.object({
   description: z.string(),
   body: z.string(),
   path: z.string().nullable(),
+  /** Usage hint from frontmatter, or null when the command takes no arguments. */
+  argumentHint: z.string().nullable(),
 });
 export type Command = z.infer<typeof CommandSchema>;
 

@@ -16,6 +16,12 @@ the project uses semantic versioning.
 - Per-type model and fallback model in settings, concurrency cap, isolated worktrees for workers.
 - Work and Council switch in the thread topbar; Council starts from one goal box.
 
+### Slash commands
+- Composer slash commands execute real services through one `commands.run` RPC: the model
+  picker, plan and council modes, typed subagents, custom instructions, the prompt budget,
+  transcript clear and compact, and a command and skill listing.
+- The palette shows argument hints, and unknown slash names fall through as normal messages.
+
 ### Composer and timeline
 - Composer controls split left (mode, model) and right (attach, permission, send).
 - Timeline renders reasoning, prose, grouped tool calls and the final answer, with copy, retry,

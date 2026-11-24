@@ -79,6 +79,50 @@ export type ServerResponse = z.infer<typeof ServerResponseSchema>;
 export const ServerEventFrameSchema = ServerEventSchema;
 export type ServerEventFrame = ServerEvent;
 
+/** The sections and token budget `prompt.preview` reports for one message. */
+export const PromptPreviewSchema = z.object({
+  sections: z
+    .object({
+      name: z.string(),
+      text: z.string(),
+      tokens: z.number().int().nonnegative(),
+    })
+    .array(),
+  total: z.number().int().nonnegative(),
+});
+export type PromptPreview = z.infer<typeof PromptPreviewSchema>;
+
+/** Settings sections a slash command may open directly. */
+export const CommandSettingsSectionSchema = z.enum(['instructions', 'agents']);
+export type CommandSettingsSection = z.infer<typeof CommandSettingsSectionSchema>;
+
+/**
+ * A command result that the composer must carry out rather than print: open the
+ * model picker, switch the thread mode, open a settings section, show the prompt
+ * budget, or reload the transcript after the server changed it.
+ */
+export const CommandUiActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('open-model-picker') }),
+  z.object({ type: z.literal('switch-mode'), mode: ExecutionModeSchema }),
+  z.object({ type: z.literal('open-settings'), section: CommandSettingsSectionSchema }),
+  z.object({ type: z.literal('show-context'), preview: PromptPreviewSchema }),
+  z.object({ type: z.literal('reload-transcript'), text: z.string() }),
+]);
+export type CommandUiAction = z.infer<typeof CommandUiActionSchema>;
+
+/**
+ * What `commands.run` decided for one input. `turn` text is sent as a user turn,
+ * `text` is shown without sending, `ui` is an action the composer performs, and
+ * `error` is a command-level failure the composer reports.
+ */
+export const CommandRunResultSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('ui'), action: CommandUiActionSchema }),
+  z.object({ kind: z.literal('text'), text: z.string() }),
+  z.object({ kind: z.literal('turn'), text: z.string() }),
+  z.object({ kind: z.literal('error'), message: z.string() }),
+]);
+export type CommandRunResult = z.infer<typeof CommandRunResultSchema>;
+
 type RpcMethodDefinition = {
   readonly params: z.ZodType;
   readonly result: z.ZodType;
@@ -349,16 +393,7 @@ export const methods = {
       threadId: IdSchema,
       message: z.string(),
     }),
-    result: z.object({
-      sections: z
-        .object({
-          name: z.string(),
-          text: z.string(),
-          tokens: z.number().int().nonnegative(),
-        })
-        .array(),
-      total: z.number().int().nonnegative(),
-    }),
+    result: PromptPreviewSchema,
   },
   'brain.list': {
     params: z.object({
@@ -476,6 +511,13 @@ export const methods = {
   'commands.list': {
     params: projectIdParam,
     result: CommandSchema.array(),
+  },
+  'commands.run': {
+    params: z.object({
+      threadId: IdSchema,
+      input: z.string().min(1),
+    }),
+    result: CommandRunResultSchema,
   },
   'skills.list': {
     params: projectIdParam,

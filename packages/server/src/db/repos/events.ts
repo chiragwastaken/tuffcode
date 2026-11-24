@@ -9,6 +9,8 @@ export interface EventsRepo {
   /** Rows with `seq > sinceSeq`, oldest first, at most `limit`. */
   since(threadId: string, sinceSeq: number, limit: number): EventRow[];
   count(threadId: string): number;
+  /** Deletes every event of one thread; returns the number of rows removed. */
+  removeByThread(threadId: string): number;
 }
 
 const EVENT_COLUMNS = 'id, thread_id, seq, type, payload, created_at';
@@ -34,6 +36,7 @@ export function createEventsRepo(db: DatabaseSync): EventsRepo {
     `SELECT ${EVENT_COLUMNS} FROM events WHERE thread_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
   );
   const selectCount = db.prepare('SELECT COUNT(*) AS total FROM events WHERE thread_id = ?');
+  const deleteByThread = db.prepare('DELETE FROM events WHERE thread_id = ?');
 
   return {
     append: (threadId, type, payload, createdAt = new Date().toISOString()) =>
@@ -56,5 +59,6 @@ export function createEventsRepo(db: DatabaseSync): EventsRepo {
       const row = selectCount.get(threadId);
       return row === undefined ? 0 : integer(asRow(row), 'total');
     },
+    removeByThread: (threadId) => Number(deleteByThread.run(threadId).changes),
   };
 }

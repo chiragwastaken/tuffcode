@@ -6,7 +6,9 @@ import { DiffPanel } from '../diff/DiffPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { requestTerminalAt } from '../terminal/terminal-requests';
 import { BrainPanel } from './BrainPanel';
+import { ContextPanel } from './ContextPanel';
 import { CouncilPanel } from './CouncilPanel';
+import { subscribePanelRequests, takeInspectorTab } from './panel-requests';
 import {
   INSPECTOR_TABS,
   INSPECTOR_TAB_LABEL,
@@ -33,6 +35,17 @@ export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
   const [tabs, dispatch] = useReducer(inspectorTabsReducer, initialInspectorTabs);
   const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
   const activeTab = tabForThread(tabs, threadId);
+
+  // A slash command can raise a tab; the composer never imports the inspector.
+  useEffect(
+    () =>
+      subscribePanelRequests(() => {
+        const requested = takeInspectorTab();
+        if (requested === null || threadId === null) return;
+        dispatch({ type: 'select', threadId, tab: requested });
+      }),
+    [threadId],
+  );
 
   if (threadId === null) {
     return (
@@ -160,6 +173,9 @@ function InspectorTabs({ threadId, projectId, activeTab, onSelectTab }: Inspecto
       </TabsPanel>
       <TabsPanel value="council" keepMounted className="min-h-0 flex-1">
         {isMounted('council') ? <CouncilPanel threadId={threadId} /> : null}
+      </TabsPanel>
+      <TabsPanel value="context" keepMounted className="min-h-0 flex-1">
+        {isMounted('context') ? <ContextPanel threadId={threadId} /> : null}
       </TabsPanel>
     </>
   );

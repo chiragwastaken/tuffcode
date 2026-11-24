@@ -6,6 +6,7 @@ import type {
   Skill,
   Thread,
 } from '@tuffcode/contracts';
+import { useNavigate } from '@tanstack/react-router';
 import {
   Button,
   IconButton,
@@ -38,16 +39,25 @@ import { CouncilGoal } from '../council/CouncilGoal';
 import { CouncilStatusStrip } from '../council/CouncilStatusStrip';
 import { councilSummary } from '../council/council-goal';
 import { useCouncilGoal } from '../council/use-council-goal';
+import { requestInspectorTab } from '../inspector/panel-requests';
 import { ModelPicker } from '../models/ModelPicker';
 import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './attachments';
+import { dispatchCommandResult } from './command-run';
 import {
   addLocalUserMessage,
+  clearLocalUserMessages,
   failLocalUserMessage,
   nextLocalUserMessageId,
   resolveLocalUserMessage,
 } from './local-messages';
 import { SegmentedControl, type SegmentedOption } from './SegmentedControl';
-import { filterPalette, parseTrigger, triggerInsert, type PaletteKind } from './slash';
+import {
+  filterPalette,
+  parseTrigger,
+  slashCommandName,
+  triggerInsert,
+  type PaletteKind,
+} from './slash';
 import { useProjectPalette } from './use-project-palette';
 
 /** The composer's own mode control; Council is chosen in the topbar switch. */
@@ -105,11 +115,17 @@ function useContainerWidth(ref: RefObject<HTMLDivElement | null>): number {
 
 export function Composer({ thread }: ComposerProps) {
   const rpc = useRpc();
+  const navigate = useNavigate();
   const connection = useAppStore((state) => state.connection);
   const providers = useAppStore((state) => state.providers);
   const upsertThread = useAppStore((state) => state.upsertThread);
+  const setMessages = useAppStore((state) => state.setMessages);
+  const setEvents = useAppStore((state) => state.setEvents);
 
   const [input, setInput] = useState('');
+  const [hint, setHint] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [goalInput, setGoalInput] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
@@ -142,11 +158,15 @@ export function Composer({ thread }: ComposerProps) {
   const trigger = parseTrigger(input);
   const triggerKind = trigger?.kind ?? null;
   const triggerQuery = trigger?.query ?? '';
-  const palette = useProjectPalette(thread?.projectId, triggerKind !== null);
+  const palette = useProjectPalette(
+    thread?.projectId,
+    triggerKind !== null || input.startsWith('/'),
+  );
 
   const paletteEntries = useMemo(() => {
     if (!triggerKind) return [];
-    const source = triggerKind === 'command' ? palette.commands : palette.skills;
+    const source: readonly (Command | Skill)[] =
+      triggerKind === 'command' ? palette.commands : palette.skills;
     return filterPalette(source, triggerQuery);
   }, [palette.commands, palette.skills, triggerKind, triggerQuery]);
 
@@ -199,28 +219,31 @@ export function Composer({ thread }: ComposerProps) {
     }
   }
 
-  async function send(): Promise<void> {
-    if (!thread || !canSend) return;
-    const text = input.trim();
-    if (text.length === 0) return;
+  /** Sends one user turn. Command results and the Enter key both come through here. */
+  async function sendTurn(text: string): Promise<void> {
+    if (!thread || !connected) return;
+    const outgoing = text.trim();
+    if (outgoing.length === 0) return;
+    const sentAttachments = attachments;
     const messageId = nextLocalUserMessageId(thread.id);
     addLocalUserMessage({
       id: messageId,
       threadId: thread.id,
       turnId: null,
-      text,
-      attachments,
+      text: outgoing,
+      attachments: sentAttachments,
       status: 'pending',
       createdAt: new Date().toISOString(),
     });
     setSending(true);
     setInput('');
     setAttachments([]);
+    setHint(null);
     try {
       const result = await rpc.request('threads.send', {
         id: thread.id,
-        text,
-        ...(attachments.length > 0 ? { attachments } : {}),
+        text: outgoing,
+        ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
       });
       resolveLocalUserMessage(messageId, result.turnId);
     } catch (error) {
@@ -229,6 +252,67 @@ export function Composer({ thread }: ComposerProps) {
     } finally {
       setSending(false);
     }
+  }
+
+  /** Re-reads the transcript after the server rewrote it (clear or compact). */
+  async function refreshTranscript(threadId: string): Promise<void> {
+    const [messages, page] = await Promise.all([
+      rpc.request('messages.list', { threadId }),
+      rpc.request('threads.events', { id: threadId, sinceSeq: 0, limit: 1000 }),
+    ]);
+    setMessages(threadId, messages);
+    setEvents(threadId, page.events);
+    clearLocalUserMessages(threadId);
+  }
+
+  /** Runs one slash input through the server and carries out what it decided. */
+  async function runSlash(text: string): Promise<void> {
+    if (!thread) return;
+    const threadId = thread.id;
+    setSending(true);
+    try {
+      const result = await rpc.request('commands.run', { threadId, input: text });
+      if (result.kind !== 'error') {
+        setInput('');
+        setHint(null);
+      }
+      await dispatchCommandResult(result, {
+        openModelPicker: () => setModelPickerOpen(true),
+        switchMode: (mode) => {
+          // The server already wrote threads.update; mirror it so the mode control
+          // flips before the thread.updated event lands.
+          upsertThread({ ...thread, executionMode: mode });
+        },
+        openSettings: (section) => {
+          void navigate({ to: '/settings/{-$section}', params: { section } });
+        },
+        showContext: (preview) => requestInspectorTab('context', preview),
+        reloadTranscript: async (message) => {
+          await refreshTranscript(threadId);
+          setNotice(message);
+        },
+        showText: (message) => setNotice(message),
+        sendTurn: (next) => sendTurn(next),
+        showError: (message) => toast.error(message),
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not run the command.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function send(): Promise<void> {
+    if (!thread || !canSend) return;
+    const text = input.trim();
+    if (text.length === 0) return;
+    // Any leading slash token goes through the server; an unknown name comes back
+    // as a turn, so ordinary text that happens to start with a slash is not lost.
+    if (slashCommandName(text) !== null) {
+      await runSlash(text);
+      return;
+    }
+    await sendTurn(text);
   }
 
   async function sendGoal(): Promise<void> {
@@ -251,7 +335,13 @@ export function Composer({ thread }: ComposerProps) {
   function choose(entry: Command | Skill): void {
     if (!triggerKind) return;
     const next = triggerInsert(triggerKind, entry.name);
+    const usage =
+      triggerKind === 'command' && 'argumentHint' in entry && entry.argumentHint !== null
+        ? `/${entry.name} ${entry.argumentHint}`
+        : null;
     setInput(next);
+    setHint(usage);
+    setNotice(null);
     setDismissed(null);
     setActiveIndex(0);
     requestAnimationFrame(() => {
@@ -379,9 +469,18 @@ export function Composer({ thread }: ComposerProps) {
                             : 'hover:bg-accent',
                         )}
                       >
-                        <span className="font-mono text-xs text-foreground">
-                          {triggerKind === 'command' ? '/' : '$'}
-                          {entry.name}
+                        <span className="flex min-w-0 items-baseline gap-1.5 font-mono text-xs text-foreground">
+                          <span className="truncate">
+                            {triggerKind === 'command' ? '/' : '$'}
+                            {entry.name}
+                          </span>
+                          {triggerKind === 'command' &&
+                          'argumentHint' in entry &&
+                          entry.argumentHint !== null ? (
+                            <span className="truncate text-2xs text-muted-foreground">
+                              {entry.argumentHint}
+                            </span>
+                          ) : null}
                         </span>
                         <span className="line-clamp-1 text-2xs text-muted-foreground">
                           {entry.description}
@@ -413,6 +512,25 @@ export function Composer({ thread }: ComposerProps) {
                 close
               </span>
             </div>
+          </div>
+        ) : null}
+
+        {notice !== null ? (
+          <div
+            data-testid="command-notice"
+            className="mb-2 flex items-start gap-2 rounded-lg border border-border bg-card/60 px-2.5 py-2"
+          >
+            <pre className="min-w-0 flex-1 font-mono text-2xs leading-5 whitespace-pre-wrap text-foreground/90">
+              {notice}
+            </pre>
+            <button
+              type="button"
+              aria-label="Dismiss command output"
+              className="rounded-sm text-muted-foreground hover:text-foreground"
+              onClick={() => setNotice(null)}
+            >
+              <X aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
+            </button>
           </div>
         ) : null}
 
@@ -459,6 +577,15 @@ export function Composer({ thread }: ComposerProps) {
                 </div>
               ) : null}
 
+              {hint !== null && !paletteOpen ? (
+                <p
+                  data-testid="command-hint"
+                  className="truncate px-1 pb-1 font-mono text-2xs text-muted-foreground"
+                >
+                  {hint}
+                </p>
+              ) : null}
+
               <textarea
                 ref={textareaRef}
                 data-testid="composer-input"
@@ -492,6 +619,8 @@ export function Composer({ thread }: ComposerProps) {
                   <ModelPicker
                     provider={provider}
                     value={thread?.modelId ?? null}
+                    open={modelPickerOpen}
+                    onOpenChange={setModelPickerOpen}
                     disabled={!thread || updating}
                     onSelect={(modelId) => {
                       if (modelId !== thread?.modelId) void applyUpdate({ modelId });

@@ -4,4 +4,5 @@ export * from './expand.js';
 export * from './frontmatter.js';
 export * from './handlers.js';
 export * from './parse.js';
+export * from './run.js';
 export * from './types.js';

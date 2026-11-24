@@ -6,6 +6,7 @@ export interface TriggerMatch {
 }
 
 const LEADING_TRIGGER = /^([/$])([\w-]*)$/;
+const LEADING_COMMAND = /^\/([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s|$)/;
 
 /**
  * Matches only a leading token: the whole input is `/name` or `$name`.
@@ -15,6 +16,11 @@ export function parseTrigger(value: string): TriggerMatch | null {
   const match = LEADING_TRIGGER.exec(value);
   if (!match) return null;
   return { kind: match[1] === '/' ? 'command' : 'skill', query: match[2] ?? '' };
+}
+
+/** The command name of a leading slash token, or null when the input is plain text. */
+export function slashCommandName(value: string): string | null {
+  return LEADING_COMMAND.exec(value)?.[1] ?? null;
 }
 
 export function triggerInsert(kind: PaletteKind, name: string): string {

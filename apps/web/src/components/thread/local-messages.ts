@@ -127,6 +127,13 @@ export function pruneResolvedLocalUserMessages(
   emit();
 }
 
+/** Drops every echo of a thread; /clear replaced the transcript the echoes stood in for. */
+export function clearLocalUserMessages(threadId: string): void {
+  if (!messagesByThread.delete(threadId)) return;
+  supersededTurnsByThread.delete(threadId);
+  emit();
+}
+
 export function localUserMessages(threadId: string): readonly LocalUserMessage[] {
   return messagesByThread.get(threadId) ?? EMPTY_MESSAGES;
 }
