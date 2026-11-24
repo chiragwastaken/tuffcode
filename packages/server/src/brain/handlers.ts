@@ -1,7 +1,8 @@
 import type { ExecutionMode, RpcParams, RpcResult } from '@tuffcode/contracts';
 import type { Repos } from '../db/repos/index.js';
 import { badRequest, notFound } from '../errors.js';
-import { selectBrain } from './selector.js';
+import type { RpcHandler, RpcHandlers } from '../rpc.js';
+import { assembleBrain } from './service.js';
 import { createBrainStore, type BrainStore } from './store.js';
 
 export interface BrainHandlerDeps {
@@ -16,7 +17,7 @@ export interface BrainHandlers {
 }
 
 /**
- * RPC handlers for the brain inspector. `brain.preview` runs the same selector the
+ * RPC handlers for the brain inspector. `brain.preview` runs the same assembly the
  * turn runner uses, so the inspector shows exactly what the next send injects.
  */
 export function createBrainHandlers(deps: BrainHandlerDeps): BrainHandlers {
@@ -40,7 +41,26 @@ export function createBrainHandlers(deps: BrainHandlerDeps): BrainHandlers {
         }
         turnMode = thread.executionMode;
       }
-      return selectBrain(store, { projectId, message, mode: turnMode }).slice;
+      const assembly = assembleBrain(deps.repos, deps.repos.settings.get(), {
+        projectId,
+        ...(threadId === undefined ? {} : { threadId }),
+        message,
+        ...(turnMode === undefined ? {} : { mode: turnMode }),
+      });
+      return assembly.slice;
     },
   };
+}
+
+/** The same handlers as an RPC registry map, for the server's merge seam. */
+export function createBrainRpcHandlers(deps: BrainHandlerDeps): RpcHandlers {
+  const handlers = createBrainHandlers(deps);
+  const map = new Map<string, RpcHandler>();
+  map.set('brain.list', (params) => handlers['brain.list'](params as RpcParams<'brain.list'>));
+  map.set('brain.upsert', (params) => handlers['brain.upsert'](params as RpcParams<'brain.upsert'>));
+  map.set('brain.delete', (params) => handlers['brain.delete'](params as RpcParams<'brain.delete'>));
+  map.set('brain.preview', (params) =>
+    handlers['brain.preview'](params as RpcParams<'brain.preview'>),
+  );
+  return map;
 }
