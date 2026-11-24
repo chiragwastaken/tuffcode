@@ -1,5 +1,6 @@
 import { estimateTokens } from '@tuffcode/prompt';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { transaction } from '../db/index.js';
 import { createTestContext, type TestContext } from '../test-support.js';
 import {
   ALWAYS_TOKEN_BUDGET,
@@ -37,24 +38,43 @@ describe('brain selector', () => {
   });
 
   it('never exceeds the budget with 200 candidate entries', () => {
-    for (let index = 0; index < 200; index += 1) {
-      store.upsert({
-        kind: 'memory',
+    // Seed through the repository in one transaction. This test measures the
+    // selector; 200 autocommitted inserts plus per-entry mirror work are filesystem
+    // I/O and pushed the test past the CI timeout on windows-latest.
+    transaction(ctx.db, () => {
+      for (let index = 0; index < 200; index += 1) {
+        ctx.repos.brain.upsert({
+          kind: 'memory',
+          scope: 'global',
+          text: `memory ${index} sharedtoken ${'x'.repeat(120)}`,
+          importance: (index % 10) / 10,
+        });
+      }
+      ctx.repos.brain.upsert({ kind: 'identity', scope: 'global', text: 'solo founder' });
+      ctx.repos.brain.upsert({
+        kind: 'rule',
         scope: 'global',
-        text: `memory ${index} sharedtoken ${'x'.repeat(120)}`,
-        importance: (index % 10) / 10,
+        text: 'never use npm',
+        appliesTo: 'all',
       });
-    }
-    store.upsert({ kind: 'identity', scope: 'global', text: 'solo founder' });
-    store.upsert({ kind: 'rule', scope: 'global', text: 'never use npm', appliesTo: 'all' });
-    store.upsert({ kind: 'preference', scope: 'global', text: 'dark theme', importance: 0.8 });
-    store.upsert({
-      kind: 'project',
-      scope: 'project',
-      projectId: 'prj_a',
-      text: 'Electron plus React',
+      ctx.repos.brain.upsert({
+        kind: 'preference',
+        scope: 'global',
+        text: 'dark theme',
+        importance: 0.8,
+      });
+      ctx.repos.brain.upsert({
+        kind: 'project',
+        scope: 'project',
+        projectId: 'prj_a',
+        text: 'Electron plus React',
+      });
+      ctx.repos.brain.upsert({
+        kind: 'working-note',
+        scope: 'project',
+        text: 'mid refactor of the selector',
+      });
     });
-    store.upsert({ kind: 'working-note', scope: 'project', text: 'mid refactor of the selector' });
 
     const { slice } = selectBrain(store, {
       projectId: 'prj_a',
@@ -88,14 +108,16 @@ describe('brain selector', () => {
       appliesTo: 'plan',
       importance: 0.9,
     });
-    for (let index = 0; index < 40; index += 1) {
-      store.upsert({
-        kind: 'preference',
-        scope: 'global',
-        text: `preference ${index} ${'z'.repeat(400)}`,
-        importance: index / 100,
-      });
-    }
+    transaction(ctx.db, () => {
+      for (let index = 0; index < 40; index += 1) {
+        ctx.repos.brain.upsert({
+          kind: 'preference',
+          scope: 'global',
+          text: `preference ${index} ${'z'.repeat(400)}`,
+          importance: index / 100,
+        });
+      }
+    });
 
     const { slice } = selectBrain(store, {
       projectId: 'prj_a',
