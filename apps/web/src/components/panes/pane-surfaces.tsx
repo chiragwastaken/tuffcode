@@ -75,20 +75,17 @@ export function PaneSurfaceView({
     case 'council':
       return <CouncilPanel threadId={threadId} />;
     case 'subagent':
-      return (
-        <SubagentSurface threadId={threadId} stageRef={threadStageRef} onClose={onCloseSubagent} />
-      );
+      return <SubagentSurface threadId={threadId} onClose={onCloseSubagent} />;
   }
 }
 
 interface SubagentSurfaceProps {
   threadId: string;
-  stageRef: RefObject<HTMLDivElement | null>;
   onClose(): void;
 }
 
 /** The subagent pane fills its split pane instead of docking to the thread row. */
-function SubagentSurface({ threadId, stageRef, onClose }: SubagentSurfaceProps) {
+function SubagentSurface({ threadId, onClose }: SubagentSurfaceProps) {
   const hasChild = useAppStore((state) =>
     Object.values(state.subagents).some((child) => child.threadId === threadId),
   );
@@ -110,7 +107,6 @@ function SubagentSurface({ threadId, stageRef, onClose }: SubagentSurfaceProps) 
   return (
     <SubagentPane
       threadId={threadId}
-      stageRef={stageRef}
       theme={theme}
       onSelect={selectSubagent}
       onClose={onClose}

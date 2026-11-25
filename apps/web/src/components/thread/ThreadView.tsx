@@ -264,7 +264,6 @@ export function ThreadView({
         {subagentPaneOpen && !externalSubagentPane ? (
           <SubagentPane
             threadId={threadId}
-            stageRef={stageRef}
             theme={theme}
             onSelect={selectSubagent}
             onClose={closeSubagentPane}

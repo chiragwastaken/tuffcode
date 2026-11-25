@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { McpServer } from '@tuffcode/contracts';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MCP_CLIENT_VERSION,
   MCP_PROTOCOL_VERSION,
@@ -10,10 +10,26 @@ import {
   type McpSpawnOptions,
 } from './client.js';
 
+const spawnControl = vi.hoisted(() => ({
+  calls: [] as { command: string; args: readonly string[]; options: Record<string, unknown> }[],
+  child: null as unknown,
+  treeKill: null as unknown,
+}));
+
+vi.mock('node:child_process', () => ({
+  spawn: (command: string, args: readonly string[], options: Record<string, unknown>) => {
+    spawnControl.calls.push({ command, args, options });
+    const target = command === 'taskkill' ? spawnControl.treeKill : spawnControl.child;
+    if (target === null) throw new Error(`unexpected spawn of ${command}`);
+    return target;
+  },
+}));
+
 const ISO = '2026-11-24T10:00:00.000Z';
 
 interface FakeChild {
   writes: Record<string, unknown>[];
+  stdin: EventEmitter;
   stdout: EventEmitter;
   stderr: EventEmitter;
   events: EventEmitter;
@@ -28,10 +44,11 @@ interface Fake {
 type OnMessage = (message: Record<string, unknown>, fake: FakeChild) => void;
 
 function fakeChild(onMessage?: OnMessage): Fake {
+  const stdin = new EventEmitter();
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
   const events = new EventEmitter();
-  const fake: FakeChild = { writes: [], stdout, stderr, events, killCalls: 0 };
+  const fake: FakeChild = { writes: [], stdin, stdout, stderr, events, killCalls: 0 };
   const child: McpChild = {
     stdin: {
       write: (chunk: string) => {
@@ -40,6 +57,7 @@ function fakeChild(onMessage?: OnMessage): Fake {
         onMessage?.(message, fake);
         return true;
       },
+      on: (event, listener) => stdin.on(event, listener),
     },
     stdout: { on: (event, listener) => stdout.on(event, listener) },
     stderr: { on: (event, listener) => stderr.on(event, listener) },
@@ -50,6 +68,23 @@ function fakeChild(onMessage?: OnMessage): Fake {
     },
   };
   return { fake, child };
+}
+
+interface TreeKillFake {
+  unrefs: number;
+  on(event: string, listener: (...args: unknown[]) => void): TreeKillFake;
+  unref(): void;
+}
+
+function treeKillFake(): TreeKillFake {
+  const fake: TreeKillFake = {
+    unrefs: 0,
+    on: () => fake,
+    unref: () => {
+      fake.unrefs += 1;
+    },
+  };
+  return fake;
 }
 
 function respond(fake: FakeChild, message: Record<string, unknown>, result: unknown): void {
@@ -82,6 +117,12 @@ function initializer(fake: FakeChild, message: Record<string, unknown>): boolean
 }
 
 describe('MCP stdio client', () => {
+  beforeEach(() => {
+    spawnControl.calls.length = 0;
+    spawnControl.child = null;
+    spawnControl.treeKill = null;
+  });
+
   it('spawns the configured command with the merged environment and sends the handshake', async () => {
     const { fake, child } = fakeChild((message, target) => {
       initializer(target, message);
@@ -215,5 +256,80 @@ describe('MCP stdio client', () => {
     await pending;
     await expect(client.initialize()).rejects.toThrow(/boom: missing binary/);
     await client.close();
+  });
+
+  it('absorbs a stdin error instead of throwing', async () => {
+    const { fake, child } = fakeChild();
+    spawnControl.child = child;
+    const client = createMcpClient(server());
+
+    expect(() => fake.stdin.emit('error', new Error('write EPIPE'))).not.toThrow();
+    await client.close();
+  });
+
+  it('drops an over-long response line, fails the request and recovers', async () => {
+    const oversized = 'x'.repeat(MCP_RESULT_LIMIT * 2 + 1);
+    const tooLong = `MCP server sent a response line longer than ${MCP_RESULT_LIMIT * 2} bytes`;
+    let calls = 0;
+    const { child } = fakeChild((message, target) => {
+      if (initializer(target, message)) return;
+      calls += 1;
+      if (calls === 1) {
+        // No newline in the chunk: the buffer would grow without bound.
+        target.stdout.emit('data', oversized);
+        target.stdout.emit('data', `${'y'.repeat(64)}\n`);
+        return;
+      }
+      if (calls === 2) {
+        // The whole line arrives at once, so it is dropped as a completed line.
+        target.stdout.emit('data', `${oversized}\n`);
+        return;
+      }
+      respond(target, message, { tools: [{ name: 'recovered' }] });
+    });
+    const client = createMcpClient(server(), { spawnFn: () => child });
+
+    await expect(client.listTools()).rejects.toThrow(tooLong);
+    await expect(client.listTools()).rejects.toThrow(tooLong);
+    await expect(client.listTools()).resolves.toEqual([
+      { name: 'recovered', description: '', inputSchema: {} },
+    ]);
+    await client.close();
+  });
+
+  it('kills the whole tree with taskkill on win32', async () => {
+    const { fake, child } = fakeChild();
+    child.pid = 4242;
+    const treeKill = treeKillFake();
+    spawnControl.child = child;
+    spawnControl.treeKill = treeKill;
+    const client = createMcpClient(server(), { platform: 'win32' });
+
+    await client.close();
+
+    expect(spawnControl.calls).toContainEqual({
+      command: 'taskkill',
+      args: ['/pid', '4242', '/T', '/F'],
+      options: { windowsHide: true },
+    });
+    expect(fake.killCalls).toBe(0);
+    expect(treeKill.unrefs).toBe(1);
+  });
+
+  it('falls back to a plain kill off win32 or without a pid', async () => {
+    const offWindows = fakeChild();
+    offWindows.child.pid = 4242;
+    spawnControl.child = offWindows.child;
+    const linuxClient = createMcpClient(server(), { platform: 'linux' });
+    await linuxClient.close();
+    expect(offWindows.fake.killCalls).toBe(1);
+    expect(spawnControl.calls.some((call) => call.command === 'taskkill')).toBe(false);
+
+    const noPid = fakeChild();
+    spawnControl.child = noPid.child;
+    const windowsClient = createMcpClient(server(), { platform: 'win32' });
+    await windowsClient.close();
+    expect(noPid.fake.killCalls).toBe(1);
+    expect(spawnControl.calls.some((call) => call.command === 'taskkill')).toBe(false);
   });
 });

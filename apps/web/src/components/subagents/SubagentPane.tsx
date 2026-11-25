@@ -1,7 +1,7 @@
 import { cn, type MarkdownTheme } from '@tuffcode/ui';
 import { Badge, IconButton, StatusDot, TabsList, TabsPanel, TabsRoot, TabsTab } from '@tuffcode/ui';
 import { CircleStop, PanelRightClose } from 'lucide-react';
-import { useEffect, useState, type CSSProperties, type RefObject } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import { useRpc } from '../../rpc/rpc-context';
@@ -23,8 +23,6 @@ import { useSubagentClock } from './use-subagents';
 
 export interface SubagentPaneProps {
   threadId: string;
-  /** The thread row that hosts this pane; split-pane hosts pass the same ref. */
-  stageRef: RefObject<HTMLElement | null>;
   theme: MarkdownTheme;
   onSelect(childId: string): void;
   onClose(): void;

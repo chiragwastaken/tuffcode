@@ -16,6 +16,9 @@ export const MCP_RESULT_LIMIT = 64 * 1024;
 
 const STDERR_LIMIT = 1_000;
 const STDERR_SUFFIX_LIMIT = 200;
+/** No valid response line can exceed this; a longer one is dropped, not buffered. */
+const MAX_LINE_BUFFER = MCP_RESULT_LIMIT * 2;
+const LINE_TOO_LONG = `MCP server sent a response line longer than ${MAX_LINE_BUFFER} bytes`;
 
 const ResponseSchema = z.object({
   id: z.union([z.number(), z.string()]),
@@ -38,11 +41,16 @@ const ContentResultSchema = z.object({ content: z.array(z.unknown()).optional() 
 const TextContentSchema = z.object({ type: z.literal('text'), text: z.string() });
 
 export interface McpChild {
-  stdin: { write(chunk: string): boolean } | null;
+  stdin: {
+    write(chunk: string): boolean;
+    on(event: 'error', listener: (error: Error) => void): unknown;
+  } | null;
   stdout: { on(event: 'data', listener: (chunk: Buffer | string) => void): unknown } | null;
   stderr: { on(event: 'data', listener: (chunk: Buffer | string) => void): unknown } | null;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   kill(): unknown;
+  /** Present on a real child; a fake may omit it, which forces a plain kill. */
+  pid?: number;
 }
 
 export interface McpSpawnOptions {
@@ -62,6 +70,8 @@ export type McpSpawnFn = (
 export interface McpClientOptions {
   timeoutMs?: number;
   spawnFn?: McpSpawnFn;
+  /** Defaults to the host platform; tests pin it to check the Windows tree kill. */
+  platform?: NodeJS.Platform;
 }
 
 export interface McpClient {
@@ -83,16 +93,47 @@ function defaultSpawn(
   args: readonly string[],
   options: McpSpawnOptions,
 ): McpChild {
-  return spawn(command, [...args], options);
+  const child = spawn(command, [...args], options);
+  // A write that races the child exit surfaces as an EPIPE on stdin; without a
+  // listener that becomes an uncaught exception that takes the server down.
+  child.stdin?.on('error', () => undefined);
+  return child;
 }
 
 function capResult(text: string): string {
   return text.length > MCP_RESULT_LIMIT ? text.slice(0, MCP_RESULT_LIMIT) : text;
 }
 
+/**
+ * Kills the whole child tree on Windows, where `kill()` leaves grandchildren such as
+ * a wrapper script's real server running; every other platform gets a plain kill.
+ * Neither path may throw: shutdown runs from exit handlers and from `close()`.
+ */
+function killChild(child: McpChild, platform: NodeJS.Platform): void {
+  const pid = child.pid;
+  if (platform === 'win32' && typeof pid === 'number') {
+    try {
+      const taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        windowsHide: true,
+      });
+      taskkill.on('error', () => undefined);
+      taskkill.unref();
+      return;
+    } catch {
+      // taskkill missing or unrunnable: fall through to the direct kill.
+    }
+  }
+  try {
+    child.kill();
+  } catch {
+    // A child that already exited throws here; close must never surface it.
+  }
+}
+
 export function createMcpClient(server: McpServer, options: McpClientOptions = {}): McpClient {
   const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
   const spawnFn = options.spawnFn ?? defaultSpawn;
+  const platform = options.platform ?? process.platform;
   const child = spawnFn(server.command, server.args, {
     env: { ...process.env, ...server.env },
     ...(server.cwd === null ? {} : { cwd: server.cwd }),
@@ -103,6 +144,7 @@ export function createMcpClient(server: McpServer, options: McpClientOptions = {
   const pending = new Map<number, PendingRequest>();
   let nextId = 1;
   let buffer = '';
+  let discarding = false;
   let stderrText = '';
   let closed = false;
   let initPromise: Promise<void> | null = null;
@@ -126,11 +168,7 @@ export function createMcpClient(server: McpServer, options: McpClientOptions = {
     if (closed) return;
     closed = true;
     rejectPending(message);
-    try {
-      child.kill();
-    } catch {
-      // A child that already exited throws here; close must never surface it.
-    }
+    killChild(child, platform);
   }
 
   function write(value: Record<string, unknown>): void {
@@ -141,6 +179,10 @@ export function createMcpClient(server: McpServer, options: McpClientOptions = {
   }
 
   function handleLine(line: string): void {
+    if (line.length > MAX_LINE_BUFFER) {
+      rejectPending(LINE_TOO_LONG);
+      return;
+    }
     let decoded: unknown;
     try {
       decoded = JSON.parse(line);
@@ -163,13 +205,28 @@ export function createMcpClient(server: McpServer, options: McpClientOptions = {
   }
 
   child.stdout?.on('data', (chunk) => {
-    buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    let text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (discarding) {
+      const newline = text.indexOf('\n');
+      if (newline < 0) return;
+      discarding = false;
+      text = text.slice(newline + 1);
+    }
+    buffer += text;
     let index = buffer.indexOf('\n');
     while (index >= 0) {
       const line = buffer.slice(0, index).trim();
       buffer = buffer.slice(index + 1);
       if (line.length > 0) handleLine(line);
       index = buffer.indexOf('\n');
+    }
+    if (buffer.length > MAX_LINE_BUFFER) {
+      // A single line cannot be parsed for its id once it is this large, so every
+      // pending request is failed and the rest of the line is dropped instead of
+      // buffered. The client stays open: the next complete line works normally.
+      discarding = true;
+      buffer = '';
+      rejectPending(LINE_TOO_LONG);
     }
   });
 
