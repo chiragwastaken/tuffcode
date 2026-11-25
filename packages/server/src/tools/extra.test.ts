@@ -256,7 +256,7 @@ describe('extra tools', () => {
     expect(h.searches).toEqual([]);
   });
 
-  it('adds a provider with the documented config fields and secret', async () => {
+  it('adds a provider with the documented config fields and no secret', async () => {
     const h = harness();
 
     const id = await h.run(
@@ -271,7 +271,6 @@ describe('extra tools', () => {
         maxOutputTokens: 8192,
         capabilities: '{"tools":true}',
         reasoning: 'high',
-        apiKey: 'sk-test',
       },
       'C:/work',
     );
@@ -280,7 +279,6 @@ describe('extra tools', () => {
     expect(h.providerCalls[0]).toMatchObject({
       kind: 'openai-compatible',
       label: 'Local',
-      secret: 'sk-test',
       config: {
         baseUrl: 'http://localhost:1234/v1',
         model: 'qwen',
@@ -290,6 +288,28 @@ describe('extra tools', () => {
         reasoningEffort: 'high',
       },
     });
+    expect(h.providerCalls[0]?.secret).toBeUndefined();
+  });
+
+  it('ignores an apiKey argument and never reaches the secret path', async () => {
+    const h = harness();
+
+    const id = await h.run(
+      'config',
+      {
+        action: 'provider.add',
+        kind: 'openai-compatible',
+        label: 'Remote',
+        baseUrl: 'https://api.example.test/v1',
+        apiKey: 'sk-should-not-be-stored',
+      },
+      'C:/work',
+    );
+
+    expect(id).toBe('prv_new');
+    expect(h.providerCalls[0]?.secret).toBeUndefined();
+    expect(h.providerCalls[0]?.config).toEqual({ baseUrl: 'https://api.example.test/v1' });
+    expect(JSON.stringify(h.providerCalls[0])).not.toContain('sk-should-not-be-stored');
   });
 
   it('appends a provider model without touching the stored secret', async () => {
@@ -362,6 +382,41 @@ describe('extra tools', () => {
       env: { ROOT: 'C:/work' },
       cwd: 'C:/work',
     });
+  });
+
+  it('rejects a secret-like MCP env key and points at Settings', async () => {
+    const h = harness();
+
+    const text = await h.run(
+      'config',
+      {
+        action: 'mcp.add',
+        label: 'fs',
+        command: 'npx',
+        env: '{"ROOT":"C:/work","OPENAI_API_KEY":"sk-test"}',
+      },
+      'C:/work',
+    );
+
+    expect(text).toContain('OPENAI_API_KEY');
+    expect(text).toContain('Settings > MCP env');
+    expect(h.mcpCalls).toEqual([]);
+    expect(ctx.repos.mcp.list()).toEqual([]);
+  });
+
+  it('rejects a token, secret or password env key too', async () => {
+    const h = harness();
+
+    for (const key of ['GITHUB_TOKEN', 'client_secret', 'DB_PASSWORD', 'AWS_CREDENTIAL']) {
+      const text = await h.run(
+        'config',
+        { action: 'mcp.add', label: 'fs', command: 'npx', env: `{"${key}":"value"}` },
+        'C:/work',
+      );
+      expect(text).toContain(key);
+      expect(text).toContain('Settings > MCP env');
+    }
+    expect(h.mcpCalls).toEqual([]);
   });
 
   it('rejects a setting outside the allowlist and applies an allowed one', async () => {

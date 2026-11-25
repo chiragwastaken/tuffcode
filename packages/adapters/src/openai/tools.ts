@@ -142,9 +142,10 @@ const EXTRA_TOOL_ACTIONS: Record<ExtraToolName, readonly string[]> = {
 };
 
 /**
- * Server tools are classified by what they do, not only by mode: a memory search or an
- * MCP listing changes nothing, so it never needs approval, while the write actions
- * follow the same ladder as the file tools.
+ * Server tools are classified by what they do, not only by mode: a memory search changes
+ * nothing, so it never needs approval, while the write actions follow the same ladder as
+ * the file tools. `mcp list` spawns the configured binaries, so a read-only turn refuses
+ * it. `config` writes settings and provider rows, so accept-edits still asks.
  */
 export function classifyExtraTool(
   name: ExtraToolName,
@@ -154,11 +155,10 @@ export function classifyExtraTool(
   const action = typeof args.action === 'string' ? args.action : '';
   if (!EXTRA_TOOL_ACTIONS[name].includes(action)) return 'deny';
   if (name === 'memory' && action === 'search') return 'allow';
-  if (name === 'mcp' && action === 'list') return 'allow';
+  if (name === 'mcp' && action === 'list') return mode === 'read-only' ? 'deny' : 'allow';
   if (mode === 'read-only') return 'deny';
   if (mode === 'ask') return 'approve';
   if (mode === 'accept-edits') {
-    if (name === 'config') return 'allow';
     if (name === 'memory') return 'allow';
     return 'approve';
   }

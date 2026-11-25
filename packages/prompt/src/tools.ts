@@ -240,7 +240,7 @@ export const MEMORY_TOOL: ExtraToolSchema = {
 export const CONFIG_TOOL: ExtraToolSchema = {
   name: 'config',
   description:
-    'Change Tuffcode configuration through validated services: add a provider, add a provider model, add an MCP server, or set one allowlisted setting. Pass capabilities, args, and env as JSON strings.',
+    'Change Tuffcode configuration through validated services: add a provider, add a provider model, add an MCP server, or set one allowlisted setting. provider.add creates the row; the key is set in Settings > Providers and never passed through a tool. Pass capabilities, args, and env as JSON strings.',
   parameters: {
     type: 'object',
     properties: {
@@ -265,10 +265,6 @@ export const CONFIG_TOOL: ExtraToolSchema = {
       baseUrl: {
         type: 'string',
         description: 'Base URL for an openai-compatible provider.',
-      },
-      apiKey: {
-        type: 'string',
-        description: 'API key for the provider. Stored encrypted and never echoed back.',
       },
       modelId: {
         type: 'string',
@@ -303,7 +299,8 @@ export const CONFIG_TOOL: ExtraToolSchema = {
       },
       env: {
         type: 'string',
-        description: 'JSON object string of environment variables for mcp.add.',
+        description:
+          'JSON object string of environment variables for mcp.add. Secret-like keys are rejected; set those in Settings > MCP env.',
       },
       key: {
         type: 'string',

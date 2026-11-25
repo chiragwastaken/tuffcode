@@ -19,6 +19,7 @@ import {
 } from './tools.js';
 import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
 import { isExtraToolName } from '../extra-tools.js';
+import { redactToolInput } from '../redact.js';
 
 export const MAX_TOOL_ITERATIONS = 40;
 const LF = String.fromCharCode(10);
@@ -291,7 +292,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           turnId,
           toolCallId,
           name: call.function.name,
-          input: args ?? call.function.arguments,
+          input: redactToolInput(args ?? call.function.arguments),
         };
 
         let result: ToolExecResult | null = null;

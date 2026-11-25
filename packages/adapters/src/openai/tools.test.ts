@@ -261,42 +261,77 @@ describe('classifyTool', () => {
 });
 
 describe('classifyExtraTool', () => {
-  it('allows the read actions in every mode', () => {
-    for (const mode of ['read-only', 'ask', 'accept-edits', 'full-auto'] as const) {
-      expect(classifyExtraTool('mcp', { action: 'list' }, mode)).toBe('allow');
-      expect(classifyExtraTool('memory', { action: 'search' }, mode)).toBe('allow');
-    }
-  });
+  const MODES = ['read-only', 'ask', 'accept-edits', 'full-auto'] as const;
 
-  it('denies the write actions in read-only mode', () => {
-    expect(classifyExtraTool('mcp', { action: 'call' }, 'read-only')).toBe('deny');
-    expect(classifyExtraTool('memory', { action: 'add' }, 'read-only')).toBe('deny');
-    expect(classifyExtraTool('config', { action: 'settings.set' }, 'read-only')).toBe('deny');
-    expect(classifyExtraTool('config', { action: 'provider.add' }, 'read-only')).toBe('deny');
-  });
+  function decisions(
+    name: Parameters<typeof classifyExtraTool>[0],
+    args: Record<string, unknown>,
+  ): string[] {
+    return MODES.map((mode) => classifyExtraTool(name, args, mode));
+  }
 
-  it('asks for the write actions in ask mode', () => {
-    expect(classifyExtraTool('mcp', { action: 'call' }, 'ask')).toBe('approve');
-    expect(classifyExtraTool('memory', { action: 'add' }, 'ask')).toBe('approve');
-    expect(classifyExtraTool('config', { action: 'mcp.add' }, 'ask')).toBe('approve');
-  });
-
-  it('allows config and memory add in accept-edits and asks for an MCP call', () => {
-    expect(classifyExtraTool('config', { action: 'provider.model.add' }, 'accept-edits')).toBe(
+  it('allows a memory search in every mode', () => {
+    expect(decisions('memory', { action: 'search' })).toEqual([
       'allow',
+      'allow',
+      'allow',
+      'allow',
+    ]);
+  });
+
+  it('denies an MCP listing in read-only mode because it spawns the servers', () => {
+    expect(decisions('mcp', { action: 'list' })).toEqual(['deny', 'allow', 'allow', 'allow']);
+  });
+
+  it('classifies the write actions across the four modes', () => {
+    expect(decisions('memory', { action: 'add' })).toEqual([
+      'deny',
+      'approve',
+      'allow',
+      'allow',
+    ]);
+    expect(decisions('mcp', { action: 'call' })).toEqual([
+      'deny',
+      'approve',
+      'approve',
+      'allow',
+    ]);
+    expect(decisions('config', { action: 'provider.add' })).toEqual([
+      'deny',
+      'approve',
+      'approve',
+      'allow',
+    ]);
+    expect(decisions('config', { action: 'provider.model.add' })).toEqual([
+      'deny',
+      'approve',
+      'approve',
+      'allow',
+    ]);
+    expect(decisions('config', { action: 'mcp.add' })).toEqual([
+      'deny',
+      'approve',
+      'approve',
+      'allow',
+    ]);
+    expect(decisions('config', { action: 'settings.set' })).toEqual([
+      'deny',
+      'approve',
+      'approve',
+      'allow',
+    ]);
+  });
+
+  it('asks before a config change in accept-edits mode', () => {
+    expect(classifyExtraTool('config', { action: 'provider.model.add' }, 'accept-edits')).toBe(
+      'approve',
     );
     expect(classifyExtraTool('memory', { action: 'add' }, 'accept-edits')).toBe('allow');
     expect(classifyExtraTool('mcp', { action: 'call' }, 'accept-edits')).toBe('approve');
   });
 
-  it('allows every known action in full-auto', () => {
-    expect(classifyExtraTool('mcp', { action: 'call' }, 'full-auto')).toBe('allow');
-    expect(classifyExtraTool('memory', { action: 'add' }, 'full-auto')).toBe('allow');
-    expect(classifyExtraTool('config', { action: 'settings.set' }, 'full-auto')).toBe('allow');
-  });
-
   it('denies an unknown or missing action in every mode', () => {
-    for (const mode of ['read-only', 'ask', 'accept-edits', 'full-auto'] as const) {
+    for (const mode of MODES) {
       expect(classifyExtraTool('mcp', { action: 'destroy' }, mode)).toBe('deny');
       expect(classifyExtraTool('memory', {}, mode)).toBe('deny');
       expect(classifyExtraTool('config', { action: 'provider.delete' }, mode)).toBe('deny');
