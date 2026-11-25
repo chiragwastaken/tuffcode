@@ -1,29 +1,53 @@
-import type { UpdateChannel } from '@tuffcode/contracts';
+import type { TuffcodeBridge, UpdateCheckOutcome } from '../../types';
 
-export interface UpdateCheckResult {
-  status: 'unavailable';
-  version: string;
-  channel: UpdateChannel;
-  checkedAt: string;
-  detail: string;
+const NO_FEED_DETAIL = 'Updates run in packaged builds. This build has no update feed.';
+
+function errorOutcome(error: unknown, now: Date): UpdateCheckOutcome {
+  return {
+    status: 'error',
+    version: null,
+    detail: error instanceof Error ? error.message : String(error),
+    checkedAt: now.toISOString(),
+  };
 }
 
 /**
- * This build ships no update feed. electron-updater only runs in packaged builds
- * with the updater enabled, so a check from the settings window reports what the
- * packaged build would do instead of pretending to contact a server.
+ * Runs one update check through the preload bridge. A dev build has no preload
+ * updater, so the check reports that instead of inventing an endpoint; a bridge
+ * rejection is reported as an error outcome so the button never hangs.
  */
-export function packagedUpdateCheck(input: {
-  version: string;
-  channel: UpdateChannel;
+export async function checkForUpdatesNow(input: {
+  bridge?: Pick<TuffcodeBridge, 'checkForUpdates'>;
   now?: Date;
-}): UpdateCheckResult {
+}): Promise<UpdateCheckOutcome> {
   const now = input.now ?? new Date();
+  const check = input.bridge?.checkForUpdates;
+  if (typeof check === 'function') {
+    try {
+      return await check();
+    } catch (error) {
+      return errorOutcome(error, now);
+    }
+  }
   return {
     status: 'unavailable',
-    version: input.version,
-    channel: input.channel,
+    version: null,
+    detail: NO_FEED_DETAIL,
     checkedAt: now.toISOString(),
-    detail: `No update feed is configured for this build. Packaged builds check the ${input.channel} channel at launch.`,
   };
+}
+
+/** The sentence the settings result line shows for one outcome. */
+export function describeUpdateOutcome(outcome: UpdateCheckOutcome): string {
+  switch (outcome.status) {
+    case 'available':
+      return outcome.version === null
+        ? outcome.detail
+        : `Version ${outcome.version} is available.`;
+    case 'error':
+      return `Update check failed: ${outcome.detail}`;
+    case 'current':
+    case 'unavailable':
+      return outcome.detail;
+  }
 }
