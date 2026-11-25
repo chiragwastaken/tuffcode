@@ -216,18 +216,7 @@ export function ThreadView({
         <div className="flex min-w-0 flex-1 flex-col">
           {items.length === 0 ? (
             <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-              {thread ? (
-                <EmptyState
-                  icon={MessagesSquare}
-                  title="Start the conversation"
-                  action={
-                    <Button size="sm" variant="secondary" onClick={focusComposer}>
-                      Write a message
-                    </Button>
-                  }
-                  className="w-full max-w-md"
-                />
-              ) : (
+              {thread === undefined ? (
                 <EmptyState
                   icon={MessagesSquare}
                   title="Thread not loaded"
@@ -235,6 +224,17 @@ export function ThreadView({
                     <Link to="/" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
                       Back to projects
                     </Link>
+                  }
+                  className="w-full max-w-md"
+                />
+              ) : thread.executionMode === 'council' ? null : (
+                <EmptyState
+                  icon={MessagesSquare}
+                  title="Start the conversation"
+                  action={
+                    <Button size="sm" variant="secondary" onClick={focusComposer}>
+                      Write a message
+                    </Button>
                   }
                   className="w-full max-w-md"
                 />

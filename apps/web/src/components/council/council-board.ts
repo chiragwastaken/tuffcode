@@ -495,7 +495,7 @@ export function reviewerLabel(node: BoardNode): string {
   if (node.verdict !== null) return REVIEW_VERDICT_LABEL[node.verdict];
   if (node.state === 'reviewing') return 'Reviewing';
   if (node.state === 'pr-open') return 'Review queued';
-  if (node.state === 'queued' || node.state === 'provisioning') return 'Not started';
+  if (node.state === 'queued' || node.state === 'provisioning') return 'Review pending';
   if (node.state === 'running' || node.state === 'blocked') return 'Waiting';
   if (node.state === 'awaiting-captain') return 'Escalated';
   if (node.state === 'failed' || node.state === 'cancelled') return 'No review';

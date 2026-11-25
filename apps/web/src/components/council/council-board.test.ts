@@ -188,6 +188,20 @@ describe('layoutCouncilBoard', () => {
     const layout = layoutCouncilBoard(goal(), [task('A', [], 'reviewing')], []);
     expect(reviewerLabel(nodeById(layout.nodes, 'reviewer:tsk_A'))).toBe('Reviewing');
   });
+
+  it('reads a reviewer that has not run yet as review pending', () => {
+    const cases: ReadonlyArray<[TaskState, string]> = [
+      ['queued', 'Review pending'],
+      ['provisioning', 'Review pending'],
+      ['running', 'Waiting'],
+      ['passed', 'Passed'],
+      ['failed', 'No review'],
+    ];
+    for (const [state, label] of cases) {
+      const layout = layoutCouncilBoard(goal(), [task(`T-${state}`, [], state)], []);
+      expect(reviewerLabel(nodeById(layout.nodes, `reviewer:tsk_T-${state}`))).toBe(label);
+    }
+  });
 });
 
 /**

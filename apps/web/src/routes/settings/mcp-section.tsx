@@ -295,14 +295,14 @@ export function McpSection() {
               <FormField
                 label="Environment"
                 htmlFor="mcp-env"
-                hint='Optional JSON object of string values, for example {"TOKEN": "abc"}.'
+                hint='Optional JSON object of string values, for example {"LOG_LEVEL": "info"}. Credential-like keys are rejected; set those in the server config.'
                 error={errors.env}
               >
                 <Textarea
                   id="mcp-env"
                   value={draft.env}
                   onChange={(event) => updateDraft('env', event.target.value)}
-                  placeholder={'{\n  "TOKEN": "abc"\n}'}
+                  placeholder={'{\n  "LOG_LEVEL": "info"\n}'}
                   spellCheck={false}
                   rows={3}
                   className="min-h-0 font-mono text-xs"

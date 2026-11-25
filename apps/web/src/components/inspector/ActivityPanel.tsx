@@ -1,9 +1,10 @@
 import type { SubagentType, ThreadEventRow } from '@tuffcode/contracts';
-import { cn, EmptyState, ScrollArea } from '@tuffcode/ui';
+import { Badge, cn, EmptyState, ScrollArea } from '@tuffcode/ui';
 import { Activity, ChevronRight } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/app-store';
+import { useCouncilStatus } from '../council/use-council-status';
 import {
   SUBAGENT_STATUS_LABEL,
   SUBAGENT_STATUS_TONE,
@@ -15,7 +16,14 @@ import {
 } from '../subagents/subagent-model';
 import { StatusChip } from '../thread/status-chip';
 import { formatDuration, outputTail } from '../thread/turn-blocks';
-import { finishedToolRows, runningElapsedMs, runningToolRows, waitingItems } from './activity-model';
+import {
+  councilActivityOf,
+  finishedToolRows,
+  runningElapsedMs,
+  runningToolRows,
+  waitingItems,
+  type CouncilActivity,
+} from './activity-model';
 
 export interface ActivityPanelProps {
   threadId: string;
@@ -38,12 +46,43 @@ function useLiveClock(active: boolean): number {
 }
 
 /**
- * What the thread is doing right now: open tool calls with their output tail,
- * the calls that already finished this session, every subagent of the thread,
- * and the work waiting on the user or a slot. Rows expand in place; nothing
- * here navigates away from the thread.
+ * The Activity tab: what the thread is doing right now. A council thread adds a
+ * Council section read from its goal; a work thread shows only tools, subagents
+ * and the work waiting on the user or a slot.
  */
 export function ActivityPanel({ threadId }: ActivityPanelProps) {
+  const executionMode = useAppStore((state) => state.threads[threadId]?.executionMode);
+  if (executionMode === 'council') return <CouncilActivityPanel threadId={threadId} />;
+  return <ActivityBody threadId={threadId} council={null} councilResolving={false} />;
+}
+
+/** Council threads own a goal, so the status hook lives in this branch only. */
+function CouncilActivityPanel({ threadId }: ActivityPanelProps) {
+  const { status, loading } = useCouncilStatus(threadId);
+  return (
+    <ActivityBody
+      threadId={threadId}
+      council={councilActivityOf(status)}
+      councilResolving={status === null && loading}
+    />
+  );
+}
+
+interface ActivityBodyProps {
+  threadId: string;
+  /** The council goal of a council thread; null for work threads and no goal. */
+  council: CouncilActivity | null;
+  /** True while a council thread's goal is still being looked up. */
+  councilResolving: boolean;
+}
+
+/**
+ * Open tool calls with their output tail, the calls that already finished this
+ * session, every subagent of the thread, the council goal when there is one, and
+ * the work waiting on the user or a slot. Rows expand in place; nothing here
+ * navigates away from the thread.
+ */
+function ActivityBody({ threadId, council, councilResolving }: ActivityBodyProps) {
   const events = useAppStore((state) => state.events[threadId]);
   const subagents = useAppStore(
     useShallow((state) => subagentsOfThread(state.subagents, threadId)),
@@ -75,7 +114,12 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
   }, []);
 
   const idle =
-    tools.length === 0 && finished.length === 0 && subagents.length === 0 && waiting.length === 0;
+    tools.length === 0 &&
+    finished.length === 0 &&
+    subagents.length === 0 &&
+    waiting.length === 0 &&
+    !councilResolving &&
+    !(council?.goalActive ?? false);
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -88,6 +132,41 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
             className="px-1 py-2"
           />
         ) : null}
+
+        {council === null ? null : (
+          <section
+            aria-label="Council"
+            data-testid="activity-council"
+            className="flex flex-col gap-0.5"
+          >
+            <SectionHeading label="Council" count={council.tasks.length} />
+            <div
+              data-testid="activity-council-goal"
+              data-state={council.goalState}
+              className="flex h-8 min-w-0 items-center gap-1.5 px-1.5 text-xs"
+            >
+              <span className="min-w-0 flex-1 truncate text-foreground">Goal</span>
+              <Badge variant={council.goalTone} size="sm">
+                {council.goalLabel}
+              </Badge>
+            </div>
+            {council.tasks.map((task) => (
+              <div
+                key={task.id}
+                data-testid="activity-council-task"
+                data-state={task.state}
+                className="flex h-8 min-w-0 items-center gap-1.5 px-1.5 text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate text-foreground" title={task.title}>
+                  {task.title}
+                </span>
+                <Badge variant={task.tone} size="sm">
+                  {task.stateLabel}
+                </Badge>
+              </div>
+            ))}
+          </section>
+        )}
 
         {tools.length > 0 ? (
           <section aria-label="Running tools" className="flex flex-col gap-0.5">
