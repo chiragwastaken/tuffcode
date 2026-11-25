@@ -7,6 +7,7 @@ import {
   runningElapsedMs,
   runningToolCount,
   runningToolRows,
+  waitingItems,
 } from './activity-model';
 
 let nextRowId = 0;
@@ -156,6 +157,35 @@ describe('activityCount', () => {
     expect(activityCount(events, subagents, 'thr_1')).toBe(2);
     expect(activityCount(events, subagents, 'thr_2')).toBe(2);
     expect(activityCount([], subagents, 'thr_3')).toBe(0);
+  });
+});
+
+describe('waitingItems', () => {
+  const queuedChild = child({ childId: 'q1', threadId: 'thr_1', status: 'queued' });
+  const runningChild = child({ childId: 'r1', threadId: 'thr_1', status: 'running' });
+
+  it('lists queued children and nothing else while no approval is open', () => {
+    const items = waitingItems([queuedChild, runningChild], 'running');
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'child', child: { childId: 'q1' } });
+  });
+
+  it('adds the approval line when the thread needs an approval', () => {
+    const items = waitingItems([], 'needs-approval');
+
+    expect(items).toEqual([{ kind: 'approval' }]);
+  });
+
+  it('keeps queued children ahead of the approval line', () => {
+    const items = waitingItems([queuedChild], 'needs-approval');
+
+    expect(items.map((item) => item.kind)).toEqual(['child', 'approval']);
+  });
+
+  it('reports nothing waiting without queued children or an open approval', () => {
+    expect(waitingItems([], 'idle')).toEqual([]);
+    expect(waitingItems([runningChild], undefined)).toEqual([]);
   });
 });
 

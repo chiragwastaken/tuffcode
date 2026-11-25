@@ -130,6 +130,19 @@ describe('groupTurnBlocks', () => {
     expect(texts).toEqual(['Opening the file.', null, 'Now searching.', null, 'Found two.']);
   });
 
+  it('keeps the closing prose as prose when the turn ends with a tool call', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Checking the config.' }, '00'),
+      ...toolCall('turn-1', 2, 'c1', 'read', { path: 'tsconfig.json' }, '01', '02'),
+      event(4, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '02'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['prose', 'tools']);
+    const prose = blocks[0];
+    if (prose?.kind !== 'prose') throw new Error('Expected a prose block.');
+    expect(prose.text).toBe('Checking the config.');
+  });
+
   it('keeps the user prompt on the final block for retry and edit', () => {
     const blocks = blocksOf([
       event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Answer' }, '00'),

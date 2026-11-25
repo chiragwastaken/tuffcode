@@ -59,10 +59,19 @@ export function filterGroups(
     const byId = new Map(group.threads.map((thread) => [thread.id, thread]));
     const kept = new Set(threads.map((thread) => thread.id));
     for (const thread of threads) {
-      const root = rootThreadOf(thread, byId);
-      if (root === null || kept.has(root.id)) continue;
-      kept.add(root.id);
-      threads.push(root);
+      let current = thread;
+      const seen = new Set<string>();
+      while (current.parentThreadId !== null) {
+        if (seen.has(current.id)) break;
+        seen.add(current.id);
+        const parent = byId.get(current.parentThreadId);
+        if (parent === undefined) break;
+        if (!kept.has(parent.id)) {
+          kept.add(parent.id);
+          threads.push(parent);
+        }
+        current = parent;
+      }
     }
     threads.sort(compareThreads);
     filtered.push({ project: group.project, threads });
@@ -70,30 +79,20 @@ export function filterGroups(
   return filtered;
 }
 
-/** Walks parent links to the root thread, or null when the chain leaves the group. */
-function rootThreadOf(thread: Thread, byId: ReadonlyMap<string, Thread>): Thread | null {
-  let current = thread;
-  const seen = new Set<string>();
-  while (current.parentThreadId !== null) {
-    if (seen.has(current.id)) return null;
-    seen.add(current.id);
-    const parent = byId.get(current.parentThreadId);
-    if (parent === undefined) return null;
-    current = parent;
-  }
-  return current;
-}
-
 /** A project row, a thread row, a nested child row, or the empty placeholder. */
 export type SidebarItem =
   | { kind: 'project'; project: Project; threadCount: number; collapsed: boolean }
   | { kind: 'thread'; thread: Thread }
-  | { kind: 'child'; thread: Thread; parentId: string }
+  | { kind: 'child'; thread: Thread; parentId: string; depth: number }
   | { kind: 'empty'; projectId: string };
+
+/** Rows stop indenting after three levels; deeper descendants keep the last step. */
+export const MAX_CHILD_DEPTH = 3;
 
 /**
  * The sidebar lists root threads only; a child thread renders directly under the
- * root it belongs to, so a project never shows a child at its own level.
+ * thread it belongs to, and a child of a child nests one level deeper, so a
+ * project never shows a child at its own level.
  */
 export function buildSidebarItems(
   groups: readonly ProjectThreadGroup[],
@@ -126,14 +125,26 @@ export function buildSidebarItems(
 
     for (const thread of roots) {
       items.push({ kind: 'thread', thread });
-      const children = childrenByParent.get(thread.id);
-      if (children === undefined) continue;
-      for (const child of children.toSorted(compareChildren)) {
-        items.push({ kind: 'child', thread: child, parentId: thread.id });
-      }
+      appendChildItems(items, childrenByParent, thread.id, 1);
     }
   }
   return items;
+}
+
+/** Depth-first walk of one thread's descendants, capped at `MAX_CHILD_DEPTH`. */
+function appendChildItems(
+  items: SidebarItem[],
+  childrenByParent: ReadonlyMap<string, readonly Thread[]>,
+  parentId: string,
+  depth: number,
+): void {
+  const children = childrenByParent.get(parentId);
+  if (children === undefined) return;
+  const nested = Math.min(depth, MAX_CHILD_DEPTH);
+  for (const child of children.toSorted(compareChildren)) {
+    items.push({ kind: 'child', thread: child, parentId, depth: nested });
+    appendChildItems(items, childrenByParent, child.id, depth + 1);
+  }
 }
 
 /** Children keep spawn order: oldest first, ties broken by id. */

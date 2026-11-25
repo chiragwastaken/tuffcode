@@ -1,4 +1,4 @@
-import type { SubagentType, ThreadEventRow } from '@tuffcode/contracts';
+import type { SubagentType, ThreadEventRow, ThreadStatus } from '@tuffcode/contracts';
 import type { SubagentChild } from '../../store/app-store';
 import { toolHeadline } from '../thread/turn-blocks';
 
@@ -131,6 +131,25 @@ export function activityCount(
   threadId: string,
 ): number {
   return runningToolCount(events) + countRunningSubagents(subagents, threadId);
+}
+
+/** One Waiting entry: a queued child, or the approval the timeline is holding. */
+export type WaitingItem = { kind: 'approval' } | { kind: 'child'; child: SubagentChild };
+
+/**
+ * What the Waiting section lists: every queued child, plus one approval line when
+ * the thread status says an approval is open. Approval rows live in the timeline,
+ * so the thread status is the only approval signal this panel can read.
+ */
+export function waitingItems(
+  subagents: readonly SubagentChild[],
+  threadStatus: ThreadStatus | undefined,
+): WaitingItem[] {
+  const items: WaitingItem[] = subagents
+    .filter((child) => child.status === 'queued')
+    .map((child) => ({ kind: 'child', child }));
+  if (threadStatus === 'needs-approval') items.push({ kind: 'approval' });
+  return items;
 }
 
 /** Milliseconds an open call has been running, or null for a bad timestamp. */

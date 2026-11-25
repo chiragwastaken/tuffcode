@@ -20,7 +20,7 @@ export interface ProjectGroupHeaderProps {
   onRemove: (project: Project) => void;
 }
 
-/** 30px project row: folder, name, branch, thread count, and hover actions. */
+/** 32px project row: folder, name, branch, thread count, and hover actions. */
 export function ProjectGroupHeader({
   project,
   threadCount,
@@ -33,7 +33,7 @@ export function ProjectGroupHeader({
   const FolderIcon = collapsed ? Folder : FolderOpen;
 
   return (
-    <div className="group/project flex h-[30px] items-center gap-0.5 border-t border-sidebar-border px-1">
+    <div className="group/project flex h-8 items-center gap-0.5 border-t border-sidebar-border px-1">
       <button
         type="button"
         data-testid="project-toggle"

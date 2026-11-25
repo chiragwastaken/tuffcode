@@ -19,6 +19,7 @@ import {
   childThreadKind,
   childThreadLabel,
   formatRelativeTime,
+  MAX_CHILD_DEPTH,
   type ChildThreadKind,
 } from './sidebar-model';
 
@@ -92,8 +93,20 @@ export function ThreadRow({
 export interface ChildThreadRowProps {
   thread: Thread;
   parentId: string;
+  /** Nesting level under the root thread: 1 for a direct child, capped at three. */
+  depth: number;
   selected: boolean;
   onOpen: (thread: Thread, parentId: string) => void;
+}
+
+/**
+ * One 16px indent step per nesting level from a 24px base: a direct child sits at
+ * 24px, a grandchild at 40px, and the third level at 56px where deeper rows stay.
+ */
+function childIndentClass(depth: number): string {
+  if (depth >= MAX_CHILD_DEPTH) return 'pl-14';
+  if (depth === 2) return 'pl-10';
+  return 'pl-6';
 }
 
 const CHILD_KIND_ICON: Record<ChildThreadKind, LucideIcon> = {
@@ -111,10 +124,11 @@ function childIcon(thread: Thread): LucideIcon {
 }
 
 /**
- * One 44px child row nested under its root thread: a type icon, the short label,
- * then the status chip and how long the child thread has been alive.
+ * One 44px child row nested under its parent thread, indented by its nesting
+ * level: a type icon, the short label, then the status chip and how long the
+ * child thread has been alive.
  */
-export function ChildThreadRow({ thread, parentId, selected, onOpen }: ChildThreadRowProps) {
+export function ChildThreadRow({ thread, parentId, depth, selected, onOpen }: ChildThreadRowProps) {
   const label = childThreadLabel(thread);
   const Icon = childIcon(thread);
   const elapsed = formatDuration(elapsedMs(thread.createdAt, thread.updatedAt));
@@ -128,7 +142,8 @@ export function ChildThreadRow({ thread, parentId, selected, onOpen }: ChildThre
       aria-current={selected ? 'page' : undefined}
       title={label}
       className={cn(
-        'flex h-11 w-full min-w-0 flex-col justify-center gap-1 rounded-md pr-2 pl-6 py-1 text-left',
+        'flex h-11 w-full min-w-0 flex-col justify-center gap-1 rounded-md pr-2 py-1 text-left',
+        childIndentClass(depth),
         'transition-colors duration-150',
         selected
           ? 'bg-sidebar-row-active text-sidebar-foreground shadow-[inset_2px_0_0_0_var(--color-primary)]'

@@ -166,6 +166,30 @@ describe('filterGroups', () => {
 
     expect(filtered[0]?.threads.map((thread) => thread.id).toSorted()).toEqual(['child', 'goal']);
   });
+
+  it('keeps every ancestor of a matched grandchild so the row stays reachable', () => {
+    const goal = makeThread({ id: 'goal', projectId: 'p1', title: 'Ship the release' });
+    const child = makeThread({
+      id: 'child',
+      projectId: 'p1',
+      title: 'Council: Ship the release',
+      parentThreadId: 'goal',
+    });
+    const grandchild = makeThread({
+      id: 'grandchild',
+      projectId: 'p1',
+      title: 'Review: Ship the release',
+      parentThreadId: 'child',
+    });
+
+    const filtered = filterGroups([group(alpha, [goal, child, grandchild])], 'review');
+
+    expect(filtered[0]?.threads.map((thread) => thread.id).toSorted()).toEqual([
+      'child',
+      'goal',
+      'grandchild',
+    ]);
+  });
 });
 
 describe('buildSidebarItems', () => {
@@ -204,7 +228,7 @@ describe('buildSidebarItems', () => {
     expect(items.map(sidebarItemKey)).toEqual(['project:p1', 'empty:p1']);
   });
 
-  it('lists root threads only and nests children directly under the parent', () => {
+  it('lists root threads only and nests children depth first under the parent', () => {
     const root = makeThread({
       id: 'root',
       projectId: 'p1',
@@ -242,9 +266,55 @@ describe('buildSidebarItems', () => {
       'project:p1',
       'thread:root',
       'child:child-a',
+      'child:grandchild',
       'child:child-b',
     ]);
     expect(items[0]).toMatchObject({ kind: 'project', threadCount: 1 });
+    const nested = items[3];
+    if (nested?.kind !== 'child') throw new Error('Expected a child row for the grandchild.');
+    expect(nested).toMatchObject({ parentId: 'child-a', depth: 2 });
+  });
+
+  it('caps the indent at three levels while keeping deeper rows nested', () => {
+    const root = makeThread({ id: 'root', projectId: 'p1', title: 'Root' });
+    const level1 = makeThread({
+      id: 'l1',
+      projectId: 'p1',
+      title: 'Council: Ship the release',
+      parentThreadId: 'root',
+    });
+    const level2 = makeThread({
+      id: 'l2',
+      projectId: 'p1',
+      title: 'Plan: Ship the release',
+      parentThreadId: 'l1',
+    });
+    const level3 = makeThread({
+      id: 'l3',
+      projectId: 'p1',
+      title: 'Review: Ship the release',
+      parentThreadId: 'l2',
+    });
+    const level4 = makeThread({
+      id: 'l4',
+      projectId: 'p1',
+      title: 'Subagent worker 1234abcd',
+      parentThreadId: 'l3',
+    });
+
+    const items = buildSidebarItems([group(alpha, [root, level1, level2, level3, level4])], () => false);
+
+    expect(items.map(sidebarItemKey)).toEqual([
+      'project:p1',
+      'thread:root',
+      'child:l1',
+      'child:l2',
+      'child:l3',
+      'child:l4',
+    ]);
+    expect(items.slice(2).map((item) => (item.kind === 'child' ? item.depth : 0))).toEqual([
+      1, 2, 3, 3,
+    ]);
   });
 
   it('measures 48px root rows, 44px child rows and 32px for the rest', () => {
