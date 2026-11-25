@@ -19,12 +19,15 @@ Prompts live in `packages/prompt/src/subagents.ts`. Each one states the role, th
 the evidence it must return, and what it must not do. They are compact by design; the shared base
 prompt carries the engineering rules.
 
-- explorer: return a map of files, symbols and line numbers, no edits, no speculation.
+- explorer: return a map of files, symbols and line numbers, no edits, no speculation, and the
+  searches that returned nothing so the parent does not repeat them.
 - reviewer: nine checks (scope, correctness, evidence, tests, secrets, validation, architecture,
   dead weight, criticality) and one verdict: pass, changes-requested, escalate.
 - notetaker: return JSON facts with kind, text, tags, importance; the service writes them.
-- worker: implement, run the narrowest check, report commands and output.
-- planner: return tasks with title, files, dependsOn, critical, brief; 1 to 12 tasks.
+- worker: implement, run the exact acceptance command, report commands and output tails.
+- planner: return tasks with title, files, dependsOn, critical, brief; 1 to 12 tasks, each with
+  the command that proves it.
+- every type: if blocked, return `BLOCKED: <the one missing input>` and stop instead of guessing.
 
 ## Models
 
@@ -48,7 +51,14 @@ turns cannot spawn.
 
 ## UI
 
-A card appears in the parent thread where the child was spawned. Opening it shows a side pane
-with the child timeline, the same block renderer as the main thread, a connector line, tabs for
-multiple children, and a cancel action. A compact strip reports running children when the pane is
-closed.
+Child threads never list as top-level conversations. The sidebar nests them under the parent row
+with a type icon, label, status and elapsed time; clicking one opens the parent thread with the
+subagent pane on that child. A child never has its own route.
+
+The dock above the composer is a compact chip row: type icons, a running or finished count, and a
+chevron. It never shows the task or the prompt. Opening a chip shows the pane with the type,
+model and status in its header, the task behind a collapsed `Task brief` disclosure, the child
+timeline, and the summary. The right-hand Activity panel lists every child with its state, and
+running tool calls expose their output tail.
+
+Council workers and reviewers are child threads too, so they nest under the goal thread.

@@ -3,6 +3,40 @@
 All notable changes to Tuffcode are documented here. The format follows Keep a Changelog, and
 the project uses semantic versioning.
 
+## [Unreleased]
+
+### Sidebar and navigation
+- Thread rows are 48px with a title and a meta line; project headers are 32px.
+- Subagent and council child threads nest under their parent instead of listing as top-level
+  conversations, and open the parent surface.
+
+### Subagents and activity
+- The dock above the composer is a compact chip row; the task and prompt are no longer shown.
+- The thread header carries a centered Work/Council switch and an Activity button.
+- The Activity panel lists running commands with their output tail, subagents and waiting items.
+
+### Council
+- The board wraps columns and fits up to 12 tasks, with a state legend.
+- A council thread renders its board in the thread body.
+- Planner, worker and reviewer run with full tool access, and approval requests are answered
+  instead of hanging.
+
+### Models and context
+- Provider models store max output tokens, capabilities and reasoning effort.
+- Discovery reads nested context windows, max output and modality data from model lists.
+- The context limit reports its source, and the 200k fallback is labeled instead of assumed.
+- The provider form has an Advanced section for context, output, capabilities and reasoning.
+
+### MCP and self-configuration
+- Local stdio MCP servers can be added, tested and removed in Settings > MCP.
+- The agent can list and call MCP tools, search and add memory, and change providers, models,
+  MCP servers and allowlisted settings through tools.
+
+### Brain and prompts
+- Brain injection has a real kill switch, standing-rule capture, typed edges and preview ids.
+- The base prompt, subagent prompts and council prompts were rewritten from the reference agents,
+  thinking.md, APPEND_SYSTEM.md, Chief and Noticing.
+
 ## [0.1.2] - 2026-11-25
 
 ### Models and providers

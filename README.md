@@ -16,17 +16,27 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
   Codex, Anthropic API keys, OpenAI-compatible endpoints (OpenRouter, DeepSeek, Kimi, Groq,
   Mistral, xAI, Together, Gemini), local models (Ollama, LM Studio, vLLM), and ACP agents.
   Keys stay in the desktop process and are sealed with Electron `safeStorage`.
-- **Model discovery.** Every provider lists its real models. Pick one from the composer popup or
-  settings; refresh on demand; type a model id when a gateway returns nothing.
+- **Model discovery.** Every provider lists its real models, including context window, max
+  output, vision and reasoning metadata when the endpoint reports it. Pick one from the composer
+  popup or settings; refresh on demand; type a model id when a gateway returns nothing. The
+  provider form has an Advanced section for the same values.
 - **Modes.** Work, Plan, and Council, plus read-only, ask, accept-edits, and full-auto
   permissions. Work and Council switch from the thread topbar.
 - **Subagents.** Explorer, reviewer, notetaker, worker, and planner types, each with its own
-  prompt, model, and fallback model. Children stream into a side pane; workers get isolated
-  worktrees.
+  prompt, model, and fallback model. Child threads nest under their parent in the sidebar and
+  stream into a side pane; workers get isolated worktrees. The dock above the composer is a
+  compact chip row, not a second conversation.
+- **Activity.** A top-right button opens the running tool calls, subagents, finished commands
+  and waiting items, with output tails and a click through to each child.
 - **Council.** A planner splits a goal into tasks, workers run in parallel child threads, and a
   reviewer from another model family checks each change before a pull request opens.
-- **Brain.** Typed memory entries selected per turn, a live prompt preview, an interactive node
-  graph, and a memory search tool for the agent.
+- **Brain.** Typed memory entries selected per turn, a kill switch, standing-rule capture, typed
+  links, a live prompt preview with injected entry ids, an interactive node graph, and memory
+  search and add tools for the agent.
+- **MCP.** Local stdio MCP servers are managed in Settings > MCP and exposed to the agent through
+  one `mcp` tool that lists and calls their tools.
+- **Self-configuration.** The agent can add a provider or model, add an MCP server, and change an
+  allowlisted setting through a `config` tool, with the same validation as the UI.
 - **Diff review.** Changed files grouped by directory, real file line numbers, inline review
   comments, checkpoint comparison, and a collapsible file tree.
 - **Timeline.** Reasoning, prose, grouped tool calls with results and diffs, and a final answer,
@@ -41,8 +51,10 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
   tools, permissions, terminal, brain, updates, diagnostics, capabilities, keybindings.
 - **Installer.** A per-user NSIS installer for Windows x64, with optional auto-update.
 
-Model discovery, subagents, split panes and the brain graph land in v0.1.2. v0.1.1 ships the
-provider gallery, settings, persisted turns and the diff and timeline rework.
+v0.1.3 adds nested subagents, the Activity panel, model metadata, MCP, self-configuration, brain
+links and a rewritten prompt set. v0.1.2 added model discovery, subagents, split panes and the
+brain graph. v0.1.1 shipped the provider gallery, settings, persisted turns and the diff and
+timeline rework.
 
 ## Requirements
 
