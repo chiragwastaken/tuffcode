@@ -1,14 +1,16 @@
 import { Link } from '@tanstack/react-router';
 import type { ExecutionMode, Thread, ThreadEventRow } from '@tuffcode/contracts';
-import { Button, EmptyState, buttonVariants } from '@tuffcode/ui';
-import { FolderOpen, GitBranch, MessagesSquare, Users, Wrench } from 'lucide-react';
+import { Badge, Button, EmptyState, buttonVariants } from '@tuffcode/ui';
+import { Activity, FolderOpen, GitBranch, MessagesSquare, Users, Wrench } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../store/app-store';
 import { runAction, type ActionContext } from '../actions';
+import { CouncilThreadBoard } from '../council/CouncilThreadBoard';
+import { activityCount } from '../inspector/activity-model';
+import { requestInspectorTab } from '../inspector/panel-requests';
 import { useActionPorts } from '../menu/action-context';
 import { SubagentPane } from '../subagents/SubagentPane';
-import { SubagentStack } from '../subagents/SubagentStack';
 import { SubagentStrip } from '../subagents/SubagentStrip';
 import { useDockInset } from '../subagents/use-dock-inset';
 import { useSubagentList } from '../subagents/use-subagents';
@@ -73,7 +75,9 @@ export function ThreadView({
     if (!pane.open || pane.activeChildId === null) return false;
     return state.subagents[pane.activeChildId]?.threadId === threadId;
   });
-  const activeChildId = useAppStore((state) => state.subagentPane.activeChildId);
+  const activityRunning = useAppStore((state) =>
+    activityCount(state.events[threadId] ?? EMPTY_EVENTS, state.subagents, threadId),
+  );
   const openSubagent = useAppStore((state) => state.openSubagent);
   const selectSubagent = useAppStore((state) => state.selectSubagent);
   const closeSubagentPane = useAppStore((state) => state.closeSubagentPane);
@@ -137,8 +141,8 @@ export function ThreadView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="@container sticky top-0 z-20 flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+      <header className="@container sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-2">
           {projectName ? (
             <span className="hidden min-w-0 shrink items-center gap-1.5 text-2xs text-muted-foreground @min-[44rem]:flex">
               <FolderOpen aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
@@ -173,8 +177,8 @@ export function ThreadView({
           ) : null}
         </div>
 
-        {thread ? (
-          <div className="flex shrink-0 items-center">
+        <div className="flex shrink-0 items-center justify-center">
+          {thread ? (
             <SegmentedControl
               ariaLabel="Thread mode"
               testId="thread-mode-switch"
@@ -184,18 +188,24 @@ export function ThreadView({
               disabled={switchingMode}
               onValueChange={(mode) => void setThreadMode(mode)}
             />
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
-        {thread?.branch ? (
-          <span
-            className="hidden min-w-0 shrink-0 items-center gap-1 font-mono text-2xs text-muted-foreground min-[1500px]:flex"
-            title={thread.branch}
-          >
-            <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
-            <span className="max-w-56 truncate">{thread.branch}</span>
-          </span>
-        ) : null}
+        <div className="flex min-w-0 items-center justify-end gap-2">
+          {thread?.branch ? (
+            <span
+              className="hidden min-w-0 shrink-0 items-center gap-1 font-mono text-2xs text-muted-foreground min-[1500px]:flex"
+              title={thread.branch}
+            >
+              <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+              <span className="max-w-56 truncate">{thread.branch}</span>
+            </span>
+          ) : null}
+          <ActivityButton
+            count={activityRunning}
+            onOpen={() => requestInspectorTab('activity')}
+          />
+        </div>
       </header>
 
       <div
@@ -240,19 +250,12 @@ export function ThreadView({
             />
           )}
 
+          {thread?.executionMode === 'council' ? (
+            <CouncilThreadBoard threadId={threadId} />
+          ) : null}
+
           <div ref={dockRef} className="flex shrink-0 flex-col">
-            {hasSubagents ? (
-              subagentPaneOpen ? (
-                <SubagentStack
-                  threadId={threadId}
-                  events={events ?? EMPTY_EVENTS}
-                  activeChildId={activeChildId}
-                  onOpen={openSubagent}
-                />
-              ) : (
-                <SubagentStrip threadId={threadId} onOpen={openSubagent} />
-              )
-            ) : null}
+            {hasSubagents ? <SubagentStrip threadId={threadId} onOpen={openSubagent} /> : null}
 
             <Composer thread={thread} />
           </div>
@@ -269,5 +272,30 @@ export function ThreadView({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The header's Activity control: a one-click jump to the running-work panel, with
+ * a badge while tools or subagents are live. The label collapses below 40rem.
+ */
+function ActivityButton({ count, onOpen }: { count: number; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="activity-button"
+      onClick={onOpen}
+      title="Activity"
+      aria-label={count > 0 ? `Activity, ${count} running` : 'Activity'}
+      className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-2xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+    >
+      <Activity aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
+      <span className="hidden @min-[40rem]:inline">Activity</span>
+      {count > 0 ? (
+        <Badge variant="info" size="sm" className="ml-0.5">
+          {count}
+        </Badge>
+      ) : null}
+    </button>
   );
 }

@@ -1,16 +1,38 @@
+import type { Thread } from '@tuffcode/contracts';
+
 /** Which inspector tab each thread shows, remembered for the session. */
 
-export const INSPECTOR_TABS = ['diff', 'terminal', 'brain', 'council', 'context'] as const;
+export const INSPECTOR_TABS = [
+  'activity',
+  'diff',
+  'terminal',
+  'brain',
+  'council',
+  'context',
+] as const;
 
 export type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
 export const INSPECTOR_TAB_LABEL: Record<InspectorTab, string> = {
+  activity: 'Activity',
   diff: 'Diff',
   terminal: 'Terminal',
   brain: 'Brain',
   council: 'Council',
   context: 'Context',
 };
+
+/** The execution mode a thread needs for the council board tab. */
+export type InspectorTabThread = Pick<Thread, 'executionMode'>;
+
+/**
+ * The tabs a thread shows: every tab except council, plus council for a thread
+ * running in council mode.
+ */
+export function tabsForThread(thread: InspectorTabThread | undefined): readonly InspectorTab[] {
+  const council = thread?.executionMode === 'council';
+  return INSPECTOR_TABS.filter((tab) => tab !== 'council' || council);
+}
 
 export function isInspectorTab(value: unknown): value is InspectorTab {
   return INSPECTOR_TABS.some((tab) => tab === value);

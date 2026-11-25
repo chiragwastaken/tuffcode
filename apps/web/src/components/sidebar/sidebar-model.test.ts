@@ -2,13 +2,17 @@ import type { Project, Thread } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   SIDEBAR_COLLAPSED_KEY,
+  SIDEBAR_ITEM_HEIGHT,
   VIRTUALIZE_AFTER,
   buildSidebarItems,
+  childThreadLabel,
   filterGroups,
   formatRelativeTime,
   groupThreadsByProject,
+  isCouncilChild,
   needsVirtualization,
   readCollapsedProjects,
+  sidebarItemHeight,
   sidebarItemKey,
   writeCollapsedProjects,
   type CollapseStore,
@@ -148,6 +152,20 @@ describe('filterGroups', () => {
   it('returns no groups when nothing matches', () => {
     expect(filterGroups(groups, 'zzz')).toEqual([]);
   });
+
+  it('keeps the root thread when only its child matches', () => {
+    const goal = makeThread({ id: 'goal', projectId: 'p1', title: 'Ship the release' });
+    const child = makeThread({
+      id: 'child',
+      projectId: 'p1',
+      title: 'Subagent explorer 9f9f0a1b',
+      parentThreadId: 'goal',
+    });
+
+    const filtered = filterGroups([group(alpha, [goal, child])], 'explorer');
+
+    expect(filtered[0]?.threads.map((thread) => thread.id).toSorted()).toEqual(['child', 'goal']);
+  });
 });
 
 describe('buildSidebarItems', () => {
@@ -184,6 +202,116 @@ describe('buildSidebarItems', () => {
   it('adds an empty row for expanded projects without threads', () => {
     const items = buildSidebarItems([group(alpha, [])], () => false);
     expect(items.map(sidebarItemKey)).toEqual(['project:p1', 'empty:p1']);
+  });
+
+  it('lists root threads only and nests children directly under the parent', () => {
+    const root = makeThread({
+      id: 'root',
+      projectId: 'p1',
+      title: 'Root',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    });
+    const councilChild = makeThread({
+      id: 'child-a',
+      projectId: 'p1',
+      title: 'Council: Add the activity panel',
+      parentThreadId: 'root',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-05T00:00:00.000Z',
+    });
+    const subagentChild = makeThread({
+      id: 'child-b',
+      projectId: 'p1',
+      title: 'Subagent explorer abcd1234',
+      parentThreadId: 'root',
+      createdAt: '2026-01-02T00:00:00.000Z',
+    });
+    const grandchild = makeThread({
+      id: 'grandchild',
+      projectId: 'p1',
+      title: 'Review: Add the activity panel',
+      parentThreadId: 'child-a',
+    });
+
+    const items = buildSidebarItems(
+      [group(alpha, [root, councilChild, subagentChild, grandchild])],
+      () => false,
+    );
+
+    expect(items.map(sidebarItemKey)).toEqual([
+      'project:p1',
+      'thread:root',
+      'child:child-a',
+      'child:child-b',
+    ]);
+    expect(items[0]).toMatchObject({ kind: 'project', threadCount: 1 });
+  });
+
+  it('measures 48px root rows, 44px child rows and 32px for the rest', () => {
+    const root = makeThread({ id: 'root', projectId: 'p1', title: 'Root' });
+    const child = makeThread({
+      id: 'child',
+      projectId: 'p1',
+      title: 'Subagent worker abcd1234',
+      parentThreadId: 'root',
+    });
+
+    const items = buildSidebarItems([group(alpha, [root, child])], () => false);
+
+    expect(SIDEBAR_ITEM_HEIGHT).toEqual({ project: 32, thread: 48, child: 44, empty: 32 });
+    expect(items.map(sidebarItemHeight)).toEqual([32, 48, 44]);
+  });
+
+  it('nests a council child under its goal thread', () => {
+    const goal = makeThread({ id: 'goal', projectId: 'p1', title: 'Ship v0.1.3' });
+    const worker = makeThread({
+      id: 'worker',
+      projectId: 'p1',
+      title: 'Council: Add the activity panel',
+      parentThreadId: 'goal',
+    });
+
+    const items = buildSidebarItems([group(alpha, [goal, worker])], () => false);
+
+    expect(items.map(sidebarItemKey)).toEqual(['project:p1', 'thread:goal', 'child:worker']);
+    const row = items[2];
+    expect(row?.kind).toBe('child');
+    if (row?.kind !== 'child') return;
+    expect(childThreadLabel(row.thread)).toBe('Council Add the activity panel');
+    expect(isCouncilChild(row.thread)).toBe(true);
+  });
+});
+
+describe('child thread labels', () => {
+  it('names a subagent by its type', () => {
+    expect(
+      childThreadLabel(
+        makeThread({
+          id: 'child',
+          projectId: 'p1',
+          title: 'Subagent reviewer 1a2b3c4d',
+          parentThreadId: 'root',
+        }),
+      ),
+    ).toBe('Reviewer');
+  });
+
+  it('shortens council stage titles', () => {
+    const label = (title: string): string =>
+      childThreadLabel(makeThread({ id: 'child', projectId: 'p1', title, parentThreadId: 'root' }));
+
+    expect(label('Council: Add tests')).toBe('Council Add tests');
+    expect(label('Review: Add tests')).toBe('Review Add tests');
+    expect(label('Plan: Add tests')).toBe('Plan Add tests');
+  });
+
+  it('keeps the plain title and treats a blank title as untitled', () => {
+    const label = (title: string): string =>
+      childThreadLabel(makeThread({ id: 'child', projectId: 'p1', title, parentThreadId: 'root' }));
+
+    expect(label('  Plain child  ')).toBe('Plain child');
+    expect(label('   ')).toBe('Untitled thread');
+    expect(label('Subagent unknown 1a2b')).toBe('Subagent unknown 1a2b');
   });
 });
 

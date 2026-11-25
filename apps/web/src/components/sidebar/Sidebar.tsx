@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { useAddProject } from '../../hooks/use-add-project';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { requestInspectorTab } from '../inspector/panel-requests';
 import { requestThreadDelete, requestThreadRename } from '../thread/thread-dialogs';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
 import { SidebarList, type SidebarItemActions } from './SidebarList';
@@ -21,6 +22,7 @@ import {
   buildSidebarItems,
   filterGroups,
   groupThreadsByProject,
+  isCouncilChild,
   needsVirtualization,
   readCollapsedProjects,
   writeCollapsedProjects,
@@ -33,6 +35,7 @@ export function Sidebar() {
   const settings = useAppStore((state) => state.settings);
   const upsertThread = useAppStore((state) => state.upsertThread);
   const setActiveThread = useAppStore((state) => state.setActiveThread);
+  const openSubagent = useAppStore((state) => state.openSubagent);
 
   const rpc = useRpc();
   const navigate = useNavigate();
@@ -132,6 +135,32 @@ export function Sidebar() {
     [projects],
   );
 
+  /**
+   * A child row opens its parent thread. A live subagent also opens the child
+   * pane; a council child with no live subagent shows the council board instead.
+   */
+  const handleOpenChild = useCallback(
+    (thread: Thread, parentId: string) => {
+      setActiveThread(parentId);
+      void navigate({
+        to: '/project/$projectId/thread/$threadId',
+        params: { projectId: thread.projectId, threadId: parentId },
+      });
+
+      // Read the live children without subscribing: child frames mutate the map
+      // on every token and the sidebar must not re-render for them.
+      const live = Object.values(useAppStore.getState().subagents).find(
+        (child) => child.threadId === thread.id,
+      );
+      if (live !== undefined) {
+        openSubagent(live.childId);
+        return;
+      }
+      if (isCouncilChild(thread)) requestInspectorTab('council');
+    },
+    [navigate, openSubagent, setActiveThread],
+  );
+
   const handleNewThread = useCallback(
     (projectId: string) => void createThread(projectId),
     [createThread],
@@ -157,6 +186,7 @@ export function Sidebar() {
       projectPathFor,
       onSelectThread: handleSelectThread,
       onOpenThread: handleOpenThread,
+      onOpenChild: handleOpenChild,
       onRenameThread: requestThreadRename,
       onDeleteThread: requestThreadDelete,
       onToggleProject: handleToggleProject,
@@ -167,6 +197,7 @@ export function Sidebar() {
       activeThreadId,
       creatingProjectId,
       handleNewThread,
+      handleOpenChild,
       handleOpenThread,
       handleRemoveProject,
       handleSelectThread,

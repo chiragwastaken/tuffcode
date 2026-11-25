@@ -1,19 +1,59 @@
 import { describe, expect, it } from 'vitest';
 import {
+  INSPECTOR_TABS,
+  INSPECTOR_TAB_LABEL,
   initialInspectorTabs,
   inspectorTabsReducer,
   isInspectorTab,
   tabForThread,
+  tabsForThread,
+  type InspectorTab,
   type InspectorTabsState,
 } from './inspector-tabs';
 
 function select(
   state: InspectorTabsState,
   threadId: string,
-  tab: 'diff' | 'terminal' | 'brain' | 'council' | 'context',
+  tab: InspectorTab,
 ): InspectorTabsState {
   return inspectorTabsReducer(state, { type: 'select', threadId, tab });
 }
+
+describe('inspector tabs', () => {
+  it('lists activity first and labels every tab', () => {
+    expect(INSPECTOR_TABS[0]).toBe('activity');
+    expect(INSPECTOR_TABS).toEqual([
+      'activity',
+      'diff',
+      'terminal',
+      'brain',
+      'council',
+      'context',
+    ]);
+    for (const tab of INSPECTOR_TABS) expect(INSPECTOR_TAB_LABEL[tab].length).toBeGreaterThan(0);
+    expect(INSPECTOR_TAB_LABEL.activity).toBe('Activity');
+  });
+
+  it('shows council only for a council thread', () => {
+    expect(tabsForThread(undefined)).toEqual(['activity', 'diff', 'terminal', 'brain', 'context']);
+    expect(tabsForThread({ executionMode: 'work' })).toEqual([
+      'activity',
+      'diff',
+      'terminal',
+      'brain',
+      'context',
+    ]);
+    expect(tabsForThread({ executionMode: 'council' })).toEqual([
+      'activity',
+      'diff',
+      'terminal',
+      'brain',
+      'council',
+      'context',
+    ]);
+    expect(tabsForThread({ executionMode: 'plan' })).not.toContain('council');
+  });
+});
 
 describe('inspector tab reducer', () => {
   it('starts on the diff tab for any thread', () => {
@@ -55,6 +95,7 @@ describe('inspector tab reducer', () => {
   });
 
   it('recognizes only the known inspector tabs', () => {
+    expect(isInspectorTab('activity')).toBe(true);
     expect(isInspectorTab('brain')).toBe(true);
     expect(isInspectorTab('context')).toBe(true);
     expect(isInspectorTab('settings')).toBe(false);

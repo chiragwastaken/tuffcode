@@ -2,9 +2,10 @@ import type { Project, Thread } from '@tuffcode/contracts';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRef } from 'react';
 import { ProjectGroupHeader } from './ProjectGroupHeader';
-import { ThreadRow } from './ThreadRow';
+import { ChildThreadRow, ThreadRow } from './ThreadRow';
 import {
   SIDEBAR_ITEM_HEIGHT,
+  SIDEBAR_ROW_GAP,
   sidebarItemHeight,
   sidebarItemKey,
   type SidebarItem,
@@ -16,6 +17,7 @@ export interface SidebarItemActions {
   projectPathFor: (projectId: string) => string | undefined;
   onSelectThread: (threadId: string) => void;
   onOpenThread: (thread: Thread) => void;
+  onOpenChild: (thread: Thread, parentId: string) => void;
   onRenameThread: (thread: Thread) => void;
   onDeleteThread: (thread: Thread) => void;
   onToggleProject: (projectId: string) => void;
@@ -37,7 +39,7 @@ export function SidebarList({ items, virtual, actions }: SidebarListProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-4">
       {items.map((item) => (
-        <div key={sidebarItemKey(item)} className="px-2">
+        <div key={sidebarItemKey(item)} className="px-2 pb-0.5">
           <SidebarItemView item={item} actions={actions} />
         </div>
       ))}
@@ -52,7 +54,7 @@ function VirtualSidebarList({ items, actions }: Omit<SidebarListProps, 'virtual'
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       const item = items[index];
-      return item ? sidebarItemHeight(item) : SIDEBAR_ITEM_HEIGHT.thread;
+      return item ? sidebarItemHeight(item) + SIDEBAR_ROW_GAP : SIDEBAR_ITEM_HEIGHT.thread;
     },
     getItemKey: (index) => {
       const item = items[index];
@@ -73,7 +75,9 @@ function VirtualSidebarList({ items, actions }: Omit<SidebarListProps, 'virtual'
               className="absolute inset-x-0 top-0 px-2"
               style={{ height: virtualRow.size, transform: `translateY(${virtualRow.start}px)` }}
             >
-              <SidebarItemView item={item} actions={actions} />
+              <div className="h-full pb-0.5">
+                <SidebarItemView item={item} actions={actions} />
+              </div>
             </div>
           );
         })}
@@ -108,9 +112,18 @@ function SidebarItemView({ item, actions }: { item: SidebarItem; actions: Sideba
           onDelete={actions.onDeleteThread}
         />
       );
+    case 'child':
+      return (
+        <ChildThreadRow
+          thread={item.thread}
+          parentId={item.parentId}
+          selected={item.thread.id === actions.activeThreadId}
+          onOpen={actions.onOpenChild}
+        />
+      );
     case 'empty':
       return (
-        <p className="flex h-[30px] items-center px-3 text-xs text-sidebar-muted-foreground">
+        <p className="flex h-8 items-center px-3 text-xs text-sidebar-muted-foreground">
           No threads yet
         </p>
       );
