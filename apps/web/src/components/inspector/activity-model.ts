@@ -4,8 +4,8 @@ import { toolHeadline } from '../thread/turn-blocks';
 
 /**
  * Pure helpers behind the Activity tab and its header badge: which tool calls
- * are still open, how much work is running, and how long an open call has been
- * going. Nothing here touches the store.
+ * are still open, which have finished, how much work is running, and how long
+ * an open call has been going. Nothing here touches the store.
  */
 
 /** One tool call that started and has no matching `tool.finished` yet. */
@@ -22,12 +22,38 @@ export interface RunningToolRow {
   startedAt: string | null;
 }
 
+/** One tool call that started and has a matching `tool.finished`. */
+export interface FinishedToolRow {
+  /** Unique across the thread and its children, used as the React key. */
+  key: string;
+  /** The subagent that ran the call, or null for the thread's own tools. */
+  childId: string | null;
+  childType: SubagentType | null;
+  toolCallId: string;
+  /** "Ran pnpm test": the same verb plus target the timeline shows. */
+  headline: string;
+  /** The final output the `tool.finished` frame carried. */
+  output: string;
+  isError: boolean;
+  finishedAt: string;
+}
+
 interface OpenTool {
   key: string;
   name: string;
   input: unknown;
   output: string;
   startedAt: string | null;
+}
+
+interface ClosedTool {
+  key: string;
+  toolCallId: string;
+  name: string;
+  input: unknown;
+  output: string;
+  isError: boolean;
+  finishedAt: string;
 }
 
 /** A tool call id is only unique within its turn, so the key carries both. */
@@ -67,6 +93,41 @@ function openToolsOf(
   return [...open.values()].map((tool) => ({ ...tool, key: `${prefix}:${tool.key}` }));
 }
 
+function closedToolsOf(
+  events: readonly ThreadEventRow[],
+  child: SubagentChild | null,
+): ClosedTool[] {
+  const open = new Map<string, { toolCallId: string; name: string; input: unknown }>();
+  const closed: ClosedTool[] = [];
+  const prefix = child?.childId ?? 'thread';
+  for (const row of events) {
+    const payload = row.payload;
+    if (payload.type === 'tool.started') {
+      open.set(callKey(payload.turnId, payload.toolCallId), {
+        toolCallId: payload.toolCallId,
+        name: payload.name,
+        input: payload.input,
+      });
+      continue;
+    }
+    if (payload.type !== 'tool.finished') continue;
+    const key = callKey(payload.turnId, payload.toolCallId);
+    const tool = open.get(key);
+    if (tool === undefined) continue;
+    open.delete(key);
+    closed.push({
+      key: `${prefix}:${key}`,
+      toolCallId: tool.toolCallId,
+      name: tool.name,
+      input: tool.input,
+      output: payload.output,
+      isError: payload.isError,
+      finishedAt: row.createdAt,
+    });
+  }
+  return closed;
+}
+
 /**
  * Tool calls still running for the thread, followed by those of its live
  * children. Children keep the caller's order so a row never jumps between ticks.
@@ -97,6 +158,50 @@ export function runningToolRows(
     }
   }
   return rows;
+}
+
+/**
+ * Tool calls that both started and finished, newest first, capped at `limit`.
+ * The thread's own calls keep their place ahead of a child that finished in the
+ * same millisecond. Calls still running belong to `runningToolRows`.
+ */
+export function finishedToolRows(
+  events: readonly ThreadEventRow[],
+  subagents: readonly SubagentChild[] = [],
+  limit = 10,
+): FinishedToolRow[] {
+  const rows: FinishedToolRow[] = [];
+  const sources: ReadonlyArray<{
+    events: readonly ThreadEventRow[];
+    child: SubagentChild | null;
+  }> = [
+    { events, child: null },
+    ...subagents.map((child) => ({ events: child.events, child })),
+  ];
+
+  for (const source of sources) {
+    for (const tool of closedToolsOf(source.events, source.child)) {
+      rows.push({
+        key: tool.key,
+        childId: source.child?.childId ?? null,
+        childType: source.child?.type ?? null,
+        toolCallId: tool.toolCallId,
+        headline: toolHeadline(tool.name, tool.input),
+        output: tool.output,
+        isError: tool.isError,
+        finishedAt: tool.finishedAt,
+      });
+    }
+  }
+
+  rows.sort((left, right) => finishedTime(right.finishedAt) - finishedTime(left.finishedAt));
+  return rows.slice(0, Math.max(0, limit));
+}
+
+/** Sort key for a finish timestamp; an unparseable one sorts last. */
+function finishedTime(finishedAt: string): number {
+  const parsed = Date.parse(finishedAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 /** How many tool calls the thread itself has open right now. */

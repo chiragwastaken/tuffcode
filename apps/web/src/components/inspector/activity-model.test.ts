@@ -4,6 +4,7 @@ import type { SubagentChild } from '../../store/app-store';
 import {
   activityCount,
   countRunningSubagents,
+  finishedToolRows,
   runningElapsedMs,
   runningToolCount,
   runningToolRows,
@@ -36,8 +37,13 @@ function delta(turnId: string, toolCallId: string, text: string): AdapterEvent {
   return { type: 'tool.delta', turnId, toolCallId, text };
 }
 
-function finished(turnId: string, toolCallId: string, output: string): AdapterEvent {
-  return { type: 'tool.finished', turnId, toolCallId, output, isError: false };
+function finished(
+  turnId: string,
+  toolCallId: string,
+  output: string,
+  isError = false,
+): AdapterEvent {
+  return { type: 'tool.finished', turnId, toolCallId, output, isError };
 }
 
 function child(
@@ -113,6 +119,112 @@ describe('runningToolRows', () => {
       null,
       'child_1',
     ]);
+  });
+});
+
+describe('finishedToolRows', () => {
+  it('lists completed calls newest first and caps at the limit', () => {
+    const events = [
+      row(
+        'thr_1',
+        started('turn-1', 'call-1', 'bash', { command: 'pnpm test' }),
+        '2026-11-25T12:00:00.000Z',
+      ),
+      row('thr_1', finished('turn-1', 'call-1', 'all green'), '2026-11-25T12:00:05.000Z'),
+      row(
+        'thr_1',
+        started('turn-1', 'call-2', 'read', { path: 'src/index.ts' }),
+        '2026-11-25T12:00:01.000Z',
+      ),
+      row('thr_1', finished('turn-1', 'call-2', 'file body'), '2026-11-25T12:00:09.000Z'),
+      row(
+        'thr_1',
+        started('turn-1', 'call-3', 'grep', { pattern: 'TODO' }),
+        '2026-11-25T12:00:02.000Z',
+      ),
+      row('thr_1', finished('turn-1', 'call-3', 'no matches'), '2026-11-25T12:00:07.000Z'),
+    ];
+
+    const rows = finishedToolRows(events);
+
+    expect(rows.map((entry) => entry.toolCallId)).toEqual(['call-2', 'call-3', 'call-1']);
+    expect(rows[0]).toEqual({
+      key: 'thread:turn-1:call-2',
+      childId: null,
+      childType: null,
+      toolCallId: 'call-2',
+      headline: 'Read src/index.ts',
+      output: 'file body',
+      isError: false,
+      finishedAt: '2026-11-25T12:00:09.000Z',
+    });
+    expect(finishedToolRows(events, [], 2).map((entry) => entry.toolCallId)).toEqual([
+      'call-2',
+      'call-3',
+    ]);
+  });
+
+  it('keeps ten finished calls by default', () => {
+    const events = Array.from({ length: 12 }, (_, index) => [
+      row('thr_1', started('turn-1', `call-${index}`, 'bash', { command: `cmd ${index}` })),
+      row(
+        'thr_1',
+        finished('turn-1', `call-${index}`, 'ok'),
+        `2026-11-25T12:00:${String(index).padStart(2, '0')}.000Z`,
+      ),
+    ]).flat();
+
+    expect(finishedToolRows(events)).toHaveLength(10);
+  });
+
+  it('skips a call that started but has not finished', () => {
+    const events = [
+      row('thr_1', started('turn-1', 'call-1', 'bash', { command: 'pnpm test' })),
+      row('thr_1', started('turn-1', 'call-2', 'read', { path: 'a.ts' })),
+      row('thr_1', finished('turn-1', 'call-2', 'body')),
+    ];
+
+    expect(finishedToolRows(events).map((entry) => entry.toolCallId)).toEqual(['call-2']);
+  });
+
+  it('flags a failed call with its error output', () => {
+    const events = [
+      row('thr_1', started('turn-1', 'call-1', 'bash', { command: 'pnpm test' })),
+      row('thr_1', finished('turn-1', 'call-1', '1 test failed', true)),
+    ];
+
+    expect(finishedToolRows(events)[0]).toMatchObject({
+      isError: true,
+      output: '1 test failed',
+    });
+  });
+
+  it('prefixes a child call with its subagent type', () => {
+    const explorer = child({
+      childId: 'child_1',
+      threadId: 'thr_1',
+      type: 'explorer',
+      events: [
+        row('thr_1', started('turn-9', 'call-1', 'grep', { pattern: 'TODO' })),
+        row(
+          'thr_1',
+          finished('turn-9', 'call-1', 'src/a.ts:1'),
+          '2026-11-25T12:00:03.000Z',
+        ),
+      ],
+    });
+
+    const rows = finishedToolRows([], [explorer]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      key: 'child_1:turn-9:call-1',
+      childId: 'child_1',
+      childType: 'explorer',
+      headline: 'Searched TODO',
+      output: 'src/a.ts:1',
+      finishedAt: '2026-11-25T12:00:03.000Z',
+    });
   });
 });
 
