@@ -1,4 +1,11 @@
-import type { BrainEntry, BrainKind, BrainSlice, RpcParams } from '@tuffcode/contracts';
+import type {
+  BrainEntry,
+  BrainKind,
+  BrainRelation,
+  BrainSlice,
+  RpcParams,
+} from '@tuffcode/contracts';
+import type { BrainGraphEdge, BrainGraphNode } from '../brain/graph-layout';
 
 export const BRAIN_KINDS = [
   'identity',
@@ -78,4 +85,73 @@ export function updateBrainEntryParams(
 
 export function toggleBrainEntryParams(entry: BrainEntry): RpcParams<'brain.upsert'> {
   return updateBrainEntryParams(entry, { active: !entry.active });
+}
+
+export const BRAIN_RELATIONS = [
+  'about',
+  'part-of',
+  'supersedes',
+  'caused',
+] as const satisfies readonly BrainRelation[];
+
+export const BRAIN_RELATION_LABEL: Record<BrainRelation, string> = {
+  about: 'about',
+  'part-of': 'part of',
+  supersedes: 'supersedes',
+  caused: 'caused',
+};
+
+export function isBrainRelation(value: string): value is BrainRelation {
+  return (BRAIN_RELATIONS as readonly string[]).includes(value);
+}
+
+/** Edges carry a plain string, so an unknown relation shows its stored name. */
+export function relationLabel(relation: string): string {
+  return isBrainRelation(relation) ? BRAIN_RELATION_LABEL[relation] : relation;
+}
+
+export interface BrainNodeLink {
+  relation: string;
+  node: BrainGraphNode;
+}
+
+export interface BrainNodeLinks {
+  incoming: BrainNodeLink[];
+  outgoing: BrainNodeLink[];
+}
+
+/**
+ * The links that touch a node, resolved to the other endpoint. An edge whose other
+ * endpoint is not in the loaded graph is skipped: there is no label to show and no
+ * node to select.
+ */
+export function edgesForNode(
+  nodes: readonly BrainGraphNode[],
+  edges: readonly BrainGraphEdge[],
+  nodeId: string,
+): BrainNodeLinks {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const incoming: BrainNodeLink[] = [];
+  const outgoing: BrainNodeLink[] = [];
+  for (const edge of edges) {
+    if (edge.from === nodeId) {
+      const node = byId.get(edge.to);
+      if (node !== undefined) outgoing.push({ relation: edge.relation, node });
+    } else if (edge.to === nodeId) {
+      const node = byId.get(edge.from);
+      if (node !== undefined) incoming.push({ relation: edge.relation, node });
+    }
+  }
+  return { incoming, outgoing };
+}
+
+/** Every other node as a link target, labelled with its kind and ordered by label. */
+export function linkTargetOptions(
+  nodes: readonly BrainGraphNode[],
+  fromId: string,
+): { value: string; label: string }[] {
+  return nodes
+    .filter((node) => node.id !== fromId)
+    .toSorted((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id))
+    .map((node) => ({ value: node.id, label: `${node.label} (${BRAIN_KIND_LABEL[node.kind]})` }));
 }
