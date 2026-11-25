@@ -9,8 +9,9 @@ export interface EmptyStateProps {
   action?: ReactNode;
   className?: string;
   /**
-   * `card` is the boxed empty state for a whole screen; `inline` shows the title
-   * only, as one muted line plus an action, for panels with their own frame.
+   * `card` is the boxed empty state for a whole screen; `inline` shows a muted line
+   * for panels with their own frame, with the description wrapped under the title
+   * instead of being truncated away.
    */
   variant?: 'card' | 'inline';
 }
@@ -26,10 +27,19 @@ export function EmptyState({
   if (variant === 'inline') {
     return (
       <div
-        className={cn('flex min-w-0 items-center gap-2 text-xs text-muted-foreground', className)}
+        className={cn(
+          'flex min-w-0 gap-2 text-xs text-muted-foreground',
+          // A description makes the block two lines tall; the icon belongs to the
+          // title, so it stays at the top instead of floating between the lines.
+          description ? 'items-start' : 'items-center',
+          className,
+        )}
       >
         {Icon ? <Icon aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" /> : null}
-        <p className="min-w-0 flex-1 truncate">{title}</p>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="min-w-0 truncate">{title}</p>
+          {description ? <p className="min-w-0 leading-5">{description}</p> : null}
+        </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
     );

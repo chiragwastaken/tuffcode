@@ -128,7 +128,8 @@ function ActivityBody({ threadId, council, councilResolving }: ActivityBodyProps
           <EmptyState
             variant="inline"
             icon={Activity}
-            title="Nothing running. Tool calls and subagents appear here while a turn runs."
+            title="Nothing running"
+            description="Tool calls and subagents appear here while a turn runs."
             className="px-1 py-2"
           />
         ) : null}

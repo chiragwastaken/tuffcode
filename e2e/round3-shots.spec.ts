@@ -112,6 +112,24 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   await expect(rootRow).toBeVisible();
   await expect(secondRootRow).toBeVisible();
 
+  // An untouched thread shows the Activity empty state. In the docked column the
+  // description has to wrap inside the panel instead of clipping mid-sentence.
+  await secondRootRow.click();
+  await expect(page.getByTestId('thread-title')).toHaveText(SECOND_ROOT_TITLE);
+  await page.getByTestId('activity-button').click();
+  const activityPanelEmpty = page.getByTestId('activity-panel');
+  await expect(activityPanelEmpty.getByText('Nothing running', { exact: true })).toBeVisible();
+  const activityEmptyDescription = activityPanelEmpty.getByText(
+    'Tool calls and subagents appear here while a turn runs.',
+  );
+  await expect(activityEmptyDescription).toBeVisible();
+  expect(
+    await activityEmptyDescription.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: join(SHOTS_DIR, 'activity-empty.png') });
+
   // The explorer runs a real child thread, which nests under its parent in the list.
   await rootRow.click();
   const threadTitle = page.getByTestId('thread-title');
@@ -151,6 +169,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   const topbar = page.getByTestId('topbar');
   await expect(topbar).toBeVisible();
   const header = page.getByTestId('thread-header');
+  const inspector = page.locator('aside[aria-label="Inspector"]');
   await expect(header).toBeVisible();
   const modeSwitch = page.getByTestId('thread-mode-switch');
   await expect(modeSwitch).toBeVisible();
@@ -267,7 +286,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
 
   // D43: the header is one row, so no control may sit on another. The inspector
   // column is open at this width, which is the narrow-header case from the report.
-  await expect(page.locator('aside[aria-label="Inspector"]')).toBeVisible();
+  await expect(inspector).toBeVisible();
   const branchChip = page.getByTestId('thread-branch');
   // The thread owns a worktree branch, so the chip is in the document; the header
   // container is below its 64rem gate at 1440x900, so it must not be laid out.
@@ -341,6 +360,30 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   expect(widestControlRight).toBeLessThanOrEqual(captionLimit + 1);
   const activityBox = await boxOf(page.getByTestId('activity-button'));
   expect(activityBox.x + activityBox.width).toBeLessThanOrEqual(captionLimit + 1);
+
+  // A 1366px laptop at 125% scaling is about 1092 CSS px. The inspector docks there
+  // as a static column: no dimming backdrop, and the main panel keeps its width.
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1100, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1100);
+  await expect(inspector).toBeVisible();
+  // The backdrop stays mounted while the inspector shows and is display:none once
+  // the panel is docked, so the main panel is neither dimmed nor inert.
+  await expect(page.getByTestId('inspector-backdrop')).toBeHidden();
+  await expect(inspector).not.toHaveAttribute('role', 'dialog');
+  expect(await page.evaluate(() => document.querySelector('main')?.inert)).toBe(false);
+  await expect(header).toBeVisible();
+  const dockedInspectorBox = await boxOf(inspector);
+  expect(dockedInspectorBox.width).toBeGreaterThanOrEqual(360);
+  expect(dockedInspectorBox.width).toBeLessThanOrEqual(560);
+  await page.screenshot({ path: join(SHOTS_DIR, 'inspector-docked-1100.png') });
+
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1440, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1440);
+  await expect(inspector).toBeVisible();
 
   await header.screenshot({ path: join(SHOTS_DIR, 'thread-header.png') });
   // The topbar with the centered Work/Council switch (D43).
@@ -456,6 +499,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
         branchWidthAt1920: wideBranchBox.width,
         topbarRightEdge: widestControlRight,
         captionLimit,
+        inspectorWidthAt1100: dockedInspectorBox.width,
         councilNodeCount: nodeCount,
         councilBoardOverflow: overflow,
         mcpSubmitTop: submitBox.y,
