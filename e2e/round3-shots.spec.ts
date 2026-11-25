@@ -146,8 +146,11 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
 
   await sidebar.screenshot({ path: join(SHOTS_DIR, 'sidebar.png') });
 
-  // The thread header: the Work/Council switch centered, the Activity control right.
-  const header = page.locator('main header').first();
+  // D43: the Work/Council switch sits in the app topbar, centered, with the thread
+  // header below it carrying only the title and the thread's own controls.
+  const topbar = page.getByTestId('topbar');
+  await expect(topbar).toBeVisible();
+  const header = page.getByTestId('thread-header');
   await expect(header).toBeVisible();
   const modeSwitch = page.getByTestId('thread-mode-switch');
   await expect(modeSwitch).toBeVisible();
@@ -156,13 +159,43 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     'aria-checked',
     'true',
   );
+  // The switch is the topbar's child, not the thread header's.
+  await expect(topbar.getByTestId('thread-mode-switch')).toBeVisible();
+  await expect(header.getByTestId('thread-mode-switch')).toHaveCount(0);
 
-  const headerBox = await boxOf(header);
+  const topbarBox = await boxOf(topbar);
   const switchBox = await boxOf(modeSwitch);
   const switchOffset = Math.abs(
-    switchBox.x + switchBox.width / 2 - (headerBox.x + headerBox.width / 2),
+    switchBox.x + switchBox.width / 2 - (topbarBox.x + topbarBox.width / 2),
   );
   expect(switchOffset).toBeLessThanOrEqual(MODE_SWITCH_CENTER_TOLERANCE_PX);
+  expect(
+    Math.abs(switchBox.y + switchBox.height / 2 - (topbarBox.y + topbarBox.height / 2)),
+  ).toBeLessThanOrEqual(1);
+  // Centered absolutely, so it must clear both topbar clusters rather than push them.
+  expectDisjointHeaderControls(
+    {
+      'thread-mode-switch': switchBox,
+      'sidebar-toggle': await boxOf(topbar.getByRole('button', { name: /sidebar/ })),
+      'inspector-toggle': await boxOf(topbar.getByRole('button', { name: /inspector/ })),
+    },
+    'in the topbar at 1440x900',
+  );
+
+  // Below 900px the switch would collide with the brand and the right controls, so
+  // the topbar hides it instead of squeezing them.
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(860, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThan(900);
+  await expect(modeSwitch).toBeHidden();
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1440, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1440);
+  await expect(modeSwitch).toBeVisible();
+
+  const headerBox = await boxOf(header);
 
   // The breadcrumb and title own the left zone: the title keeps a readable width
   // instead of truncating after a dozen characters next to the status chip.
@@ -183,7 +216,6 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     {
       'thread-title': titleBox,
       'thread-status': statusBox,
-      'thread-mode-switch': switchBox,
       'activity-button': activityButtonBox,
     },
     'at 1440x900',
@@ -191,7 +223,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
 
   // The reported window: 1550px wide with the inspector open leaves the header far
   // narrower than the viewport, so the branch chip stays gated out and the right
-  // zone stays inside its column instead of reaching under the centered switch.
+  // zone stays inside its column.
   await session.app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0]?.setSize(1550, 900);
   });
@@ -202,14 +234,13 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     {
       'thread-title': await boxOf(threadTitle),
       'thread-status': await boxOf(page.getByTestId('thread-status')),
-      'thread-mode-switch': await boxOf(modeSwitch),
       'activity-button': await boxOf(page.getByTestId('activity-button')),
     },
     'at 1550x900',
   );
 
   // Past the container gate the chip does render; it then has to stay inside the
-  // right zone, truncating its branch instead of reaching under the switch.
+  // right zone, truncating its branch instead of pushing the title.
   await session.app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0]?.setSize(1920, 900);
   });
@@ -221,7 +252,6 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     {
       'thread-title': await boxOf(threadTitle),
       'thread-status': await boxOf(page.getByTestId('thread-status')),
-      'thread-mode-switch': await boxOf(modeSwitch),
       'activity-button': await boxOf(page.getByTestId('activity-button')),
       'thread-branch': wideBranchBox,
     },
@@ -234,7 +264,6 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1440);
 
   // The topbar keeps every control clear of the caption-button corner.
-  const topbar = page.locator('header').first();
   const windowWidth = await page.evaluate(() => window.innerWidth);
   const captionLimit = windowWidth - CAPTION_INSET_PX;
   const topbarControls = topbar.locator('a, button');
@@ -251,6 +280,8 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   expect(activityBox.x + activityBox.width).toBeLessThanOrEqual(captionLimit + 1);
 
   await header.screenshot({ path: join(SHOTS_DIR, 'thread-header.png') });
+  // The topbar with the centered Work/Council switch (D43).
+  await topbar.screenshot({ path: join(SHOTS_DIR, 'topbar.png') });
 
   // Activity: a bash call waits for approval, so the panel has a live running row.
   await page.getByTestId('activity-button').click();
@@ -351,6 +382,9 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
         titleWidth: titleBox.width,
         statusWidth: statusBox.width,
         activityButtonWidth: activityButtonBox.width,
+        topbarWidth: topbarBox.width,
+        topbarHeight: topbarBox.height,
+        modeSwitchWidth: switchBox.width,
         modeSwitchCenterOffset: switchOffset,
         headerWidthAt1550: wideHeaderBox.width,
         headerWidthAt1920: wideHeaderBoxAt1920.width,

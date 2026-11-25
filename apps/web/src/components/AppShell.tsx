@@ -18,6 +18,7 @@ import { CommandPalette } from './menu/CommandPalette';
 import { MenuProvider } from './menu/Menu';
 import { Sidebar } from './sidebar/Sidebar';
 import { ThreadActionDialogs } from './thread/thread-action-dialogs';
+import { ThreadModeSwitch } from './thread/ThreadModeSwitch';
 import { shellVisibility, windowControlsInset } from './shell-layout';
 
 const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> = {
@@ -58,6 +59,8 @@ export function AppShell() {
   const threadMatch = matchRoute({ to: '/project/$projectId/thread/$threadId' });
   const inspectorThreadId = threadMatch === false ? null : threadMatch.threadId;
   const hasThread = inspectorThreadId !== null;
+  /** The switch lives in the app topbar, but only for an open thread outside settings. */
+  const showModeSwitch = hasThread && !visibility.backToWorkspace;
   const showInspectorToggle = visibility.inspector && hasThread;
   const inspectorVisible = showInspectorToggle && inspectorOpen;
   /** Below xl the inspector is an overlay sheet, which behaves as a modal dialog. */
@@ -163,9 +166,17 @@ export function AppShell() {
       >
         <header
           inert={sheetOpen}
-          className="drag-region flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
+          data-testid="topbar"
+          className="drag-region relative flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
           style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1.5rem)' }}
         >
+          {/* Absolutely centered so it never reflows the brand or the right cluster. */}
+          {showModeSwitch ? (
+            <div className="no-drag absolute top-1/2 left-1/2 hidden -translate-x-1/2 -translate-y-1/2 min-[900px]:flex">
+              <ThreadModeSwitch threadId={inspectorThreadId} />
+            </div>
+          ) : null}
+
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {visibility.backToWorkspace ? (
               <Link
