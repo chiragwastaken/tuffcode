@@ -1,7 +1,7 @@
-import type { ThreadEventRow } from '@tuffcode/contracts';
+import type { SubagentType, ThreadEventRow } from '@tuffcode/contracts';
 import { cn, EmptyState, ScrollArea } from '@tuffcode/ui';
 import { Activity, ChevronRight } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/app-store';
 import {
@@ -15,7 +15,7 @@ import {
 } from '../subagents/subagent-model';
 import { StatusChip } from '../thread/status-chip';
 import { formatDuration, outputTail } from '../thread/turn-blocks';
-import { runningElapsedMs, runningToolRows, waitingItems } from './activity-model';
+import { finishedToolRows, runningElapsedMs, runningToolRows, waitingItems } from './activity-model';
 
 export interface ActivityPanelProps {
   threadId: string;
@@ -39,8 +39,9 @@ function useLiveClock(active: boolean): number {
 
 /**
  * What the thread is doing right now: open tool calls with their output tail,
- * every subagent of the thread, and the work waiting on the user or a slot.
- * Rows expand in place; nothing here navigates away from the thread.
+ * the calls that already finished this session, every subagent of the thread,
+ * and the work waiting on the user or a slot. Rows expand in place; nothing
+ * here navigates away from the thread.
  */
 export function ActivityPanel({ threadId }: ActivityPanelProps) {
   const events = useAppStore((state) => state.events[threadId]);
@@ -56,6 +57,10 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
     () => runningToolRows(events ?? EMPTY_EVENTS, subagents),
     [events, subagents],
   );
+  const finished = useMemo(
+    () => finishedToolRows(events ?? EMPTY_EVENTS, subagents),
+    [events, subagents],
+  );
   const waiting = waitingItems(subagents, threadStatus);
   const live = tools.length > 0 || subagents.some(isRunningSubagent);
   const now = useLiveClock(live);
@@ -69,7 +74,8 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
     });
   }, []);
 
-  const idle = tools.length === 0 && subagents.length === 0;
+  const idle =
+    tools.length === 0 && finished.length === 0 && subagents.length === 0 && waiting.length === 0;
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -87,60 +93,51 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
           <section aria-label="Running tools" className="flex flex-col gap-0.5">
             <SectionHeading label="Running" count={tools.length} />
             {tools.map((tool) => {
-              const isOpen = expanded.has(tool.key);
-              const tail = outputTail(tool.output);
               const elapsed = formatDuration(runningElapsedMs(tool.startedAt, now));
               return (
-                <div key={tool.key}>
-                  <button
-                    type="button"
-                    data-testid="activity-running-tool"
-                    aria-expanded={isOpen}
-                    onClick={() => toggle(tool.key)}
-                    title={tool.headline}
-                    className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left text-xs text-foreground transition-colors duration-150 hover:bg-accent"
-                  >
-                    <ChevronRight
-                      aria-hidden="true"
-                      strokeWidth={1.75}
-                      className={cn(
-                        'size-3 shrink-0 text-muted-foreground transition-transform duration-150',
-                        isOpen && 'rotate-90',
-                      )}
-                    />
-                    {tool.childType === null ? null : (
-                      <span className="shrink-0 text-2xs text-muted-foreground">
-                        {SUBAGENT_TYPE_LABEL[tool.childType]}
-                      </span>
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{tool.headline}</span>
-                    {elapsed === '' ? null : (
+                <ToolRow
+                  key={tool.key}
+                  testId="activity-running-tool"
+                  headline={tool.headline}
+                  childType={tool.childType}
+                  output={tool.output}
+                  expanded={expanded.has(tool.key)}
+                  onToggle={() => toggle(tool.key)}
+                  emptyLabel="No output yet."
+                  trailing={
+                    elapsed === '' ? null : (
                       <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
                         {elapsed}
                       </span>
-                    )}
-                  </button>
-                  {isOpen ? (
-                    <div className="mt-0.5 mb-1 rounded-md border border-border bg-card px-2 py-1.5">
-                      {tail.lines.length === 0 ? (
-                        <p className="text-2xs text-muted-foreground">No output yet.</p>
-                      ) : (
-                        <>
-                          {tail.hidden > 0 ? (
-                            <p className="text-2xs text-muted-foreground">
-                              {tail.hidden} earlier lines
-                            </p>
-                          ) : null}
-                          <pre className="max-h-48 overflow-auto font-mono text-2xs leading-4 break-words whitespace-pre-wrap text-muted-foreground">
-                            {tail.lines.join('\n')}
-                          </pre>
-                        </>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
+                    )
+                  }
+                />
               );
             })}
+          </section>
+        ) : null}
+
+        {finished.length > 0 ? (
+          <section aria-label="Finished tools" className="flex flex-col gap-0.5">
+            <SectionHeading label="Finished" count={finished.length} />
+            {finished.map((tool) => (
+              <ToolRow
+                key={tool.key}
+                testId="activity-finished-tool"
+                headline={tool.headline}
+                childType={tool.childType}
+                output={tool.output}
+                expanded={expanded.has(tool.key)}
+                onToggle={() => toggle(tool.key)}
+                emptyLabel="No output."
+                error={tool.isError}
+                trailing={
+                  tool.isError ? (
+                    <span className="shrink-0 text-2xs text-error-foreground">Error</span>
+                  ) : null
+                }
+              />
+            ))}
           </section>
         ) : null}
 
@@ -228,5 +225,80 @@ function SectionHeading({ label, count }: { label: string; count: number }) {
       {label}
       {count > 0 ? <span className="tabular-nums">{count}</span> : null}
     </h3>
+  );
+}
+
+interface ToolRowProps {
+  testId: string;
+  headline: string;
+  childType: SubagentType | null;
+  output: string;
+  expanded: boolean;
+  onToggle: () => void;
+  emptyLabel: string;
+  trailing?: ReactNode;
+  error?: boolean;
+}
+
+/**
+ * One tool row shared by Running and Finished: the headline, an optional
+ * subagent prefix and trailing slot, and the output tail opened in place.
+ */
+function ToolRow({
+  testId,
+  headline,
+  childType,
+  output,
+  expanded,
+  onToggle,
+  emptyLabel,
+  trailing,
+  error = false,
+}: ToolRowProps) {
+  const tail = outputTail(output);
+  return (
+    <div>
+      <button
+        type="button"
+        data-testid={testId}
+        data-error={error ? 'true' : undefined}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        title={headline}
+        className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left text-xs text-foreground transition-colors duration-150 hover:bg-accent"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          strokeWidth={1.75}
+          className={cn(
+            'size-3 shrink-0 text-muted-foreground transition-transform duration-150',
+            expanded && 'rotate-90',
+          )}
+        />
+        {childType === null ? null : (
+          <span className="shrink-0 text-2xs text-muted-foreground">
+            {SUBAGENT_TYPE_LABEL[childType]}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate">{headline}</span>
+        {trailing}
+      </button>
+      {expanded ? (
+        <div className="mt-0.5 mb-1 rounded-md border border-border bg-card px-2 py-1.5">
+          {tail.lines.length === 0 ? (
+            <p className="text-2xs text-muted-foreground">{emptyLabel}</p>
+          ) : (
+            <>
+              {tail.hidden > 0 ? (
+                <p className="text-2xs text-muted-foreground">{tail.hidden} earlier lines</p>
+              ) : null}
+              <pre className="max-h-48 overflow-auto font-mono text-2xs leading-4 break-words whitespace-pre-wrap text-muted-foreground">
+                {tail.lines.join('\n')}
+              </pre>
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
