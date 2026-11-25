@@ -304,6 +304,37 @@ const TASK_DEPENDS_ON_SQL = `
 ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';
 `;
 
+/**
+ * Model metadata beyond the token window. `capabilities` holds the JSON object the
+ * contracts describe, `reasoning_effort` the selected level, and `source` records which
+ * discovery path wrote the row. Every column is nullable, so rows seeded before this
+ * migration keep reading as unknown metadata.
+ */
+const PROVIDER_MODEL_METADATA_SQL = `
+ALTER TABLE provider_models ADD COLUMN max_output_tokens INTEGER;
+ALTER TABLE provider_models ADD COLUMN capabilities TEXT;
+ALTER TABLE provider_models ADD COLUMN reasoning_effort TEXT;
+ALTER TABLE provider_models ADD COLUMN source TEXT;
+`;
+
+/**
+ * MCP servers are machine-wide configuration, not project state: there is no foreign
+ * key here, so removing a project or thread never takes a server with it.
+ */
+const MCP_SERVERS_SQL = `
+CREATE TABLE mcp_servers (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  command TEXT NOT NULL,
+  args TEXT NOT NULL DEFAULT '[]',
+  env TEXT NOT NULL DEFAULT '{}',
+  cwd TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -339,5 +370,15 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 7,
     name: 'task-depends-on',
     sql: TASK_DEPENDS_ON_SQL,
+  },
+  {
+    version: 8,
+    name: 'provider-model-metadata',
+    sql: PROVIDER_MODEL_METADATA_SQL,
+  },
+  {
+    version: 9,
+    name: 'mcp-servers',
+    sql: MCP_SERVERS_SQL,
   },
 ];
