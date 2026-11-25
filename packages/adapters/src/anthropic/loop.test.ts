@@ -345,6 +345,122 @@ describe('runTurn', () => {
       reason: 'error',
     });
   });
+
+  it('offers the extra tools and runs a memory search through the runner', async () => {
+    const calls: { name: string; args: Record<string, unknown>; cwd: string }[] = [];
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (name, args, ctx) => {
+        calls.push({ name, args, cwd: ctx.cwd });
+        return 'two entries: build uses pnpm';
+      },
+    };
+    const client = new FakeClient([
+      streamOf([
+        {
+          event: 'message_start',
+          data: {
+            type: 'message_start',
+            message: {
+              id: 'msg_mem',
+              model: 'claude-test',
+              usage: { input_tokens: 10, output_tokens: 1 },
+            },
+          },
+        },
+        {
+          event: 'content_block_start',
+          data: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'tool_use', id: 'toolu_mem', name: 'memory', input: {} },
+          },
+        },
+        {
+          event: 'content_block_delta',
+          data: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: {
+              type: 'input_json_delta',
+              partial_json: '{"action":"search","query":"build"}',
+            },
+          },
+        },
+        { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+        {
+          event: 'message_delta',
+          data: {
+            type: 'message_delta',
+            delta: { stop_reason: 'tool_use' },
+            usage: { output_tokens: 12 },
+          },
+        },
+        { event: 'message_stop', data: { type: 'message_stop' } },
+      ]),
+      streamOf(fixture('text-stream')),
+    ]);
+    const messages: AnthropicMessage[] = [{ role: 'user', content: 'go' }];
+    const events = await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages,
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.extraTools).toBe(true);
+    expect(events.find((event) => event.type === 'tool.started')).toMatchObject({
+      type: 'tool.started',
+      toolCallId: 'toolu_mem',
+      name: 'memory',
+      input: { action: 'search', query: 'build' },
+    });
+    expect(events.find((event) => event.type === 'tool.finished')).toMatchObject({
+      type: 'tool.finished',
+      toolCallId: 'toolu_mem',
+      output: 'two entries: build uses pnpm',
+      isError: false,
+    });
+    expect(calls).toEqual([
+      { name: 'memory', args: { action: 'search', query: 'build' }, cwd: root },
+    ]);
+    expect(messages[2]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_mem', content: 'two entries: build uses pnpm' },
+      ],
+    });
+    expect(events.some((event) => event.type === 'approval.requested')).toBe(false);
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'complete',
+    });
+  });
+
+  it('does not offer the extra tools without a runner', async () => {
+    const client = new FakeClient([streamOf(fixture('text-stream'))]);
+    await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.extraTools).toBeUndefined();
+  });
 });
 
 describe('mapStopReason', () => {

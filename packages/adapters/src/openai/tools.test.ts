@@ -2,8 +2,18 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { AdapterDeps, AdapterLogger, TurnContext } from '@tuffcode/contracts';
-import { classifyTool, createToolSessionState, executeTool } from './tools.js';
+import type {
+  AdapterDeps,
+  AdapterLogger,
+  ExtraToolRunner,
+  TurnContext,
+} from '@tuffcode/contracts';
+import {
+  classifyExtraTool,
+  classifyTool,
+  createToolSessionState,
+  executeTool,
+} from './tools.js';
 
 const LF = String.fromCharCode(10);
 const CRLF = String.fromCharCode(13) + LF;
@@ -241,5 +251,153 @@ describe('classifyTool', () => {
   it('asks before destructive commands in full-auto', () => {
     expect(classifyTool('bash', { command: 'rm -rf /' }, 'full-auto')).toBe('approve');
     expect(classifyTool('bash', { command: 'echo hi' }, 'full-auto')).toBe('allow');
+  });
+
+  it('routes an extra tool name through the extra classifier', () => {
+    expect(classifyTool('memory', { action: 'search' }, 'read-only')).toBe('allow');
+    expect(classifyTool('mcp', { action: 'call' }, 'ask')).toBe('approve');
+    expect(classifyTool('config', { action: 'settings.set' }, 'read-only')).toBe('deny');
+  });
+});
+
+describe('classifyExtraTool', () => {
+  it('allows the read actions in every mode', () => {
+    for (const mode of ['read-only', 'ask', 'accept-edits', 'full-auto'] as const) {
+      expect(classifyExtraTool('mcp', { action: 'list' }, mode)).toBe('allow');
+      expect(classifyExtraTool('memory', { action: 'search' }, mode)).toBe('allow');
+    }
+  });
+
+  it('denies the write actions in read-only mode', () => {
+    expect(classifyExtraTool('mcp', { action: 'call' }, 'read-only')).toBe('deny');
+    expect(classifyExtraTool('memory', { action: 'add' }, 'read-only')).toBe('deny');
+    expect(classifyExtraTool('config', { action: 'settings.set' }, 'read-only')).toBe('deny');
+    expect(classifyExtraTool('config', { action: 'provider.add' }, 'read-only')).toBe('deny');
+  });
+
+  it('asks for the write actions in ask mode', () => {
+    expect(classifyExtraTool('mcp', { action: 'call' }, 'ask')).toBe('approve');
+    expect(classifyExtraTool('memory', { action: 'add' }, 'ask')).toBe('approve');
+    expect(classifyExtraTool('config', { action: 'mcp.add' }, 'ask')).toBe('approve');
+  });
+
+  it('allows config and memory add in accept-edits and asks for an MCP call', () => {
+    expect(classifyExtraTool('config', { action: 'provider.model.add' }, 'accept-edits')).toBe(
+      'allow',
+    );
+    expect(classifyExtraTool('memory', { action: 'add' }, 'accept-edits')).toBe('allow');
+    expect(classifyExtraTool('mcp', { action: 'call' }, 'accept-edits')).toBe('approve');
+  });
+
+  it('allows every known action in full-auto', () => {
+    expect(classifyExtraTool('mcp', { action: 'call' }, 'full-auto')).toBe('allow');
+    expect(classifyExtraTool('memory', { action: 'add' }, 'full-auto')).toBe('allow');
+    expect(classifyExtraTool('config', { action: 'settings.set' }, 'full-auto')).toBe('allow');
+  });
+
+  it('denies an unknown or missing action in every mode', () => {
+    for (const mode of ['read-only', 'ask', 'accept-edits', 'full-auto'] as const) {
+      expect(classifyExtraTool('mcp', { action: 'destroy' }, mode)).toBe('deny');
+      expect(classifyExtraTool('memory', {}, mode)).toBe('deny');
+      expect(classifyExtraTool('config', { action: 'provider.delete' }, mode)).toBe('deny');
+    }
+  });
+});
+
+describe('extra tool execution', () => {
+  it('routes the call through the runner with the turn cwd', async () => {
+    const calls: { name: string; args: Record<string, unknown>; cwd: string }[] = [];
+    const runner: ExtraToolRunner = async (name, args, ctx) => {
+      calls.push({ name, args, cwd: ctx.cwd });
+      return 'two entries: build uses pnpm';
+    };
+    const result = await executeTool(
+      'memory',
+      { action: 'search', query: 'build' },
+      context(),
+      createToolSessionState(),
+      deps,
+      runner,
+    );
+
+    expect(result).toEqual({ output: 'two entries: build uses pnpm', isError: false });
+    expect(calls).toEqual([
+      { name: 'memory', args: { action: 'search', query: 'build' }, cwd: root },
+    ]);
+  });
+
+  it('caps the runner output at 64 KiB', async () => {
+    const runner: ExtraToolRunner = async () => 'x'.repeat(70 * 1024);
+    const result = await executeTool(
+      'mcp',
+      { action: 'list' },
+      context(),
+      createToolSessionState(),
+      deps,
+      runner,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(Buffer.byteLength(result.output, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(result.output.endsWith('[output truncated]')).toBe(true);
+  });
+
+  it('reports the tool as unavailable without a runner', async () => {
+    const result = await executeTool(
+      'mcp',
+      { action: 'list' },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    expect(result).toEqual({
+      output: 'tool "mcp" is not available in this session',
+      isError: true,
+    });
+  });
+
+  it('reports a runner failure as a tool error', async () => {
+    const runner: ExtraToolRunner = async () => {
+      throw new Error('mcp server offline');
+    };
+    const result = await executeTool(
+      'config',
+      { action: 'settings.set', key: 'theme', value: 'dark' },
+      context(),
+      createToolSessionState(),
+      deps,
+      runner,
+    );
+    expect(result).toEqual({ output: 'mcp server offline', isError: true });
+  });
+
+  it('rejects non-object arguments before calling the runner', async () => {
+    let called = false;
+    const runner: ExtraToolRunner = async () => {
+      called = true;
+      return 'ok';
+    };
+    const result = await executeTool(
+      'memory',
+      'search',
+      context(),
+      createToolSessionState(),
+      deps,
+      runner,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('JSON object');
+    expect(called).toBe(false);
+  });
+
+  it('still rejects an unknown tool name', async () => {
+    const result = await executeTool(
+      'deploy',
+      {},
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    expect(result).toEqual({ output: 'unknown tool: deploy', isError: true });
   });
 });

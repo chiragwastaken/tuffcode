@@ -215,6 +215,95 @@ describe('runTurn', () => {
       reason: 'error',
     });
   });
+
+  it('offers the extra tools and runs a memory search through the runner', async () => {
+    const calls: { name: string; args: Record<string, unknown>; cwd: string }[] = [];
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (name, args, ctx) => {
+        calls.push({ name, args, cwd: ctx.cwd });
+        return 'two entries: build uses pnpm';
+      },
+    };
+    const client = new FakeClient([
+      streamOf([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_mem',
+                    function: {
+                      name: 'memory',
+                      arguments: '{"action":"search","query":"build"}',
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        },
+      ]),
+      streamOf([{ choices: [{ delta: { content: 'found' }, finish_reason: 'stop' }] }]),
+    ]);
+    const messages: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    const events = await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages,
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.extraTools).toBe(true);
+    expect(events.find((event) => event.type === 'tool.started')).toMatchObject({
+      type: 'tool.started',
+      toolCallId: 'call_mem',
+      name: 'memory',
+      input: { action: 'search', query: 'build' },
+    });
+    expect(events.find((event) => event.type === 'tool.finished')).toMatchObject({
+      type: 'tool.finished',
+      toolCallId: 'call_mem',
+      output: 'two entries: build uses pnpm',
+      isError: false,
+    });
+    expect(calls).toEqual([
+      { name: 'memory', args: { action: 'search', query: 'build' }, cwd: root },
+    ]);
+    expect(messages).toContainEqual({
+      role: 'tool',
+      tool_call_id: 'call_mem',
+      content: 'two entries: build uses pnpm',
+    });
+    expect(events.some((event) => event.type === 'approval.requested')).toBe(false);
+  });
+
+  it('does not offer the extra tools without a runner', async () => {
+    const client = new FakeClient([
+      streamOf([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]),
+    ]);
+    await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests[0]?.extraTools).toBeUndefined();
+  });
 });
 
 describe('compactHistory', () => {

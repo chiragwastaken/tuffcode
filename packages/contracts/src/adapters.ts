@@ -64,7 +64,22 @@ export interface AdapterDeps {
    * the parent thread from the worktree and rejects nested or read-only turns.
    */
   spawnSubagent?(request: SubagentToolRequest): Promise<SubagentToolResult>;
+  /**
+   * Runs one of the server-owned tools (`mcp`, `memory`, `config`) for a turn. The
+   * harness passes the turn cwd because the server resolves the thread from it. When
+   * unset the harness offers no extra tools and a stray call is answered as unavailable.
+   */
+  extraTool?: ExtraToolRunner;
 }
+
+/** Server-owned harness tools: the adapter only shapes the schema and permission. */
+export type ExtraToolName = 'mcp' | 'memory' | 'config';
+
+export type ExtraToolRunner = (
+  name: ExtraToolName,
+  args: Record<string, unknown>,
+  ctx: { cwd: string },
+) => Promise<string>;
 
 export interface SubagentToolRequest {
   /** Absolute worktree of the parent turn. */
