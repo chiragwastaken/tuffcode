@@ -335,7 +335,11 @@ describe('thread runner', () => {
 
     const before = contextEvents(f.events);
     expect(before).toHaveLength(1);
-    expect(before[0]?.payload).toMatchObject({ threadId: 'thr_a', compacted: false });
+    expect(before[0]?.payload).toMatchObject({
+      threadId: 'thr_a',
+      compacted: false,
+      limitSource: 'default',
+    });
 
     f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
     await ended;
@@ -343,7 +347,48 @@ describe('thread runner', () => {
     await vi.waitFor(() => expect(contextEvents(f.events)).toHaveLength(2));
     const after = contextEvents(f.events);
     expect(after[1]?.payload.compacted).toBe(false);
+    expect(after[1]?.payload.limitSource).toBe('default');
     expect(after[1]?.payload.usedTokens).toBeGreaterThan(0);
+  });
+
+  it('reports the provider config as the window source when the model row has none', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { contextWindow: 50_000 },
+    });
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    expect(contextEvents(f.events)[0]?.payload).toMatchObject({
+      maxTokens: 50_000,
+      limitSource: 'config',
+    });
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+
+    await vi.waitFor(() => expect(contextEvents(f.events)).toHaveLength(2));
+    expect(contextEvents(f.events)[1]?.payload.limitSource).toBe('config');
+  });
+
+  it('reports the model row as the window source when it declares one', async () => {
+    const f = setup();
+    f.ctx.repos.providers.replaceModels('prv_test', [
+      { modelId: 'model-x', label: 'Model X', contextWindow: 12_000, isDefault: true },
+    ]);
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    expect(contextEvents(f.events)[0]?.payload).toMatchObject({
+      maxTokens: 12_000,
+      limitSource: 'model',
+    });
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
   });
 
   it('compacts once before a turn when usage crosses the warning threshold', async () => {

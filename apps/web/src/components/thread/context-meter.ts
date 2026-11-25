@@ -6,12 +6,17 @@ export interface ContextSegment {
   tokens: number;
 }
 
+/** Which precedence step supplied the window (D46). */
+export type LimitSource = 'model' | 'config' | 'settings' | 'default';
+
 export interface ContextUsage {
   usedTokens: number;
   maxTokens: number;
   percent: number;
   segments: ContextSegment[];
   compactedAt?: string;
+  /** Absent when an older server omits it; the meter then reads the window as the model's. */
+  limitSource?: LimitSource;
 }
 
 export const CONTEXT_METER_TONE_CLASS = {
@@ -97,14 +102,37 @@ export function formatSegmentPercent(percent: number): string {
   return formatPercent(clamped);
 }
 
-/** One tooltip line for the total and one for the segments. */
+export const LIMIT_SOURCE_LABEL: Record<LimitSource, string> = {
+  model: 'model',
+  config: 'provider config',
+  settings: 'settings',
+  default: 'assumed default',
+};
+
+/**
+ * A window nobody declared must not read like a declared one, so the default step is
+ * spelled out as an assumption. An older server sends no source at all, which the
+ * meter reads as the model's own window.
+ */
+export function limitSourceLabel(source: LimitSource | undefined): string {
+  return LIMIT_SOURCE_LABEL[source ?? 'model'];
+}
+
+/** `42k of 200k tokens`, with the assumption spelled out for a defaulted window. */
+export function contextTokenLine(usage: ContextUsage): string {
+  const line = `${formatTokenCount(usage.usedTokens)} of ${formatTokenCount(usage.maxTokens)} tokens`;
+  return usage.limitSource === 'default' ? `${line} (assumed default)` : line;
+}
+
+/** One tooltip line for the total, one for the window's source, one for the segments. */
 export function contextTooltip(usage: ContextUsage): string {
   const head = `${formatTokenCount(usage.usedTokens)} of ${formatTokenCount(usage.maxTokens)} tokens (${formatPercent(usagePercent(usage))})`;
-  if (usage.segments.length === 0) return head;
+  const source = `Limit source: ${limitSourceLabel(usage.limitSource)}`;
+  if (usage.segments.length === 0) return `${head}\n${source}`;
   const segments = usage.segments
     .map((segment) => `${segment.name} ${formatTokenCount(segment.tokens)}`)
     .join(' · ');
-  return `${head}\n${segments}`;
+  return `${head}\n${source}\n${segments}`;
 }
 
 export function segmentPercent(tokens: number, maxTokens: number): number {

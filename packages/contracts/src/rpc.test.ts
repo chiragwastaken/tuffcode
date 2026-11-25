@@ -1217,6 +1217,7 @@ describe('server events', () => {
           usedTokens: 42000,
           maxTokens: 200000,
           percent: 0.21,
+          limitSource: 'default',
           compacted: false,
         },
       },
@@ -1227,6 +1228,40 @@ describe('server events', () => {
     for (const frame of frames) {
       expect(ServerEventSchema.safeParse(frame).success, frame.type).toBe(true);
     }
+  });
+
+  it('reads a context.updated frame without a limit source as the model window', () => {
+    const parsed = ServerEventSchema.parse({
+      kind: 'event',
+      type: 'context.updated',
+      payload: {
+        threadId: 't1',
+        usedTokens: 42000,
+        maxTokens: 200000,
+        percent: 0.21,
+        compacted: false,
+      },
+    });
+    expect(parsed.type).toBe('context.updated');
+    if (parsed.type !== 'context.updated') return;
+    expect(parsed.payload.limitSource).toBe('model');
+  });
+
+  it('rejects a context.updated frame with an unknown limit source', () => {
+    expect(
+      ServerEventSchema.safeParse({
+        kind: 'event',
+        type: 'context.updated',
+        payload: {
+          threadId: 't1',
+          usedTokens: 42000,
+          maxTokens: 200000,
+          percent: 0.21,
+          limitSource: 'guess',
+          compacted: false,
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects unknown event types and missing thread context', () => {
