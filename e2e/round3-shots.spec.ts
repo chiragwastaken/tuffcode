@@ -47,6 +47,25 @@ async function boxOf(locator: Locator): Promise<Box> {
   return box;
 }
 
+/** True when two laid-out boxes share any pixel; touching edges do not count. */
+function boxesIntersect(a: Box, b: Box): boolean {
+  const horizontal = a.x < b.x + b.width && b.x < a.x + a.width;
+  const vertical = a.y < b.y + b.height && b.y < a.y + a.height;
+  return horizontal && vertical;
+}
+
+/** Every header control shares one row, so no pair of their boxes may intersect. */
+function expectDisjointHeaderControls(boxes: Record<string, Box>, context: string): void {
+  const entries = Object.entries(boxes);
+  for (const [index, [name, box]] of entries.entries()) {
+    for (const [otherName, otherBox] of entries.slice(index + 1)) {
+      expect(boxesIntersect(box, otherBox), `${name} and ${otherName} overlap ${context}`).toBe(
+        false,
+      );
+    }
+  }
+}
+
 test('round 3 surfaces render at their measured sizes', async ({ session, workspace, mock, rpc }) => {
   const { page } = session;
   mkdirSync(SHOTS_DIR, { recursive: true });
@@ -149,6 +168,70 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   // instead of truncating after a dozen characters next to the status chip.
   const titleBox = await boxOf(threadTitle);
   expect(titleBox.width).toBeGreaterThanOrEqual(THREAD_TITLE_MIN_WIDTH_PX);
+
+  // D43: the header is one row, so no control may sit on another. The inspector
+  // column is open at this width, which is the narrow-header case from the report.
+  await expect(page.locator('aside[aria-label="Inspector"]')).toBeVisible();
+  const branchChip = page.getByTestId('thread-branch');
+  // The thread owns a worktree branch, so the chip is in the document; the header
+  // container is below its 64rem gate at 1440x900, so it must not be laid out.
+  await expect(branchChip).toHaveCount(1);
+  await expect(branchChip).toBeHidden();
+  const statusBox = await boxOf(page.getByTestId('thread-status'));
+  const activityButtonBox = await boxOf(page.getByTestId('activity-button'));
+  expectDisjointHeaderControls(
+    {
+      'thread-title': titleBox,
+      'thread-status': statusBox,
+      'thread-mode-switch': switchBox,
+      'activity-button': activityButtonBox,
+    },
+    'at 1440x900',
+  );
+
+  // The reported window: 1550px wide with the inspector open leaves the header far
+  // narrower than the viewport, so the branch chip stays gated out and the right
+  // zone stays inside its column instead of reaching under the centered switch.
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1550, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeGreaterThanOrEqual(1500);
+  await expect(branchChip).toBeHidden();
+  const wideHeaderBox = await boxOf(header);
+  expectDisjointHeaderControls(
+    {
+      'thread-title': await boxOf(threadTitle),
+      'thread-status': await boxOf(page.getByTestId('thread-status')),
+      'thread-mode-switch': await boxOf(modeSwitch),
+      'activity-button': await boxOf(page.getByTestId('activity-button')),
+    },
+    'at 1550x900',
+  );
+
+  // Past the container gate the chip does render; it then has to stay inside the
+  // right zone, truncating its branch instead of reaching under the switch.
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1920, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1920);
+  await expect(branchChip).toBeVisible();
+  const wideBranchBox = await boxOf(branchChip);
+  const wideHeaderBoxAt1920 = await boxOf(header);
+  expectDisjointHeaderControls(
+    {
+      'thread-title': await boxOf(threadTitle),
+      'thread-status': await boxOf(page.getByTestId('thread-status')),
+      'thread-mode-switch': await boxOf(modeSwitch),
+      'activity-button': await boxOf(page.getByTestId('activity-button')),
+      'thread-branch': wideBranchBox,
+    },
+    'at 1920x900',
+  );
+
+  await session.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(1440, 900);
+  });
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1440);
 
   // The topbar keeps every control clear of the caption-button corner.
   const topbar = page.locator('header').first();
@@ -266,7 +349,12 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
         childIndent,
         headerWidth: headerBox.width,
         titleWidth: titleBox.width,
+        statusWidth: statusBox.width,
+        activityButtonWidth: activityButtonBox.width,
         modeSwitchCenterOffset: switchOffset,
+        headerWidthAt1550: wideHeaderBox.width,
+        headerWidthAt1920: wideHeaderBoxAt1920.width,
+        branchWidthAt1920: wideBranchBox.width,
         topbarRightEdge: widestControlRight,
         captionLimit,
         councilNodeCount: nodeCount,

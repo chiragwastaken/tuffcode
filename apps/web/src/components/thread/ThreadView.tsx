@@ -182,14 +182,15 @@ export function ThreadView({
           ) : null}
         </div>
 
-        <div className="flex min-w-0 items-center justify-end gap-2">
+        <div className="flex min-w-0 items-center justify-end gap-2 overflow-hidden">
           {thread?.branch ? (
             <span
-              className="hidden min-w-0 shrink-0 items-center gap-1 font-mono text-2xs text-muted-foreground min-[1500px]:flex"
+              data-testid="thread-branch"
+              className="hidden min-w-0 max-w-[12rem] items-center gap-1 font-mono text-2xs text-muted-foreground @min-[64rem]:flex"
               title={thread.branch}
             >
               <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
-              <span className="max-w-56 truncate">{thread.branch}</span>
+              <span className="min-w-0 truncate">{thread.branch}</span>
             </span>
           ) : null}
           {thread ? (
