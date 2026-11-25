@@ -54,9 +54,9 @@ describe('base system prompt', () => {
   it('fits the token budget', () => {
     const tokens = estimateTokens(BASE_SYSTEM_PROMPT);
     console.log(`base system prompt: ${tokens} tokens (${BASE_SYSTEM_PROMPT.length} chars)`);
-    expect(tokens).toBeGreaterThanOrEqual(1000);
-    expect(tokens).toBeLessThanOrEqual(1500);
-    expect(tokens).toBeLessThan(1600);
+    expect(tokens).toBeGreaterThanOrEqual(1500);
+    expect(tokens).toBeLessThanOrEqual(1900);
+    expect(tokens).toBeLessThan(2000);
   });
 
   it('is ASCII only', () => {
@@ -66,13 +66,22 @@ describe('base system prompt', () => {
   it('covers the required rules', () => {
     for (const phrase of [
       'Tuffcode',
+      'one project worktree',
       'Operating loop',
       'Investigation',
       'Delegation',
       'Memory',
       'Safety',
-      'Read before you edit',
-      'Never fabricate output',
+      'Never edit a file whose relevant context you have not read',
+      'never fabricate output',
+      'Lookup budget',
+      'Brain notes',
+      'Untrusted input',
+      'SUPPORTED',
+      'BLOCKED',
+      'Plan mode',
+      'Standing rules',
+      'worktree',
       'pwsh.exe',
       'CRLF',
       '248 characters',
@@ -85,7 +94,7 @@ describe('base system prompt', () => {
     }
   });
 
-  it('orders the eleven sections', () => {
+  it('orders the fifteen sections', () => {
     const headings = [
       '# Operating loop',
       '# Investigation',
@@ -95,6 +104,10 @@ describe('base system prompt', () => {
       '# Memory',
       '# Communication',
       '# Safety',
+      '# Untrusted input',
+      '# Claims',
+      '# Plan mode',
+      '# Standing rules',
       '# Windows',
       '# Output',
     ];
@@ -282,6 +295,13 @@ describe('council prompts', () => {
     expect(COUNCIL_PLANNER_PROMPT).toContain('evidence the worker must produce');
   });
 
+  it('requires an exact acceptance command and disjoint files from the planner', () => {
+    expect(COUNCIL_PLANNER_PROMPT).toContain('exact command that proves the task');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('not a phrase like "tests pass"');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('Two tasks must never own the same file');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('they are one task');
+  });
+
   it('requires a verify step and a stop line in the worker brief', () => {
     expect(COUNCIL_WORKER_BRIEF_TEMPLATE).toContain('VERIFY:');
     expect(COUNCIL_WORKER_BRIEF_TEMPLATE).toContain('output tail');
@@ -297,6 +317,38 @@ describe('council prompts', () => {
     expect(COUNCIL_REVIEWER_PROMPT).toContain('Author evidence');
     expect(COUNCIL_REVIEWER_PROMPT).toContain('never edit the files');
     expect(COUNCIL_REVIEWER_PROMPT).toContain('Read-only');
+  });
+
+  it('defines the canonical finding shape', () => {
+    const findings = COUNCIL_REVIEWER_PROMPT.split('\n').find((line) =>
+      line.startsWith('FINDINGS:'),
+    );
+    expect(findings).toBeDefined();
+    for (const part of [
+      'severity',
+      'file:line',
+      'what is wrong',
+      'what correct looks like',
+      'the check that would catch it',
+    ]) {
+      expect(findings).toContain(part);
+    }
+  });
+
+  it('stops the worker on a missing worktree, dependency, foreign file, or contradictory brief', () => {
+    const stop = COUNCIL_WORKER_BRIEF_TEMPLATE.split('\n').find((line) =>
+      line.startsWith('- STOP AND REPORT:'),
+    );
+    expect(stop).toBeDefined();
+    for (const part of [
+      'worktree is missing',
+      'dependency is unavailable',
+      'owned by another task',
+      'the brief contradicts the repository',
+      'both citations',
+    ]) {
+      expect(stop).toContain(part);
+    }
   });
 });
 
@@ -424,11 +476,14 @@ describe('assemblePrompt', () => {
 
     const system = assembly.systemPrompt;
     expect(system.startsWith(BASE_SYSTEM_PROMPT)).toBe(true);
+    expect(system).toContain('## Brain notes\n- [rule] never force push');
+    expect(system).toContain('## Retrieved memory\n- [memory] tests live in packages');
     expect(system.indexOf(CUSTOM_INSTRUCTIONS_HEADING)).toBeLessThan(
       system.indexOf('never force push'),
     );
+    expect(system.indexOf('## Brain notes')).toBeLessThan(system.indexOf('never force push'));
     expect(system.indexOf('never force push')).toBeLessThan(
-      system.indexOf('tests live in packages'),
+      system.indexOf('## Retrieved memory'),
     );
     expect(system.indexOf('tests live in packages')).toBeLessThan(system.indexOf('<context>'));
     expect(system).not.toContain('run the tests');
@@ -449,6 +504,31 @@ describe('assemblePrompt', () => {
       'user-message',
     ]);
     expect(assembly.systemPrompt).not.toContain(CUSTOM_INSTRUCTIONS_HEADING);
+    const texts = assembly.sections.map((entry) => entry.text);
+    expect(texts.some((text) => text.startsWith('## Brain notes'))).toBe(false);
+    expect(texts.some((text) => text.startsWith('## Retrieved memory'))).toBe(false);
+  });
+
+  it('adds each brain heading only when its block is non-empty', () => {
+    const alwaysOnly = assemblePrompt({
+      brainAlways: '- [rule] stage explicit paths',
+      turnContext,
+      userMessage: 'hi',
+    });
+    expect(alwaysOnly.sections.find((entry) => entry.name === 'brain-always')?.text).toBe(
+      '## Brain notes\n- [rule] stage explicit paths',
+    );
+    expect(alwaysOnly.sections.some((entry) => entry.name === 'retrieved-memory')).toBe(false);
+
+    const retrievedOnly = assemblePrompt({
+      retrievedMemory: '- [memory] run the narrow test first',
+      turnContext,
+      userMessage: 'hi',
+    });
+    expect(retrievedOnly.sections.find((entry) => entry.name === 'retrieved-memory')?.text).toBe(
+      '## Retrieved memory\n- [memory] run the narrow test first',
+    );
+    expect(retrievedOnly.sections.some((entry) => entry.name === 'brain-always')).toBe(false);
   });
 
   it('counts every section at four characters per token', () => {
