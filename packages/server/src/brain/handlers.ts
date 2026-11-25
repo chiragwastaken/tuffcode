@@ -14,6 +14,7 @@ export interface BrainHandlers {
   'brain.upsert': (params: RpcParams<'brain.upsert'>) => RpcResult<'brain.upsert'>;
   'brain.delete': (params: RpcParams<'brain.delete'>) => RpcResult<'brain.delete'>;
   'brain.preview': (params: RpcParams<'brain.preview'>) => RpcResult<'brain.preview'>;
+  'brain.link': (params: RpcParams<'brain.link'>) => RpcResult<'brain.link'>;
 }
 
 /**
@@ -49,6 +50,13 @@ export function createBrainHandlers(deps: BrainHandlerDeps): BrainHandlers {
       });
       return assembly.slice;
     },
+    'brain.link': ({ fromId, toId, relation }) => {
+      if (fromId === toId) throw badRequest('cannot link a brain entry to itself');
+      if (store.get(fromId) === undefined) throw notFound(`brain entry not found: ${fromId}`);
+      if (store.get(toId) === undefined) throw notFound(`brain entry not found: ${toId}`);
+      deps.repos.brain.upsertEdge({ from: fromId, to: toId, relation });
+      return {};
+    },
   };
 }
 
@@ -62,5 +70,6 @@ export function createBrainRpcHandlers(deps: BrainHandlerDeps): RpcHandlers {
   map.set('brain.preview', (params) =>
     handlers['brain.preview'](params as RpcParams<'brain.preview'>),
   );
+  map.set('brain.link', (params) => handlers['brain.link'](params as RpcParams<'brain.link'>));
   return map;
 }

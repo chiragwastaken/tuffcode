@@ -211,4 +211,43 @@ describe('brain RPC handlers', () => {
       handlers['brain.preview']({ projectId: 'prj_a', threadId: 'thr_missing', message: '' }),
     ).toThrow('thread not found');
   });
+
+  it('stores a typed edge between two entries', () => {
+    const from = handlers['brain.upsert']({
+      kind: 'memory',
+      scope: 'global',
+      text: 'first fact',
+    });
+    const to = handlers['brain.upsert']({
+      kind: 'memory',
+      scope: 'global',
+      text: 'second fact',
+    });
+
+    expect(
+      handlers['brain.link']({ fromId: from.id, toId: to.id, relation: 'caused' }),
+    ).toEqual({});
+    expect(ctx.repos.brain.listEdges()).toEqual([
+      { from: from.id, to: to.id, relation: 'caused' },
+    ]);
+  });
+
+  it('rejects a link with a missing entry or a self link', () => {
+    const entry = handlers['brain.upsert']({
+      kind: 'memory',
+      scope: 'global',
+      text: 'lonely fact',
+    });
+
+    expect(() =>
+      handlers['brain.link']({ fromId: entry.id, toId: 'brn_missing', relation: 'about' }),
+    ).toThrow(/not found/);
+    expect(() =>
+      handlers['brain.link']({ fromId: 'brn_missing', toId: entry.id, relation: 'about' }),
+    ).toThrow(/not found/);
+    expect(() =>
+      handlers['brain.link']({ fromId: entry.id, toId: entry.id, relation: 'about' }),
+    ).toThrow(/itself/);
+    expect(ctx.repos.brain.listEdges()).toEqual([]);
+  });
 });
