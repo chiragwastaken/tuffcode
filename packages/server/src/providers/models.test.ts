@@ -68,8 +68,32 @@ describe('provider model discovery', () => {
 
     expect(result).toEqual({
       models: [
-        { id: 'sonnet', label: 'Sonnet', contextWindow: null },
-        { id: 'opus', label: 'Opus', contextWindow: null },
+        {
+          id: 'sonnet',
+          label: 'Sonnet',
+          contextWindow: null,
+          maxOutputTokens: null,
+          capabilities: {
+            tools: true,
+            vision: false,
+            reasoning: true,
+            reasoningEfforts: ['low', 'medium', 'high'],
+          },
+          reasoningEffort: null,
+        },
+        {
+          id: 'opus',
+          label: 'Opus',
+          contextWindow: null,
+          maxOutputTokens: null,
+          capabilities: {
+            tools: true,
+            vision: false,
+            reasoning: true,
+            reasoningEfforts: ['low', 'medium', 'high'],
+          },
+          reasoningEffort: null,
+        },
       ],
       source: 'sdk',
     });
@@ -111,18 +135,23 @@ describe('provider model discovery', () => {
   it('uses the codex app-server list when it answers', async () => {
     const provider = seedProvider(ctx, 'codex', { models: [{ id: 'config', label: 'Config' }] });
     let seenCli = '';
+    const listed = {
+      id: 'gpt-6',
+      label: 'GPT-6',
+      contextWindow: 400_000,
+      maxOutputTokens: null,
+      capabilities: null,
+      reasoningEffort: null,
+    };
     const result = await discoverModels(provider, {
       secret: null,
       resolveCommand: resolveTo('C:/tools/codex.exe'),
       listCodexModels: async (cliPath, timeoutMs) => {
         seenCli = `${cliPath}:${timeoutMs}`;
-        return [{ id: 'gpt-6', label: 'GPT-6', contextWindow: 400_000 }];
+        return [listed];
       },
     });
-    expect(result).toEqual({
-      models: [{ id: 'gpt-6', label: 'GPT-6', contextWindow: 400_000 }],
-      source: 'sdk',
-    });
+    expect(result).toEqual({ models: [listed], source: 'sdk' });
     expect(seenCli).toBe(`C:/tools/codex.exe:${DISCOVERY_TIMEOUT_MS}`);
   });
 
@@ -137,7 +166,16 @@ describe('provider model discovery', () => {
         listCodexModels: async () => null,
       }),
     ).resolves.toEqual({
-      models: [{ id: 'local', label: 'Local', contextWindow: 8_192 }],
+      models: [
+        {
+          id: 'local',
+          label: 'Local',
+          contextWindow: 8_192,
+          maxOutputTokens: null,
+          capabilities: null,
+          reasoningEffort: null,
+        },
+      ],
       source: 'manual',
     });
   });
@@ -164,7 +202,21 @@ describe('provider model discovery', () => {
     expect(seenHeaders['x-api-key']).toBe('sk-ant-secret');
     expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
     expect(result).toEqual({
-      models: [{ id: 'claude-opus-4-5', label: 'Opus 4.5', contextWindow: null }],
+      models: [
+        {
+          id: 'claude-opus-4-5',
+          label: 'Opus 4.5',
+          contextWindow: null,
+          maxOutputTokens: null,
+          capabilities: {
+            tools: true,
+            vision: false,
+            reasoning: false,
+            reasoningEfforts: [],
+          },
+          reasoningEffort: null,
+        },
+      ],
       source: 'api',
     });
   });
@@ -235,7 +287,16 @@ describe('provider model discovery', () => {
   it('returns configured models for acp and opencode', async () => {
     const acp = seedProvider(ctx, 'acp', { models: [{ id: 'agent', label: 'Agent' }] });
     await expect(discoverModels(acp, { secret: null })).resolves.toEqual({
-      models: [{ id: 'agent', label: 'Agent', contextWindow: null }],
+      models: [
+        {
+          id: 'agent',
+          label: 'Agent',
+          contextWindow: null,
+          maxOutputTokens: null,
+          capabilities: null,
+          reasoningEffort: null,
+        },
+      ],
       source: 'manual',
     });
 
@@ -384,7 +445,16 @@ describe('provider model discovery', () => {
     ];
     const merged = mergeModels(
       existing,
-      [{ id: 'fresh', label: 'Fresh', contextWindow: 1_000 }],
+      [
+        {
+          id: 'fresh',
+          label: 'Fresh',
+          contextWindow: 1_000,
+          maxOutputTokens: null,
+          capabilities: null,
+          reasoningEffort: null,
+        },
+      ],
       new Set(['legacy']),
     );
     expect(merged.map((model) => model.modelId)).toEqual(['fresh', 'legacy']);
@@ -402,17 +472,236 @@ describe('provider model discovery', () => {
     ];
     const merged = mergeModels(
       existing,
-      [{ id: 'fresh', label: 'Fresh', contextWindow: null }],
+      [
+        {
+          id: 'fresh',
+          label: 'Fresh',
+          contextWindow: null,
+          maxOutputTokens: null,
+          capabilities: null,
+          reasoningEffort: null,
+        },
+      ],
       new Set(),
     );
     expect(merged.map((model) => model.modelId)).toEqual(['fresh']);
   });
 
-  it('normalizes configured models and ignores malformed entries', () => {
+  it('carries capabilities and reasoning through a merge', () => {
+    const freshCapabilities = {
+      tools: true,
+      vision: true,
+      reasoning: true,
+      reasoningEfforts: ['low', 'medium', 'high'],
+    };
+    const keptCapabilities = {
+      tools: true,
+      vision: false,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high'],
+    };
+    const existing = [
+      {
+        providerId: 'prv_x',
+        modelId: 'default',
+        label: 'Default',
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        capabilities: keptCapabilities,
+        reasoningEffort: 'medium' as const,
+        isDefault: true,
+      },
+    ];
+
+    const merged = mergeModels(
+      existing,
+      [
+        {
+          id: 'fresh',
+          label: 'Fresh',
+          contextWindow: 200_000,
+          maxOutputTokens: 8_192,
+          capabilities: freshCapabilities,
+          reasoningEffort: 'high' as const,
+        },
+      ],
+      new Set(),
+    );
+
+    expect(merged).toEqual([
+      {
+        modelId: 'fresh',
+        label: 'Fresh',
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+        capabilities: freshCapabilities,
+        reasoningEffort: 'high',
+        isDefault: false,
+      },
+      {
+        modelId: 'default',
+        label: 'Default',
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        capabilities: keptCapabilities,
+        reasoningEffort: 'medium',
+        isDefault: true,
+      },
+    ]);
+  });
+
+  it('reads an OpenRouter-style entry into limits and capabilities', async () => {
+    const provider = seedProvider(ctx, 'openai-compatible', {
+      baseUrl: 'https://openrouter.test/api/v1',
+    });
+    const result = await discoverModels(provider, {
+      secret: null,
+      fetchFn: fakeFetch(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'vendor/model',
+                  name: 'Vendor Model',
+                  top_provider: { context_length: 200_000, max_completion_tokens: 16_384 },
+                  architecture: { input_modalities: ['text', 'image'] },
+                  supported_parameters: ['tools', 'reasoning'],
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+      ),
+    });
+
+    expect(result.models).toEqual([
+      {
+        id: 'vendor/model',
+        label: 'Vendor Model',
+        contextWindow: 200_000,
+        maxOutputTokens: 16_384,
+        capabilities: {
+          tools: true,
+          vision: true,
+          reasoning: true,
+          reasoningEfforts: ['low', 'medium', 'high'],
+        },
+        reasoningEffort: null,
+      },
+    ]);
+  });
+
+  it('defaults a bare entry to tools without vision or reasoning', async () => {
+    const provider = seedProvider(ctx, 'openai-compatible', {
+      baseUrl: 'https://gateway.test',
+    });
+    const result = await discoverModels(provider, {
+      secret: null,
+      fetchFn: fakeFetch(
+        async () =>
+          new Response(JSON.stringify({ data: [{ id: 'plain' }] }), { status: 200 }),
+      ),
+    });
+
+    expect(result.models).toEqual([
+      {
+        id: 'plain',
+        label: 'plain',
+        contextWindow: null,
+        maxOutputTokens: null,
+        capabilities: {
+          tools: true,
+          vision: false,
+          reasoning: false,
+          reasoningEfforts: [],
+        },
+        reasoningEffort: null,
+      },
+    ]);
+  });
+
+  it('prefers an explicit capabilities object over supported_parameters', async () => {
+    const provider = seedProvider(ctx, 'openai-compatible', {
+      baseUrl: 'https://gateway.test',
+    });
+    const result = await discoverModels(provider, {
+      secret: null,
+      fetchFn: fakeFetch(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'declared',
+                  capabilities: {
+                    tools: false,
+                    vision: true,
+                    reasoning: false,
+                    reasoningEfforts: [],
+                  },
+                  supported_parameters: ['tools', 'reasoning'],
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+      ),
+    });
+
+    expect(result.models[0]?.capabilities).toEqual({
+      tools: false,
+      vision: true,
+      reasoning: false,
+      reasoningEfforts: [],
+    });
+  });
+
+  it('reads model metadata from the provider config seed', () => {
     expect(
       configuredModels({
-        models: [{ id: 'a', label: 'A', contextWindow: 4_096 }, { id: '' }, 'plain', 42],
+        models: [
+          {
+            id: 'a',
+            label: 'A',
+            contextWindow: 4_096,
+            maxOutputTokens: 1_024,
+            capabilities: {
+              tools: true,
+              vision: true,
+              reasoning: true,
+              reasoningEfforts: ['high'],
+            },
+            reasoningEffort: 'high',
+          },
+          { id: 'b', label: 'B' },
+          { id: '' },
+          'plain',
+          42,
+        ],
       }),
-    ).toEqual([{ id: 'a', label: 'A', contextWindow: 4_096 }]);
+    ).toEqual([
+      {
+        id: 'a',
+        label: 'A',
+        contextWindow: 4_096,
+        maxOutputTokens: 1_024,
+        capabilities: {
+          tools: true,
+          vision: true,
+          reasoning: true,
+          reasoningEfforts: ['high'],
+        },
+        reasoningEffort: 'high',
+      },
+      {
+        id: 'b',
+        label: 'B',
+        contextWindow: null,
+        maxOutputTokens: null,
+        capabilities: null,
+        reasoningEffort: null,
+      },
+    ]);
   });
 });

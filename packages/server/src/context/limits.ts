@@ -5,15 +5,21 @@
  * contract default is the last resort. Model rows are the source of truth once a
  * provider has been refreshed; the provider config's `models` array covers rows that
  * predate per-model limits, and `provider.config.contextWindow` covers single-model
- * providers that never listed a model.
+ * providers that never listed a model. D46 adds `source`, so a 200k default is never
+ * presented as if the provider declared it.
  */
 import type { Model, Settings, Thread } from '@tuffcode/contracts';
 import type { Repos } from '../db/repos/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from './usage.js';
 
+/** Which precedence step supplied the context window. */
+export type LimitSource = 'model' | 'config' | 'settings' | 'default';
+
 export interface ModelLimits {
   contextWindow: number;
   maxOutputTokens: number;
+  /** The step that supplied `contextWindow`; `maxOutputTokens` keeps its own precedence. */
+  source: LimitSource;
 }
 
 export interface ModelLimitsInput {
@@ -44,18 +50,27 @@ function configModelLimit(
   return undefined;
 }
 
+function contextWindowWithSource(
+  input: ModelLimitsInput,
+  row: Model | undefined,
+): { contextWindow: number; source: LimitSource } {
+  const fromModel = positiveInteger(row?.contextWindow);
+  if (fromModel !== undefined) return { contextWindow: fromModel, source: 'model' };
+  const fromConfigModel = configModelLimit(input.providerConfig, input.modelId, 'contextWindow');
+  if (fromConfigModel !== undefined) return { contextWindow: fromConfigModel, source: 'config' };
+  const fromConfig = positiveInteger(input.providerConfig['contextWindow']);
+  if (fromConfig !== undefined) return { contextWindow: fromConfig, source: 'config' };
+  return { contextWindow: DEFAULT_CONTEXT_WINDOW, source: 'default' };
+}
+
 export function modelLimits(input: ModelLimitsInput): ModelLimits {
   const row = input.models.find((model) => model.modelId === input.modelId);
-  const contextWindow =
-    positiveInteger(row?.contextWindow) ??
-    configModelLimit(input.providerConfig, input.modelId, 'contextWindow') ??
-    positiveInteger(input.providerConfig['contextWindow']) ??
-    DEFAULT_CONTEXT_WINDOW;
+  const { contextWindow, source } = contextWindowWithSource(input, row);
   const maxOutputTokens =
     positiveInteger(row?.maxOutputTokens) ??
     configModelLimit(input.providerConfig, input.modelId, 'maxOutputTokens') ??
     input.settings.maxOutputTokens;
-  return { contextWindow, maxOutputTokens };
+  return { contextWindow, maxOutputTokens, source };
 }
 
 /** Resolves the thread's model row and provider config into the effective limits. */

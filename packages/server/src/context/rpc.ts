@@ -41,6 +41,7 @@ export function createContextHandlers(deps: ContextHandlerDeps): RpcHandlers {
       usedTokens: usage.usedTokens,
       maxTokens: usage.maxTokens,
       percent: usage.percent,
+      limitSource: usage.limitSource,
       segments: usage.segments,
     };
   });

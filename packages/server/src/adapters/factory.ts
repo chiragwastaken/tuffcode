@@ -11,8 +11,10 @@ import {
   type AdapterDeps,
   type AdapterLogger,
   type AdapterSession,
+  type ModelCapabilities,
   type ProviderConfig,
   type ProviderKind,
+  type ReasoningEffort,
 } from '@tuffcode/contracts';
 import type { ProviderRecord } from '../db/repos/index.js';
 import { createResolveCommand, type ResolveCommand } from './resolveCommand.js';
@@ -25,6 +27,10 @@ export interface DiscoveredModel {
   id: string;
   label: string;
   contextWindow: number | null;
+  maxOutputTokens: number | null;
+  /** `null` when the runtime reported no capability hints at all. */
+  capabilities: ModelCapabilities | null;
+  reasoningEffort: ReasoningEffort | null;
 }
 
 /**

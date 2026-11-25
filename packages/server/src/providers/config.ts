@@ -1,4 +1,4 @@
-import type { ProviderKind } from '@tuffcode/contracts';
+import { ReasoningEffortSchema, type ProviderKind } from '@tuffcode/contracts';
 import { badRequest } from '../errors.js';
 
 /**
@@ -77,6 +77,39 @@ function optionalPositiveInteger(config: Record<string, unknown>, key: string): 
   }
 }
 
+/** A per-model token limit: absent, `null`, or a positive integer. */
+function optionalModelLimit(record: Record<string, unknown>, path: string): void {
+  const value = record['maxOutputTokens'];
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    fail(`${path}.maxOutputTokens`, 'must be a positive integer or null');
+  }
+}
+
+/** The contract capability object, or `null` to leave the model's capabilities unknown. */
+function optionalModelCapabilities(record: Record<string, unknown>, path: string): void {
+  const value = record['capabilities'];
+  if (value === undefined || value === null) return;
+  if (!isPlainObject(value)) fail(`${path}.capabilities`, 'must be an object or null');
+  for (const key of ['tools', 'vision', 'reasoning']) {
+    if (typeof value[key] !== 'boolean') {
+      fail(`${path}.capabilities.${key}`, 'must be a boolean');
+    }
+  }
+  const efforts = value['reasoningEfforts'];
+  if (!Array.isArray(efforts) || !efforts.every((item) => typeof item === 'string')) {
+    fail(`${path}.capabilities.reasoningEfforts`, 'must be an array of strings');
+  }
+}
+
+function optionalModelReasoningEffort(record: Record<string, unknown>, path: string): void {
+  const value = record['reasoningEffort'];
+  if (value === undefined || value === null) return;
+  if (!ReasoningEffortSchema.safeParse(value).success) {
+    fail(`${path}.reasoningEffort`, 'must be none, minimal, low, medium, high, or null');
+  }
+}
+
 function validateModels(config: Record<string, unknown>): void {
   const models = config['models'];
   if (models === undefined) return;
@@ -97,6 +130,9 @@ function validateModels(config: Record<string, unknown>): void {
         fail(`${path}.contextWindow`, 'must be a positive integer or null');
       }
     }
+    optionalModelLimit(model, path);
+    optionalModelCapabilities(model, path);
+    optionalModelReasoningEffort(model, path);
     const isDefault = model['isDefault'];
     if (isDefault !== undefined && typeof isDefault !== 'boolean') {
       fail(`${path}.isDefault`, 'must be a boolean');

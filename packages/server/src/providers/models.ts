@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process';
 import { listClaudeModels, type ClaudeModelQueryFn } from '@tuffcode/adapters';
-import type { Model } from '@tuffcode/contracts';
+import {
+  ReasoningEffortSchema,
+  type Model,
+  type ModelCapabilities,
+  type ReasoningEffort,
+} from '@tuffcode/contracts';
 import { z } from 'zod';
 import type { ProviderRecord, ReplaceModelInput, Repos } from '../db/repos/index.js';
 import {
@@ -77,6 +82,88 @@ function firstNumber(record: Record<string, unknown>, keys: readonly string[]): 
   return null;
 }
 
+/** The first positive number under a nested object, for payloads like `top_provider`. */
+function firstNestedNumber(
+  record: Record<string, unknown>,
+  parent: string,
+  keys: readonly string[],
+): number | null {
+  const nested = recordOf(record[parent]);
+  return nested === null ? null : firstNumber(nested, keys);
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+/** What a payload that declares nothing about capabilities is assumed to do. */
+const DEFAULT_CAPABILITIES: ModelCapabilities = {
+  tools: true,
+  vision: false,
+  reasoning: false,
+  reasoningEfforts: [],
+};
+
+const DEFAULT_REASONING_EFFORTS = ['low', 'medium', 'high'];
+
+function capabilityFlag(
+  record: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+/** An explicit `capabilities` object wins; `null` when the payload carries none. */
+function explicitCapabilities(record: Record<string, unknown>): ModelCapabilities | null {
+  const parsed = recordOf(record['capabilities']);
+  if (parsed === null) return null;
+  return {
+    tools: capabilityFlag(parsed, 'tools', DEFAULT_CAPABILITIES.tools),
+    vision: capabilityFlag(parsed, 'vision', DEFAULT_CAPABILITIES.vision),
+    reasoning: capabilityFlag(parsed, 'reasoning', DEFAULT_CAPABILITIES.reasoning),
+    reasoningEfforts: stringArray(parsed['reasoningEfforts']),
+  };
+}
+
+/** Capability hints OpenRouter-style list entries carry beside the id. */
+function inferredCapabilities(record: Record<string, unknown>): ModelCapabilities {
+  const capabilities: ModelCapabilities = { ...DEFAULT_CAPABILITIES, reasoningEfforts: [] };
+  const supported = record['supported_parameters'];
+  if (Array.isArray(supported)) {
+    const names = stringArray(supported);
+    capabilities.tools = names.includes('tools') || names.includes('tool_choice');
+    capabilities.reasoning =
+      names.includes('reasoning') || names.includes('include_reasoning');
+  }
+  const architecture = recordOf(record['architecture']);
+  if (stringArray(architecture?.['input_modalities']).includes('image')) {
+    capabilities.vision = true;
+  }
+  for (const modality of [record['modality'], architecture?.['modality']]) {
+    if (typeof modality === 'string' && modality.includes('image')) capabilities.vision = true;
+  }
+  return capabilities;
+}
+
+function capabilitiesOf(record: Record<string, unknown>): ModelCapabilities {
+  const capabilities = explicitCapabilities(record) ?? inferredCapabilities(record);
+  if (capabilities.reasoning && capabilities.reasoningEfforts.length === 0) {
+    capabilities.reasoningEfforts = [...DEFAULT_REASONING_EFFORTS];
+  }
+  return capabilities;
+}
+
+function reasoningEffortOf(record: Record<string, unknown>): ReasoningEffort | null {
+  const parsed = ReasoningEffortSchema.safeParse(
+    record['reasoningEffort'] ?? record['reasoning_effort'],
+  );
+  return parsed.success ? parsed.data : null;
+}
+
 /** The entries of a model list body: `{data:[]}`, `{models:[]}`, or a bare array. */
 function modelEntries(value: unknown, depth = 0): unknown[] {
   if (Array.isArray(value)) return value;
@@ -97,21 +184,45 @@ function modelEntries(value: unknown, depth = 0): unknown[] {
 function toDiscovered(entry: unknown): DiscoveredModel | null {
   if (typeof entry === 'string') {
     const id = entry.trim();
-    return id.length === 0 ? null : { id, label: id, contextWindow: null };
+    if (id.length === 0) return null;
+    return {
+      id,
+      label: id,
+      contextWindow: null,
+      maxOutputTokens: null,
+      capabilities: null,
+      reasoningEffort: null,
+    };
   }
   const record = recordOf(entry);
   if (record === null) return null;
   const id = firstString(record, ['id', 'value', 'model', 'slug', 'name']);
   if (id === null) return null;
   const label = firstString(record, ['displayName', 'display_name', 'label', 'name']) ?? id;
-  const contextWindow = firstNumber(record, [
-    'contextWindow',
-    'context_window',
-    'context_length',
-    'maxContextTokens',
-    'max_context_tokens',
-  ]);
-  return { id, label, contextWindow };
+  const contextWindow =
+    firstNumber(record, [
+      'contextWindow',
+      'context_window',
+      'context_length',
+      'maxContextTokens',
+      'max_context_tokens',
+      'max_model_len',
+    ]) ?? firstNestedNumber(record, 'top_provider', ['context_length']);
+  const maxOutputTokens =
+    firstNumber(record, [
+      'maxOutputTokens',
+      'max_output_tokens',
+      'max_completion_tokens',
+      'max_tokens',
+    ]) ?? firstNestedNumber(record, 'top_provider', ['max_completion_tokens']);
+  return {
+    id,
+    label,
+    contextWindow,
+    maxOutputTokens,
+    capabilities: capabilitiesOf(record),
+    reasoningEffort: reasoningEffortOf(record),
+  };
 }
 
 function normalize(value: unknown): DiscoveredModel[] {
@@ -160,6 +271,9 @@ function configModelRows(config: Record<string, unknown>): ReplaceModelInput[] {
       modelId: id,
       label: firstString(record, ['label']) ?? id,
       contextWindow: firstNumber(record, ['contextWindow']),
+      maxOutputTokens: firstNumber(record, ['maxOutputTokens']),
+      capabilities: explicitCapabilities(record),
+      reasoningEffort: reasoningEffortOf(record),
       isDefault: record['isDefault'] === true,
     });
   }
@@ -168,11 +282,16 @@ function configModelRows(config: Record<string, unknown>): ReplaceModelInput[] {
 
 /** Models listed in the provider config; manual entry stays the fallback for every kind. */
 export function configuredModels(config: Record<string, unknown>): DiscoveredModel[] {
-  return configModelRows(config).map(({ modelId, label, contextWindow }) => ({
-    id: modelId,
-    label,
-    contextWindow,
-  }));
+  return configModelRows(config).map(
+    ({ modelId, label, contextWindow, maxOutputTokens, capabilities, reasoningEffort }) => ({
+      id: modelId,
+      label,
+      contextWindow,
+      maxOutputTokens: maxOutputTokens ?? null,
+      capabilities: capabilities ?? null,
+      reasoningEffort: reasoningEffort ?? null,
+    }),
+  );
 }
 
 /** The same list as repo rows, so a config edit seeds `provider_models`. */
@@ -203,7 +322,20 @@ async function discoverClaude(
   });
   if (rows.length > 0) {
     return {
-      models: rows.map((row) => ({ id: row.id, label: row.label, contextWindow: null })),
+      models: rows.map((row) => ({
+        id: row.id,
+        label: row.label,
+        // The CLI reports ids and labels only; Claude models all accept tools and thinking.
+        contextWindow: null,
+        maxOutputTokens: null,
+        capabilities: {
+          tools: true,
+          vision: false,
+          reasoning: true,
+          reasoningEfforts: [...DEFAULT_REASONING_EFFORTS],
+        },
+        reasoningEffort: null,
+      })),
       source: 'sdk',
     };
   }
@@ -452,6 +584,9 @@ export function mergeModels(
       modelId: model.id,
       label: model.label,
       contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxOutputTokens,
+      capabilities: model.capabilities,
+      reasoningEffort: model.reasoningEffort,
       isDefault: false,
     });
   }
@@ -462,6 +597,9 @@ export function mergeModels(
       modelId: model.modelId,
       label: model.label,
       contextWindow: model.contextWindow ?? null,
+      maxOutputTokens: model.maxOutputTokens ?? null,
+      capabilities: model.capabilities ?? null,
+      reasoningEffort: model.reasoningEffort ?? null,
       isDefault: model.isDefault,
     });
   }
