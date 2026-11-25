@@ -3,6 +3,7 @@ import { EmptyState, ScrollArea, Spinner } from '@tuffcode/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { injectionRows } from './context-model';
 import { takeContextPreview, subscribePanelRequests } from './panel-requests';
 
 /** What `/context` shows: the sections the next turn would send and their budget. */
@@ -84,6 +85,8 @@ export function ContextPanel({ threadId }: ContextPanelProps) {
     );
   }
 
+  const injection = preview.injectedIds === undefined ? null : injectionRows(preview);
+
   return (
     <ScrollArea className="h-full min-h-0">
       <div data-testid="context-panel" className="flex flex-col gap-3 p-3">
@@ -117,6 +120,44 @@ export function ContextPanel({ threadId }: ContextPanelProps) {
               </li>
             ))}
           </ul>
+        )}
+        {injection === null ? null : (
+          <section
+            aria-label="Brain injection"
+            data-testid="context-injection"
+            className="flex flex-col gap-1"
+          >
+            <h2 className="text-xs font-medium text-foreground">Brain injection</h2>
+            <span data-testid="context-injection-count" className="text-2xs text-muted-foreground">
+              {injection.count === 0
+                ? 'No brain entries injected'
+                : `${injection.count} ${injection.count === 1 ? 'entry' : 'entries'} injected`}
+            </span>
+            {injection.rows.length === 0 ? null : (
+              <ul aria-label="Injected brain entries" className="flex flex-col gap-1">
+                {injection.rows.map((row) => (
+                  <li
+                    key={row.id}
+                    data-testid="context-injection-row"
+                    className="flex min-w-0 items-baseline gap-2 text-2xs"
+                  >
+                    <span
+                      title={row.id}
+                      className="max-w-[50%] shrink-0 truncate font-mono text-foreground"
+                    >
+                      {row.id}
+                    </span>
+                    <span
+                      title={row.reason}
+                      className="min-w-0 flex-1 truncate text-muted-foreground"
+                    >
+                      {row.reason}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         )}
         <button
           type="button"
