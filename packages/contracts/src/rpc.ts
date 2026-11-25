@@ -92,6 +92,10 @@ export const PromptPreviewSchema = z.object({
     })
     .array(),
   total: z.number().int().nonnegative(),
+  /** Brain entry ids this message injects, in injection order; absent when not reported. */
+  injectedIds: IdSchema.array().optional(),
+  /** Why each injected id made the slice, keyed by id. */
+  injectionReasons: z.record(z.string(), z.string()).optional(),
 });
 export type PromptPreview = z.infer<typeof PromptPreviewSchema>;
 

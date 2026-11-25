@@ -10,6 +10,7 @@ import {
   type TurnContext,
 } from '@tuffcode/contracts';
 import { newId, resolveWithin, type Logger } from '@tuffcode/shared';
+import { captureStandingRules } from '../brain/rules.js';
 import { threadLimits, type ModelLimits } from '../context/limits.js';
 import { measureContext } from '../context/service.js';
 import type { ContextSectionInput } from '../context/usage.js';
@@ -401,6 +402,24 @@ export function createRunner(deps: RunnerDeps): Runner {
         injectedIds: brain.injectedIds,
         createdAt,
       });
+      // A rule the user states mid-chat is stored for the following turn; a capture
+      // failure is a brain problem, never a reason to fail the turn.
+      try {
+        const captured = captureStandingRules(repos, {
+          text,
+          projectId: thread.projectId,
+          threadId: thread.id,
+        });
+        if (captured.length > 0) {
+          logger.debug('standing rules captured', { threadId: thread.id, turnId, ids: captured });
+        }
+      } catch (error) {
+        logger.warn('standing rule capture failed', {
+          threadId: thread.id,
+          turnId,
+          reason: errorMessage(error),
+        });
+      }
       if (brain.injectedIds.length > 0) repos.brain.touch(brain.injectedIds, createdAt);
 
       const adapterKey = `${provider.id}:${thread.modelId}`;

@@ -11,6 +11,8 @@ import {
 } from './adapters/factory.js';
 import { createResolveCommand } from './adapters/resolveCommand.js';
 import { ensureToken, verifyToken } from './auth.js';
+import { searchMemory } from './brain/search.js';
+import { createBrainStore } from './brain/store.js';
 import { createCommandHandlers } from './commands/handlers.js';
 import { createCouncil } from './council/service.js';
 import { closeDb, migrate, openDb } from './db/index.js';
@@ -18,6 +20,7 @@ import { createRepos, type Repos } from './db/repos/index.js';
 import { createWarningLog, type DiagnosticsInput } from './diagnostics.js';
 import { createEventBus, type EventBus } from './events.js';
 import { createHttpServer as createHttpSurface } from './http.js';
+import { createMcpService, type McpService } from './mcp/service.js';
 import { createProvidersService, type ProvidersService } from './providers/service.js';
 import { createTerminalHandlers } from './pty/handlers.js';
 import { TerminalService } from './pty/service.js';
@@ -27,6 +30,7 @@ import { createSecretBridge, type SecretPort, type Secrets } from './secrets/bri
 import { createSkillHandlers } from './skills/handlers.js';
 import { createSubagents } from './subagents/service.js';
 import type { Subagents } from './subagents/types.js';
+import { createExtraTools } from './tools/extra.js';
 import { attachWebSocket, type AttachedWebSocket } from './ws.js';
 
 export interface ServerJson {
@@ -61,6 +65,7 @@ export interface RunningServer {
   runner: Runner;
   providers: ProvidersService;
   secrets: Secrets;
+  mcp: McpService;
   close(): Promise<void>;
 }
 
@@ -115,12 +120,25 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   });
 
   const providers = createProvidersService({ repos, bus, secrets, resolveCommand });
+  const mcp = createMcpService(repos);
+  const brainStore = createBrainStore(repos.brain);
+  const extraTools = createExtraTools({
+    repos,
+    settings: () => repos.settings.get(),
+    providers,
+    mcp,
+    brain: {
+      search: (input) => searchMemory(brainStore, input),
+      add: (input) => brainStore.upsert(input),
+    },
+  });
   // The runner needs adapter deps and the subagent service needs the runner, so the
   // harness hook resolves the service through a holder assigned right after creation.
   let subagentsRef: Subagents | undefined;
   const adapterDeps = createAdapterDeps({
     logger: adapterLogger,
     resolveCommand,
+    extraTool: extraTools.run,
     spawnSubagent: async (request) => {
       if (subagentsRef === undefined) throw new Error('subagent service is not ready');
       return subagentsRef.spawnFromTool(request);
@@ -136,7 +154,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       createAdapterForProvider(provider, adapterDeps, secret, options.adapterOverrides ?? {}),
   });
   runner.recoverOrphanedRuns();
-  const council = createCouncil({ repos, bus, runner, logger });
+  const council = createCouncil({
+    repos,
+    bus,
+    runner,
+    logger,
+    // Council runs unattended, so its runner answers child approvals through the runner.
+    ports: {
+      approve: (threadId, approvalId, decision) => runner.approve(threadId, approvalId, decision),
+    },
+  });
   const subagents = createSubagents({
     repos,
     bus,
@@ -182,6 +209,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     diagnostics,
     council,
     subagents,
+    mcp,
     featureHandlers: [
       createTerminalHandlers(terminals),
       ...(options.featureHandlers ?? []),
@@ -241,6 +269,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     runner,
     providers,
     secrets,
+    mcp,
     close,
   };
 }

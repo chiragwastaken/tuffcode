@@ -664,6 +664,47 @@ describe('thread runner', () => {
     f.adapter.end();
   });
 
+  it('captures a standing rule from the message once and never duplicates it', async () => {
+    const f = setup();
+
+    const firstEnd = waitForTurnEnd(f.bus);
+    const first = await f.runner.send('thr_a', 'always remember: use pnpm');
+    f.adapter.push({ type: 'turn.finished', turnId: first.turnId, reason: 'complete' });
+    await firstEnd;
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    const rules = f.ctx.repos.brain.list({ kind: 'rule' });
+    expect(rules.map((entry) => entry.text)).toEqual(['use pnpm']);
+    expect(rules[0]?.appliesTo).toBe('all');
+
+    const secondEnd = waitForTurnEnd(f.bus);
+    const second = await f.runner.send('thr_a', 'always remember: use pnpm');
+    f.adapter.push({ type: 'turn.finished', turnId: second.turnId, reason: 'complete' });
+    await secondEnd;
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    expect(f.ctx.repos.brain.list({ kind: 'rule' })).toHaveLength(1);
+  });
+
+  it('keeps the turn running when standing rule capture fails', async () => {
+    const f = setup();
+    const upsert = vi.spyOn(f.ctx.repos.brain, 'upsert');
+    upsert.mockImplementation(() => {
+      throw new Error('brain store offline');
+    });
+
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'always remember: use pnpm');
+
+    expect(f.turnStatus(turnId)).toBe('running');
+    expect(f.ctx.repos.messages.list('thr_a')).toHaveLength(1);
+
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+    expect(f.turnStatus(turnId)).toBe('complete');
+    upsert.mockRestore();
+  });
+
   it('assembles base, custom instructions, brain, context, then the user message', async () => {
     const f = setup();
     f.ctx.repos.settings.patch({ customInstructions: 'Prefer pnpm.\r\nNever force push.' });

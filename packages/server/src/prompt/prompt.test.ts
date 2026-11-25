@@ -12,6 +12,8 @@ const ISO = '2026-11-24T10:00:00.000Z';
 interface PreviewResult {
   sections: PromptSection[];
   total: number;
+  injectedIds?: string[];
+  injectionReasons?: Record<string, string>;
 }
 
 function preview(ctx: TestContext, message: string): PreviewResult {
@@ -111,6 +113,37 @@ describe('prompt planning', () => {
     expect(system).toContain('preview must match the send path');
     // A thread without a worktree previews against the project path.
     expect(system).toContain(ctx.env.root);
+  });
+
+  it('reports the injected brain ids and their reasons', () => {
+    const ctx = setup();
+    const rule = ctx.repos.brain.upsert({
+      kind: 'rule',
+      scope: 'global',
+      text: 'never use emdash',
+      appliesTo: 'all',
+    });
+
+    const result = preview(ctx, 'hello');
+    expect(result.injectedIds).toEqual([rule.id]);
+    expect(result.injectionReasons).toEqual({ [rule.id]: 'standing rule for every turn' });
+    expect(result.sections.some((section) => section.name === 'brain-always')).toBe(true);
+  });
+
+  it('reports no injected ids when the brain kill switch is off', () => {
+    const ctx = setup();
+    ctx.repos.brain.upsert({
+      kind: 'rule',
+      scope: 'global',
+      text: 'never use emdash',
+      appliesTo: 'all',
+    });
+    ctx.repos.settings.patch({ brainEnabled: false });
+
+    const result = preview(ctx, 'hello');
+    expect(result.injectedIds).toEqual([]);
+    expect(result.injectionReasons).toEqual({});
+    expect(result.sections.some((section) => section.name === 'brain-always')).toBe(false);
   });
 
   it('never advances brain usage counters', () => {

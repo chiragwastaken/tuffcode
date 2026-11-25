@@ -34,6 +34,8 @@ import {
   pushThread,
   revertCheckpoint,
 } from './git/index.js';
+import { registerMcpRpc } from './mcp/rpc.js';
+import type { McpService } from './mcp/service.js';
 import { addProject, listProjects, refreshProject, removeProject } from './projects.js';
 import { createPromptHandlers } from './prompt/rpc.js';
 import { createProviderHandlers } from './providers/rpc.js';
@@ -59,6 +61,8 @@ export interface RpcDeps {
   council?: Council;
   /** Present once the subagent slice is wired; absent leaves its methods unregistered. */
   subagents?: Subagents;
+  /** Present once the MCP slice is wired; absent leaves its methods unregistered. */
+  mcp?: McpService;
   featureHandlers: readonly RpcHandlers[];
 }
 
@@ -202,6 +206,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   if (deps.subagents !== undefined) {
     register(createSubagentHandlers({ subagents: deps.subagents }));
   }
+  if (deps.mcp !== undefined) registerMcpRpc(register, deps.mcp);
   for (const feature of deps.featureHandlers) register(feature);
 
   return handlers;
