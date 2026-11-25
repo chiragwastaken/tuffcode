@@ -166,15 +166,6 @@ export function ThreadView({
           >
             {title}
           </span>
-          {thread ? (
-            <span
-              data-testid="thread-status"
-              data-status={thread.status}
-              className="inline-flex shrink-0"
-            >
-              <StatusChip status={thread.status} />
-            </span>
-          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center justify-center">
@@ -199,6 +190,15 @@ export function ThreadView({
             >
               <GitBranch aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
               <span className="max-w-56 truncate">{thread.branch}</span>
+            </span>
+          ) : null}
+          {thread ? (
+            <span
+              data-testid="thread-status"
+              data-status={thread.status}
+              className="inline-flex shrink-0"
+            >
+              <StatusChip status={thread.status} />
             </span>
           ) : null}
           <ActivityButton

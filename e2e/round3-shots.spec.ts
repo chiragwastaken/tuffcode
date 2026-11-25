@@ -29,6 +29,8 @@ const CAPTION_INSET_PX = 140;
 const ROOT_ROW_HEIGHT_PX = 48;
 const ROOT_ROW_TOLERANCE_PX = 1;
 const MODE_SWITCH_CENTER_TOLERANCE_PX = 40;
+/** The title owns the left zone; a status chip there left it under 200px at 1440px. */
+const THREAD_TITLE_MIN_WIDTH_PX = 200;
 const FIRST_ROOT_TITLE = 'Plan the v0.1.3 release';
 const SECOND_ROOT_TITLE = 'Review the council board';
 
@@ -142,6 +144,11 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     switchBox.x + switchBox.width / 2 - (headerBox.x + headerBox.width / 2),
   );
   expect(switchOffset).toBeLessThanOrEqual(MODE_SWITCH_CENTER_TOLERANCE_PX);
+
+  // The breadcrumb and title own the left zone: the title keeps a readable width
+  // instead of truncating after a dozen characters next to the status chip.
+  const titleBox = await boxOf(threadTitle);
+  expect(titleBox.width).toBeGreaterThanOrEqual(THREAD_TITLE_MIN_WIDTH_PX);
 
   // The topbar keeps every control clear of the caption-button corner.
   const topbar = page.locator('header').first();
@@ -258,6 +265,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
         rootIndent,
         childIndent,
         headerWidth: headerBox.width,
+        titleWidth: titleBox.width,
         modeSwitchCenterOffset: switchOffset,
         topbarRightEdge: widestControlRight,
         captionLimit,
