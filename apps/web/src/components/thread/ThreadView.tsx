@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router';
-import type { ExecutionMode, Thread, ThreadEventRow } from '@tuffcode/contracts';
+import type { Thread, ThreadEventRow } from '@tuffcode/contracts';
 import { Badge, Button, EmptyState, buttonVariants } from '@tuffcode/ui';
-import { Activity, FolderOpen, GitBranch, MessagesSquare, Users, Wrench } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
+import { Activity, FolderOpen, GitBranch, MessagesSquare } from 'lucide-react';
+import { useCallback, useMemo, useRef, type RefObject } from 'react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../store/app-store';
 import { runAction, type ActionContext } from '../actions';
@@ -18,16 +18,10 @@ import { Composer } from './Composer';
 import { groupTimeline, type UserItem } from './grouping';
 import { useApprovalDecisions, useLocalUserMessages, useSupersededTurns } from './local-messages';
 import { StatusChip } from './status-chip';
-import { SegmentedControl, type SegmentedOption } from './SegmentedControl';
 import { Timeline } from './Timeline';
 import { useThreadStream } from './use-thread-stream';
 
 const EMPTY_EVENTS: readonly ThreadEventRow[] = [];
-
-const THREAD_MODES: readonly SegmentedOption<'work' | 'council'>[] = [
-  { value: 'work', label: 'Work', icon: Wrench },
-  { value: 'council', label: 'Council', icon: Users },
-];
 
 function focusComposer(): void {
   const input =
@@ -63,7 +57,6 @@ export function ThreadView({
   const approvals = useApprovalDecisions();
   const supersededTurns = useSupersededTurns(threadId);
   const theme = useAppStore((state) => state.settings?.theme ?? 'dark');
-  const [switchingMode, setSwitchingMode] = useState(false);
 
   // Boolean and string selectors only: child frames mutate `subagents` on every
   // token, and this view must not re-render the parent timeline for them.
@@ -125,23 +118,12 @@ export function ThreadView({
 
   const title = thread?.title ?? threadId;
 
-  async function setThreadMode(mode: ExecutionMode): Promise<void> {
-    if (!thread || thread.executionMode === mode) return;
-    setSwitchingMode(true);
-    try {
-      ports.store.upsertThread(
-        await ports.rpc.request('threads.update', { id: thread.id, executionMode: mode }),
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not switch the thread mode.');
-    } finally {
-      setSwitchingMode(false);
-    }
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="@container sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur">
+      <header
+        data-testid="thread-header"
+        className="@container sticky top-0 z-20 grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-border bg-background/95 px-4 backdrop-blur"
+      >
         <div className="flex min-w-0 items-center gap-2">
           {projectName ? (
             <span className="hidden min-w-0 shrink items-center gap-1.5 text-2xs text-muted-foreground @min-[44rem]:flex">
@@ -166,20 +148,6 @@ export function ThreadView({
           >
             {title}
           </span>
-        </div>
-
-        <div className="flex shrink-0 items-center justify-center">
-          {thread ? (
-            <SegmentedControl
-              ariaLabel="Thread mode"
-              testId="thread-mode-switch"
-              size="md"
-              value={thread.executionMode === 'council' ? 'council' : 'work'}
-              options={THREAD_MODES}
-              disabled={switchingMode}
-              onValueChange={(mode) => void setThreadMode(mode)}
-            />
-          ) : null}
         </div>
 
         <div className="flex min-w-0 items-center justify-end gap-2 overflow-hidden">
