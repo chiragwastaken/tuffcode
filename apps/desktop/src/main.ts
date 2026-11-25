@@ -31,7 +31,7 @@ import {
   windowChromeOptions,
   type ResolvedTheme,
 } from './theme';
-import { checkNow, setupUpdater } from './updater';
+import { checkNow, checkUpdatesOnStart, setupUpdater } from './updater';
 import { resolveUserDataPath } from './user-data';
 
 const currentDir = fileURLToPath(new URL('.', import.meta.url));
@@ -245,7 +245,10 @@ async function bootstrapApplication(): Promise<void> {
     logger.warn('server exited unexpectedly', { code });
   });
 
-  setupUpdater(logger, { getWindow: () => mainWindow });
+  setupUpdater(logger, {
+    getWindow: () => mainWindow,
+    checkOnStart: checkUpdatesOnStart(dbPath()),
+  });
   logger.info('main process ready', { port: running.port });
 }
 

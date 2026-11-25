@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { app, dialog, type BrowserWindow } from 'electron';
 // electron-updater is CommonJS; Node's ESM loader cannot see its named exports,
 // so import the module object and destructure it at runtime.
@@ -22,6 +23,7 @@ export interface UpdaterOptions {
 
 export interface SetupUpdaterOptions extends UpdaterOptions {
   getWindow?: () => BrowserWindow | null;
+  checkOnStart?: boolean;
 }
 
 /** Updates run in packaged builds unless TUFFCODE_DISABLE_UPDATES=1 opts out. */
@@ -29,6 +31,25 @@ export function updaterEnabled(options: UpdaterOptions = {}): boolean {
   const env = options.env ?? process.env;
   const packaged = options.packaged ?? app.isPackaged;
   return packaged && env[DISABLE_UPDATES_ENV] !== '1';
+}
+
+/**
+ * Reads the stored `checkUpdatesOnStart` setting from the settings table. A missing row, a
+ * missing table or an unreadable file keeps the launch check on, matching the contract default.
+ */
+export function checkUpdatesOnStart(dbFile: string): boolean {
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbFile, { readOnly: true });
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('checkUpdatesOnStart');
+    if (row === undefined) return true;
+    const stored: unknown = JSON.parse(String(row['value']));
+    return stored !== false;
+  } catch {
+    return true;
+  } finally {
+    db?.close();
+  }
 }
 
 async function promptRestart(version: string, window: BrowserWindow | null): Promise<void> {
@@ -114,6 +135,8 @@ export function setupUpdater(logger: Logger, options: SetupUpdaterOptions = {}):
       });
     });
   });
+
+  if (options.checkOnStart === false) return;
 
   setTimeout(() => {
     void checkNow(options).then((outcome) => {

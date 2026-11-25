@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import type { Logger } from '@tuffcode/shared';
 import type { BrowserWindow } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkNow, setupUpdater, updaterEnabled } from './updater';
+import { checkNow, checkUpdatesOnStart, setupUpdater, updaterEnabled } from './updater';
 
 const appMock = vi.hoisted(() => ({
   isPackaged: true,
@@ -61,6 +65,27 @@ function createWindow(destroyed = false): BrowserWindow {
   return { isDestroyed: () => destroyed } as unknown as BrowserWindow;
 }
 
+const tempDirs: string[] = [];
+
+/** Mirrors the settings migration: one row per key with a JSON-encoded value. */
+function settingsDb(rows: ReadonlyArray<readonly [string, string]>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'tuffcode-updater-'));
+  tempDirs.push(dir);
+  const file = join(dir, 'tuffcode.db');
+  const db = new DatabaseSync(file);
+  db.exec(
+    'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  );
+  const insert = db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)');
+  for (const [key, value] of rows) insert.run(key, value, new Date().toISOString());
+  db.close();
+  return file;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 const enabledOptions = { env: {}, packaged: true };
 
 beforeEach(() => {
@@ -90,6 +115,30 @@ describe('updaterEnabled', () => {
 
   it('ignores any other value of the opt-out flag', () => {
     expect(updaterEnabled({ env: { TUFFCODE_DISABLE_UPDATES: '0' }, packaged: true })).toBe(true);
+  });
+});
+
+describe('checkUpdatesOnStart', () => {
+  it('defaults to true when the row is missing', () => {
+    expect(checkUpdatesOnStart(settingsDb([]))).toBe(true);
+  });
+
+  it('honors a stored false', () => {
+    expect(checkUpdatesOnStart(settingsDb([['checkUpdatesOnStart', 'false']]))).toBe(false);
+  });
+
+  it('honors a stored true', () => {
+    expect(checkUpdatesOnStart(settingsDb([['checkUpdatesOnStart', 'true']]))).toBe(true);
+  });
+
+  it('defaults to true when the stored value is not valid JSON', () => {
+    expect(checkUpdatesOnStart(settingsDb([['checkUpdatesOnStart', 'not json']]))).toBe(true);
+  });
+
+  it('defaults to true when the database cannot be opened', () => {
+    expect(checkUpdatesOnStart(join(tmpdir(), 'tuffcode-updater-missing', 'tuffcode.db'))).toBe(
+      true,
+    );
   });
 });
 
@@ -212,6 +261,16 @@ describe('setupUpdater', () => {
     expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Update ready' }),
     );
+  });
+
+  it('skips the launch check when the setting is off but still prepares updates', async () => {
+    const { logger } = createLogger();
+    setupUpdater(logger, { ...enabledOptions, checkOnStart: false });
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(updaterMock.autoUpdater.autoDownload).toBe(true);
+    expect(updaterMock.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
   });
 
   it('checks once shortly after startup and logs the result', async () => {
