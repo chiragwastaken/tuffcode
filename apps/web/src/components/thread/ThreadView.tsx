@@ -19,6 +19,7 @@ import { groupTimeline, type UserItem } from './grouping';
 import { useApprovalDecisions, useLocalUserMessages, useSupersededTurns } from './local-messages';
 import { StatusChip } from './status-chip';
 import { Timeline } from './Timeline';
+import { ThreadModeSwitch } from './ThreadModeSwitch';
 import { useThreadStream } from './use-thread-stream';
 
 const EMPTY_EVENTS: readonly ThreadEventRow[] = [];
@@ -165,11 +166,15 @@ export function ThreadView({
             <span
               data-testid="thread-status"
               data-status={thread.status}
-              className="inline-flex shrink-0"
+              className="hidden shrink-0 min-[900px]:inline-flex"
             >
               <StatusChip status={thread.status} />
             </span>
           ) : null}
+          {/* The topbar switch hides below 900px, so the header keeps a compact one. */}
+          <div className="flex shrink-0 min-[900px]:hidden">
+            <ThreadModeSwitch threadId={threadId} testId="thread-mode-switch-compact" />
+          </div>
           <ActivityButton
             count={activityRunning}
             onOpen={() => requestInspectorTab('activity')}

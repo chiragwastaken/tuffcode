@@ -15,14 +15,21 @@ const THREAD_MODES: readonly SegmentedOption<ThreadMode>[] = [
 export interface ThreadModeSwitchProps {
   threadId: string | null;
   className?: string;
+  /** The topbar switch and the narrow-header fallback need distinct ids. */
+  testId?: string;
 }
 
 /**
- * The Work/Council switch that lives in the app topbar. It reads the thread from the
- * store so it follows `thread.updated` broadcasts, and persists a change through
+ * The Work/Council switch. The topbar hosts the primary one and the thread header
+ * hosts a compact fallback below 900px. It reads the thread from the store so it
+ * follows `thread.updated` broadcasts, and persists a change through
  * `threads.update`. It renders nothing when no thread is open.
  */
-export function ThreadModeSwitch({ threadId, className }: ThreadModeSwitchProps) {
+export function ThreadModeSwitch({
+  threadId,
+  className,
+  testId = 'thread-mode-switch',
+}: ThreadModeSwitchProps) {
   const rpc = useRpc();
   const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
   const upsertThread = useAppStore((state) => state.upsertThread);
@@ -48,7 +55,7 @@ export function ThreadModeSwitch({ threadId, className }: ThreadModeSwitchProps)
   return (
     <SegmentedControl
       ariaLabel="Thread mode"
-      testId="thread-mode-switch"
+      testId={testId}
       size="md"
       className={className}
       value={mode}
