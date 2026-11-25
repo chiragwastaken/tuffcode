@@ -47,6 +47,11 @@ class FakePorts implements CouncilPorts {
   readonly turns: RunTurnInput[] = [];
   readonly deleted: string[] = [];
   readonly pullRequests: { threadId: string; title: string }[] = [];
+  readonly approvals: {
+    threadId: string;
+    approvalId: string;
+    decision: 'allow' | 'deny';
+  }[] = [];
   readonly titles = new Map<string, string>();
   changed = true;
   workerActive = 0;
@@ -109,6 +114,14 @@ class FakePorts implements CouncilPorts {
     } finally {
       if (isWorker) this.workerActive -= 1;
     }
+  }
+
+  async approve(
+    threadId: string,
+    approvalId: string,
+    decision: 'allow' | 'deny',
+  ): Promise<void> {
+    this.approvals.push({ threadId, approvalId, decision });
   }
 
   async openPullRequest(threadId: string, request: PullRequestRequest): Promise<PullRequest> {
@@ -313,6 +326,11 @@ describe('council goal lifecycle', () => {
         'Plan: Ship the widget',
         'Council: Add widget',
         'Review: Add widget',
+      ]);
+      expect(harness.ports.created.map((request) => request.permissionMode)).toEqual([
+        'full-auto',
+        'full-auto',
+        'full-auto',
       ]);
       expect(harness.ports.deleted).toContain('thr_child_1');
       expect(harness.ports.deleted).toContain('thr_child_3');

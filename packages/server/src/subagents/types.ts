@@ -69,6 +69,8 @@ export interface Subagents {
   /** Cancels a queued child or interrupts a running one; settled children are a no-op. */
   cancel(childId: string): Promise<void>;
   list(threadId: string): SubagentView[];
+  /** Every child across threads, so the sidebar maps child thread ids without per-parent calls. */
+  listAll(): SubagentView[];
   /** Test and shutdown hook: resolves when the child reaches a terminal status. */
   awaitChild(childId: string): Promise<SubagentView>;
   /** Startup recovery: a queued or running child cannot resume after a restart. */

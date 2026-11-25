@@ -116,7 +116,16 @@ export function createCouncil(deps: CouncilDeps): Council {
     deleteThread:
       overrides.deleteThread?.bind(overrides) ?? ((threadId) => deleteChildThread(repos, threadId)),
     runTurn:
-      overrides.runTurn?.bind(overrides) ?? createBusTurnRunner({ bus, runner: deps.runner }),
+      overrides.runTurn?.bind(overrides) ??
+      createBusTurnRunner({
+        bus,
+        runner: deps.runner,
+        approve: (threadId, approvalId, decision) => ports.approve(threadId, approvalId, decision),
+        logger,
+      }),
+    approve:
+      overrides.approve?.bind(overrides) ??
+      ((threadId, approvalId, decision) => deps.runner.approve(threadId, approvalId, decision)),
     openPullRequest:
       overrides.openPullRequest?.bind(overrides) ??
       (async (threadId, request) => {
@@ -223,7 +232,7 @@ export function createCouncil(deps: CouncilDeps): Council {
       providerId: thread.providerId,
       modelId: thread.modelId,
       executionMode: 'plan',
-      permissionMode: 'read-only',
+      permissionMode: 'full-auto',
       baseBranch,
     });
     run.childThreads.add(planner.id);
@@ -237,6 +246,7 @@ export function createCouncil(deps: CouncilDeps): Council {
           baseBranch,
         }),
         signal: run.controller.signal,
+        autonomy: goal.autonomy,
       });
       if (run.cancelled) return { tasks: [], question: null };
       if (result.status !== 'complete') {
@@ -340,7 +350,7 @@ export function createCouncil(deps: CouncilDeps): Council {
             providerId: selection.providerId,
             modelId: selection.modelId,
             executionMode: 'plan',
-            permissionMode: 'read-only',
+            permissionMode: 'full-auto',
             baseBranch,
           });
           reviewThreadId = reviewThread.id;
@@ -359,6 +369,7 @@ export function createCouncil(deps: CouncilDeps): Council {
             patch: changes.patch,
           }),
           signal: run.controller.signal,
+          autonomy: goal.autonomy,
         });
         if (run.cancelled) return;
         const verdict = review.status === 'complete' ? parseReviewVerdict(review.text) : 'escalate';
@@ -399,6 +410,7 @@ export function createCouncil(deps: CouncilDeps): Council {
           threadId: child.id,
           text: buildRevisionBrief({ round, findings: stored.body }),
           signal: run.controller.signal,
+          autonomy: goal.autonomy,
         });
         if (run.cancelled) return;
         if (revision.status !== 'complete') {
@@ -454,6 +466,7 @@ export function createCouncil(deps: CouncilDeps): Council {
         taskCount: order.length,
       }),
       signal: run.controller.signal,
+      autonomy: goal.autonomy,
     });
     if (run.cancelled) return;
     if (worker.status !== 'complete') {

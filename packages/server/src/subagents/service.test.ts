@@ -19,6 +19,7 @@ import {
   type TestContext,
 } from '../test-support.js';
 import { createSubagents, resolveSubagentTarget } from './service.js';
+import { createSubagentHandlers } from './rpc.js';
 import type {
   SubagentChildRequest,
   SubagentPorts,
@@ -410,6 +411,12 @@ describe('subagent service', () => {
       expect(started).toHaveLength(1);
       expect(started[0]?.threadId).toBe(PARENT_ID);
       expect(started[0]?.payload).toMatchObject({ childId, type: 'explorer', model: 'main-model' });
+      expect(Object.keys(started[0]?.payload ?? {}).toSorted()).toEqual([
+        'childId',
+        'model',
+        'threadId',
+        'type',
+      ]);
       expect(routed).toHaveLength(1);
       expect(routed[0]?.payload).toMatchObject({ childId, threadId: PARENT_ID });
       expect(finished).toHaveLength(1);
@@ -492,19 +499,103 @@ describe('subagent service', () => {
     }
   });
 
-  it('stores notetaker facts in the brain', async () => {
+  it('stores notetaker facts in the brain and links them about the project entry', async () => {
+    const harness = createHarness();
+    try {
+      const anchor = harness.ctx.repos.brain.upsert({
+        kind: 'project',
+        scope: 'project',
+        projectId: 'prj_1',
+        text: 'Demo project brain',
+        importance: 1,
+      });
+      harness.ports.handler = () =>
+        Promise.resolve({
+          status: 'complete',
+          text: JSON.stringify({
+            facts: [
+              { text: 'Tests run with vitest run', tags: 'tests, vitest', importance: 0.5 },
+              { text: 'CI uses pnpm', tags: 'ci', importance: 0.4 },
+            ],
+          }),
+        });
+      const childId = await spawn(harness, 'notetaker');
+      const view = await harness.subagents.awaitChild(childId);
+      expect(view.summary).toContain('Recorded 2 of 2 facts');
+      const entries = harness.ctx.repos.brain.list({ projectId: 'prj_1' });
+      expect(entries.map((entry) => entry.text)).toEqual(
+        expect.arrayContaining(['Tests run with vitest run', 'CI uses pnpm']),
+      );
+
+      const edges = harness.ctx.repos.brain.listEdges();
+      expect(edges).toHaveLength(2);
+      expect(edges.every((edge) => edge.to === anchor.id && edge.relation === 'about')).toBe(true);
+      const factIds = entries
+        .filter((entry) => entry.id !== anchor.id)
+        .map((entry) => entry.id)
+        .toSorted();
+      expect(edges.map((edge) => edge.from).toSorted()).toEqual(factIds);
+      expect(new Set(edges.map((edge) => `${edge.from}|${edge.to}|${edge.relation}`)).size).toBe(2);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('stores notetaker facts without edges when the project has no brain entry', async () => {
     const harness = createHarness();
     try {
       harness.ports.handler = () =>
         Promise.resolve({
           status: 'complete',
-          text: '{"facts":[{"text":"Tests run with vitest run","tags":"tests, vitest","importance":0.5}]}',
+          text: '{"facts":[{"text":"Tests run with vitest run","tags":"tests","importance":0.5}]}',
         });
       const childId = await spawn(harness, 'notetaker');
-      const view = await harness.subagents.awaitChild(childId);
-      expect(view.summary).toContain('Recorded 1 of 1 facts');
-      const entries = harness.ctx.repos.brain.list({ projectId: 'prj_1' });
-      expect(entries.map((entry) => entry.text)).toContain('Tests run with vitest run');
+      await harness.subagents.awaitChild(childId);
+      expect(harness.ctx.repos.brain.list({ projectId: 'prj_1' })).toHaveLength(1);
+      expect(harness.ctx.repos.brain.listEdges()).toEqual([]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('lists every child across threads without internal columns', async () => {
+    const harness = createHarness();
+    try {
+      const now = new Date().toISOString();
+      harness.ctx.repos.threads.create({
+        id: 'thr_parent_2',
+        projectId: 'prj_1',
+        parentThreadId: null,
+        title: 'Second parent',
+        providerId: 'prv_main',
+        modelId: 'main-model',
+        executionMode: 'work',
+        permissionMode: 'ask',
+        status: 'idle',
+        worktreePath: 'C:/worktrees/second',
+        branch: 'tuffcode/thr_parent_2',
+        baseBranch: 'main',
+        createdAt: now,
+        updatedAt: now,
+      });
+      const first = await spawn(harness, 'explorer');
+      const second = await spawn(harness, 'notetaker');
+      const other = await harness.subagents
+        .spawn({ threadId: 'thr_parent_2', spec: { type: 'explorer', task: 'Other work' } })
+        .then((result) => result.childId);
+      for (const childId of [first, second, other]) {
+        await harness.subagents.awaitChild(childId);
+      }
+
+      expect(harness.subagents.list(PARENT_ID)).toHaveLength(2);
+      const views = harness.subagents.listAll();
+      expect(views.map((view) => view.childId)).toEqual([first, second, other]);
+      expect(views.some((view) => 'childThreadId' in view)).toBe(false);
+
+      const handlers = createSubagentHandlers({ subagents: harness.subagents });
+      const listAll = handlers.get('subagents.listAll');
+      if (listAll === undefined) throw new Error('subagents.listAll is not registered');
+      expect(await listAll({})).toEqual(views);
     } finally {
       await harness.dispose();
     }

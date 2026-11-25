@@ -398,15 +398,22 @@ export function createSubagents(deps: SubagentDeps): Subagents {
   /**
    * A notetaker's answer is a JSON fact list; the service owns the brain write so a
    * read-only child never needs a write tool. Other types return their text as is.
+   * Each new fact is linked `about` the project's existing brain entry, resolved
+   * before the write so a fresh fact can never become its own anchor.
    */
   async function summarize(record: SubagentRecord, parent: Thread, text: string): Promise<string> {
     if (record.type !== 'notetaker') return text;
     const facts = parseNotetakerFacts(text);
     if (facts.length === 0 || !deps.settings().brainEnabled) return text;
+    const anchor = repos.brain.list({
+      kind: 'project',
+      projectId: parent.projectId,
+      limit: 1,
+    })[0];
     let stored = 0;
     for (const fact of facts) {
       try {
-        brain.upsert({
+        const entry = brain.upsert({
           kind: 'project',
           scope: 'project',
           projectId: parent.projectId,
@@ -415,6 +422,9 @@ export function createSubagents(deps: SubagentDeps): Subagents {
           importance: fact.importance,
         });
         stored += 1;
+        if (anchor !== undefined && anchor.id !== entry.id) {
+          repos.brain.upsertEdge({ from: entry.id, to: anchor.id, relation: 'about' });
+        }
       } catch (error) {
         logger.warn('notetaker fact could not be stored', {
           childId: record.childId,
@@ -530,6 +540,10 @@ export function createSubagents(deps: SubagentDeps): Subagents {
 
     list(threadId) {
       return repos.subagents.listByThread(threadId).map(toSubagentView);
+    },
+
+    listAll() {
+      return repos.subagents.listAll().map(toSubagentView);
     },
 
     awaitChild(childId) {
