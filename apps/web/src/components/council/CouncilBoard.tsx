@@ -33,6 +33,8 @@ import {
   fitViewport,
   goalStateColor,
   layoutCouncilBoard,
+  reportLabel,
+  reportStateColor,
   reviewVerdictColor,
   reviewerChipLabel,
   reviewerLabel,
@@ -40,6 +42,7 @@ import {
   type BoardNode,
   type BoardViewport,
   type CouncilBoardCounts,
+  type ReportNodeState,
 } from './council-board';
 
 export interface CouncilBoardProps {
@@ -76,17 +79,15 @@ const LEGEND_ENTRIES: readonly { key: keyof CouncilBoardCounts; label: string; c
 ];
 
 function nodeStateLabel(node: BoardNode): string {
-  if (node.kind === 'planner' || node.kind === 'report') {
-    return GOAL_STATE_LABEL[node.state as GoalState];
-  }
+  if (node.kind === 'report') return reportLabel(node.state as ReportNodeState);
+  if (node.kind === 'planner') return GOAL_STATE_LABEL[node.state as GoalState];
   if (node.kind === 'reviewer') return reviewerLabel(node);
   return TASK_STATE_LABEL[node.state as TaskState];
 }
 
 function nodeAccent(node: BoardNode): string {
-  if (node.kind === 'planner' || node.kind === 'report') {
-    return goalStateColor(node.state as GoalState);
-  }
+  if (node.kind === 'report') return reportStateColor(node.state as ReportNodeState);
+  if (node.kind === 'planner') return goalStateColor(node.state as GoalState);
   if (node.kind === 'reviewer' && node.verdict !== null) return reviewVerdictColor(node.verdict);
   return taskStateColor(node.state as TaskState);
 }

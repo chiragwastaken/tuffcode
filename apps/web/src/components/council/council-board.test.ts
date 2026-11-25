@@ -13,6 +13,8 @@ import {
   fitViewport,
   goalStateColor,
   layoutCouncilBoard,
+  reportLabel,
+  reportStateColor,
   reviewerChipLabel,
   reviewerLabel,
   taskDepths,
@@ -368,6 +370,26 @@ describe('status colors', () => {
     expect(goalStateColor('done')).toBe('var(--success)');
     expect(goalStateColor('failed')).toBe('var(--error)');
     expect(goalStateColor('planning')).toBe('var(--info)');
+  });
+});
+
+describe('report node copy', () => {
+  it('labels every report state', () => {
+    expect(reportLabel('intake')).toBe('Waiting');
+    expect(reportLabel('queued')).toBe('Queued');
+    expect(reportLabel('reporting')).toBe('Reporting');
+    expect(reportLabel('done')).toBe('Done');
+    expect(reportLabel('failed')).toBe('Failed');
+    expect(reportLabel('cancelled')).toBe('Cancelled');
+  });
+
+  it('keeps the report muted until it is written and active while reporting', () => {
+    expect(reportStateColor('intake')).toBe('var(--muted-foreground)');
+    expect(reportStateColor('queued')).toBe('var(--muted-foreground)');
+    expect(reportStateColor('reporting')).toBe('var(--primary)');
+    expect(reportStateColor('done')).toBe('var(--success)');
+    expect(reportStateColor('failed')).toBe('var(--error)');
+    expect(reportStateColor('cancelled')).toBe('var(--muted-foreground)');
   });
 });
 
