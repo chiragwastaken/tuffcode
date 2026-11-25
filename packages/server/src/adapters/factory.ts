@@ -88,6 +88,8 @@ export interface AdapterDepsOptions {
   spawnSubagent?: AdapterDeps['spawnSubagent'];
   /** Runs the server-owned `mcp`, `memory` and `config` tools for a turn. */
   extraTool?: AdapterDeps['extraTool'];
+  /** Enabled stdio MCP servers for vendor CLIs that launch servers themselves. */
+  mcpServers?: AdapterDeps['mcpServers'];
 }
 
 /** Filters the environment to string values, which is all an adapter may pass on. */
@@ -107,6 +109,7 @@ export function createAdapterDeps(options: AdapterDepsOptions): AdapterDeps {
     env: adapterEnv(options.env),
     ...(options.spawnSubagent === undefined ? {} : { spawnSubagent: options.spawnSubagent }),
     ...(options.extraTool === undefined ? {} : { extraTool: options.extraTool }),
+    ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
   };
 }
 

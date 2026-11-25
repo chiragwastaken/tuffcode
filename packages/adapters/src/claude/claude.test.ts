@@ -262,6 +262,44 @@ describe('createClaudeAdapter', () => {
     expect(events.at(-1)).toEqual({ type: 'turn.finished', turnId: 'turn_1', reason: 'complete' });
   });
 
+  it('passes enabled MCP servers to the query as stdio configs', async () => {
+    const calls: RecordedCall[] = [];
+    const mcpDeps: AdapterDeps = {
+      ...deps,
+      mcpServers: {
+        files: { command: 'npx', args: ['-y', 'files-mcp'], env: { ROOT: 'C:/work' } },
+        notes: { command: 'node', args: [], env: {} },
+      },
+    };
+    const adapter = await createClaudeAdapter(provider, mcpDeps, {
+      queryFn: recordingQuery([], calls),
+    });
+
+    await drain(adapter.send('hi', turnContext()));
+
+    expect(calls.at(-1)?.options.mcpServers).toEqual({
+      files: {
+        type: 'stdio',
+        command: 'npx',
+        args: ['-y', 'files-mcp'],
+        env: { ROOT: 'C:/work' },
+      },
+      notes: { type: 'stdio', command: 'node', args: [], env: {} },
+    });
+  });
+
+  it('omits the mcpServers option when no servers are configured', async () => {
+    const calls: RecordedCall[] = [];
+    const emptyDeps: AdapterDeps = { ...deps, mcpServers: {} };
+    const adapter = await createClaudeAdapter(provider, emptyDeps, {
+      queryFn: recordingQuery([], calls),
+    });
+
+    await drain(adapter.send('hi', turnContext()));
+
+    expect(calls.at(-1)?.options).not.toHaveProperty('mcpServers');
+  });
+
   it('uses the configured executable and maps every permission mode', async () => {
     const calls: RecordedCall[] = [];
     let resolved = 0;
