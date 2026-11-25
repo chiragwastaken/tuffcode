@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createEventBus, type EventBus } from '../events.js';
 import type { Runner } from '../runner/runner.js';
 import { silentLogger } from '../test-support.js';
-import { createBusTurnRunner, decideApproval, MANUAL_DENY_REASON } from './runner-turn.js';
+import { createBusTurnRunner, decideApproval, UNATTENDED_DENY_REASON } from './runner-turn.js';
 import type { RunTurnInput, TurnResult } from './types.js';
 
 type SendBehavior = 'complete' | 'abort' | 'throw';
@@ -100,21 +100,14 @@ function harness(behavior: SendBehavior = 'complete'): {
 }
 
 describe('decideApproval', () => {
-  it('allows a benign command on an auto goal', () => {
-    expect(decideApproval({ input: { command: 'pnpm test' }, autonomy: 'auto' })).toEqual({
-      decision: 'allow',
-      reason: 'auto goal',
-    });
-  });
-
-  it('denies every approval on a manual goal with the unattended reason', () => {
-    expect(decideApproval({ input: { command: 'pnpm test' }, autonomy: 'manual' })).toEqual({
+  it('denies a benign command with the unattended reason', () => {
+    expect(decideApproval({ command: 'pnpm test' })).toEqual({
       decision: 'deny',
-      reason: MANUAL_DENY_REASON,
+      reason: UNATTENDED_DENY_REASON,
     });
   });
 
-  it('denies destructive commands even on an auto goal', () => {
+  it('denies a destructive command with the destructive reason', () => {
     for (const command of [
       'rm -rf /',
       'rm -rf ~',
@@ -124,14 +117,25 @@ describe('decideApproval', () => {
       'git push --force origin main',
       'shutdown /s',
     ]) {
-      expect(decideApproval({ input: { command }, autonomy: 'auto' }).decision).toBe('deny');
+      const decision = decideApproval({ command });
+      expect(decision.decision).toBe('deny');
+      expect(decision.reason).toMatch(/^destructive command \(/);
+      expect(decision.reason).not.toBe(UNATTENDED_DENY_REASON);
     }
   });
 
-  it('does not treat a scoped delete as destructive', () => {
-    expect(decideApproval({ input: { command: 'rm -rf build' }, autonomy: 'auto' }).decision).toBe(
-      'allow',
-    );
+  it('denies a scoped delete with the unattended reason', () => {
+    expect(decideApproval({ command: 'rm -rf build' })).toEqual({
+      decision: 'deny',
+      reason: UNATTENDED_DENY_REASON,
+    });
+  });
+
+  it('denies a tool input with no command field', () => {
+    expect(decideApproval({ path: 'src/widget.ts', content: 'export {};' })).toEqual({
+      decision: 'deny',
+      reason: UNATTENDED_DENY_REASON,
+    });
   });
 });
 
@@ -142,7 +146,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
     expect(result).toEqual({
       threadId: 'thr_1',
@@ -163,7 +166,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
     bus.emit({
       kind: 'event',
@@ -184,7 +186,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: controller.signal,
-      autonomy: 'auto',
     });
     await new Promise<void>((resolve) => {
       bus.subscribe((event) => {
@@ -210,7 +211,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: controller.signal,
-      autonomy: 'auto',
     });
     expect(result.status).toBe('interrupted');
     expect(sent).toBe(0);
@@ -222,13 +222,12 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
     expect(result.status).toBe('error');
     expect(result.error).toBe('adapter exploded');
   });
 
-  it('allows a benign approval on an auto goal and still settles on turn.finished', async () => {
+  it('denies a benign approval and still settles on turn.finished', async () => {
     const { runner, calls, runTurn } = harness();
     runner.approval = {
       approvalId: 'apv_1',
@@ -240,32 +239,13 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
-    expect(calls).toEqual([{ threadId: 'thr_1', approvalId: 'apv_1', decision: 'allow' }]);
+    expect(calls).toEqual([{ threadId: 'thr_1', approvalId: 'apv_1', decision: 'deny' }]);
     expect(result.status).toBe('complete');
     expect(result.text).toBe('hello world');
   });
 
-  it('denies an approval on a manual goal', async () => {
-    const { runner, calls, runTurn } = harness();
-    runner.approval = {
-      approvalId: 'apv_1',
-      threadId: 'thr_1',
-      toolName: 'bash',
-      input: { command: 'pnpm test' },
-    };
-    const result = await runTurn({
-      threadId: 'thr_1',
-      text: 'work',
-      signal: new AbortController().signal,
-      autonomy: 'manual',
-    });
-    expect(calls).toEqual([{ threadId: 'thr_1', approvalId: 'apv_1', decision: 'deny' }]);
-    expect(result.status).toBe('complete');
-  });
-
-  it('denies a destructive command even on an auto goal', async () => {
+  it('denies a destructive command', async () => {
     const { runner, calls, runTurn } = harness();
     runner.approval = {
       approvalId: 'apv_1',
@@ -277,7 +257,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
     expect(calls).toEqual([{ threadId: 'thr_1', approvalId: 'apv_1', decision: 'deny' }]);
   });
@@ -294,7 +273,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
     expect(calls).toEqual([]);
     expect(result.status).toBe('complete');
@@ -313,7 +291,6 @@ describe('createBusTurnRunner', () => {
       threadId: 'thr_1',
       text: 'work',
       signal: new AbortController().signal,
-      autonomy: 'auto',
     });
     expect(calls).toHaveLength(1);
     expect(result.status).toBe('complete');
