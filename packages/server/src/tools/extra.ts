@@ -57,6 +57,9 @@ const StringArraySchema = z.array(z.string());
 const StringRecordSchema = z.record(z.string(), z.string());
 const ConfigModelSchema = z.record(z.string(), z.unknown());
 
+/** MCP env values are stored in plain text, so secret-shaped names are refused, D48. */
+const SECRET_ENV_KEY = /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i;
+
 function failure(error: unknown): string {
   return error instanceof Error ? error.message : 'request failed';
 }
@@ -267,13 +270,8 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     if (capabilities !== undefined) config['capabilities'] = capabilities;
     const reasoning = parseReasoning(optionalString(args, 'reasoning'));
     if (reasoning !== undefined) config['reasoningEffort'] = reasoning;
-    const apiKey = optionalString(args, 'apiKey');
-    const view = await deps.providers.upsert({
-      kind: kind.data,
-      label,
-      config,
-      ...(apiKey === undefined ? {} : { secret: apiKey }),
-    });
+    // The key never travels through a tool; it is set in Settings > Providers.
+    const view = await deps.providers.upsert({ kind: kind.data, label, config });
     return view.id;
   }
 
@@ -323,6 +321,13 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     if (args['env'] !== undefined) {
       const parsed = StringRecordSchema.safeParse(jsonValue(args['env'], 'env'));
       if (!parsed.success) throw new Error('env must be an object of strings');
+      for (const key of Object.keys(parsed.data)) {
+        if (SECRET_ENV_KEY.test(key)) {
+          throw new Error(
+            `env ${key} looks like a secret; set MCP secrets in Settings > MCP env`,
+          );
+        }
+      }
       env = parsed.data;
     }
     const cwd = optionalString(args, 'cwd');

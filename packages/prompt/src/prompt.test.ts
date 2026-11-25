@@ -244,7 +244,6 @@ describe('extra tool schemas', () => {
       'kind',
       'label',
       'baseUrl',
-      'apiKey',
       'modelId',
       'contextWindow',
       'maxOutputTokens',
@@ -261,6 +260,12 @@ describe('extra tool schemas', () => {
     expect(CONFIG_TOOL.parameters.properties.capabilities?.type).toBe('string');
     expect(CONFIG_TOOL.parameters.properties.args?.type).toBe('string');
     expect(CONFIG_TOOL.parameters.properties.env?.type).toBe('string');
+  });
+
+  it('never accepts a provider key through the config tool', () => {
+    expect(CONFIG_TOOL.parameters.properties).not.toHaveProperty('apiKey');
+    expect(CONFIG_TOOL.parameters.properties).not.toHaveProperty('api_key');
+    expect(CONFIG_TOOL.description).toContain('Settings > Providers');
   });
 });
 

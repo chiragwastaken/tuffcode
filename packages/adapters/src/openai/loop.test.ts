@@ -131,6 +131,71 @@ describe('runTurn', () => {
     await expect(readFile(join(root, 'out.txt'), 'utf8')).rejects.toThrow();
   });
 
+  it('redacts a secret in the approval event and executes the raw arguments', async () => {
+    const calls: { name: string; args: Record<string, unknown>; cwd: string }[] = [];
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (name, args, ctx) => {
+        calls.push({ name, args, cwd: ctx.cwd });
+        return 'created';
+      },
+    };
+    const client = new FakeClient([
+      streamOf([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_cfg',
+                    function: {
+                      name: 'config',
+                      arguments:
+                        '{"action":"provider.add","label":"Remote","apiKey":"sk-approval"}',
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        },
+      ]),
+      streamOf([{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }]),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ permissionMode: 'ask' }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(events.find((event) => event.type === 'approval.requested')).toMatchObject({
+      type: 'approval.requested',
+      toolCallId: 'call_cfg',
+      name: 'config',
+      input: { action: 'provider.add', label: 'Remote', apiKey: '[redacted]' },
+    });
+    expect(events.find((event) => event.type === 'tool.started')).toMatchObject({
+      input: { action: 'provider.add', label: 'Remote', apiKey: '[redacted]' },
+    });
+    expect(JSON.stringify(events)).not.toContain('sk-approval');
+    expect(calls).toEqual([
+      {
+        name: 'config',
+        args: { action: 'provider.add', label: 'Remote', apiKey: 'sk-approval' },
+        cwd: root,
+      },
+    ]);
+  });
+
   it('stops at the iteration cap', async () => {
     const payload = fixture('tool-call-stream');
     const client = new FakeClient([streamOf(payload), streamOf(payload)]);

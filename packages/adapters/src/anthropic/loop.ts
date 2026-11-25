@@ -21,6 +21,7 @@ import {
 } from '../openai/tools.js';
 import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
 import { isExtraToolName } from '../extra-tools.js';
+import { redactToolInput } from '../redact.js';
 
 /** Mirrors the `maxToolIterations` setting default. */
 export const DEFAULT_MAX_TOOL_ITERATIONS = 40;
@@ -327,7 +328,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           turnId,
           toolCallId,
           name: call.name,
-          input: args ?? call.json,
+          input: redactToolInput(args ?? call.json),
         };
 
         let result: ToolExecResult | null = null;
@@ -360,7 +361,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             approvalId,
             toolCallId,
             name: call.name,
-            input: args,
+            input: redactToolInput(args),
           };
           const choice = await pending;
           if (signal.aborted) {

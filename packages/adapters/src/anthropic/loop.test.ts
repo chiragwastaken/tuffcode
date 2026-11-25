@@ -232,6 +232,92 @@ describe('runTurn', () => {
     await expect(readFile(join(root, 'out.txt'), 'utf8')).rejects.toThrow();
   });
 
+  it('redacts a secret in the approval event and executes the raw arguments', async () => {
+    const calls: { name: string; args: Record<string, unknown>; cwd: string }[] = [];
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (name, args, ctx) => {
+        calls.push({ name, args, cwd: ctx.cwd });
+        return 'created';
+      },
+    };
+    const client = new FakeClient([
+      streamOf([
+        {
+          event: 'message_start',
+          data: {
+            type: 'message_start',
+            message: {
+              id: 'msg_cfg',
+              model: 'claude-test',
+              usage: { input_tokens: 10, output_tokens: 1 },
+            },
+          },
+        },
+        {
+          event: 'content_block_start',
+          data: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'tool_use', id: 'toolu_cfg', name: 'config', input: {} },
+          },
+        },
+        {
+          event: 'content_block_delta',
+          data: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: {
+              type: 'input_json_delta',
+              partial_json: '{"action":"provider.add","label":"Remote","apiKey":"sk-approval"}',
+            },
+          },
+        },
+        { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+        {
+          event: 'message_delta',
+          data: {
+            type: 'message_delta',
+            delta: { stop_reason: 'tool_use' },
+            usage: { output_tokens: 12 },
+          },
+        },
+        { event: 'message_stop', data: { type: 'message_stop' } },
+      ]),
+      streamOf(fixture('text-stream')),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ permissionMode: 'ask' }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(events.find((event) => event.type === 'approval.requested')).toMatchObject({
+      type: 'approval.requested',
+      toolCallId: 'toolu_cfg',
+      name: 'config',
+      input: { action: 'provider.add', label: 'Remote', apiKey: '[redacted]' },
+    });
+    expect(events.find((event) => event.type === 'tool.started')).toMatchObject({
+      input: { action: 'provider.add', label: 'Remote', apiKey: '[redacted]' },
+    });
+    expect(JSON.stringify(events)).not.toContain('sk-approval');
+    expect(calls).toEqual([
+      {
+        name: 'config',
+        args: { action: 'provider.add', label: 'Remote', apiKey: 'sk-approval' },
+        cwd: root,
+      },
+    ]);
+  });
+
   it('maps a refusal stop_reason to an error turn', async () => {
     const client = new FakeClient([streamOf(fixture('refusal-stream'))]);
     const events = await collect(
