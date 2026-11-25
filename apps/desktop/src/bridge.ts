@@ -11,15 +11,27 @@ export interface BootstrapInfo {
 
 export type Theme = 'dark' | 'light' | 'system';
 
+export type UpdateStatus = 'available' | 'current' | 'unavailable' | 'error';
+
+/** Result of one update check requested from the renderer. */
+export interface UpdateCheckOutcome {
+  status: UpdateStatus;
+  version: string | null;
+  detail: string;
+  checkedAt: string;
+}
+
 /** The only surface exposed to the renderer through the preload bridge (spec section 10). */
 export interface TuffcodeBridge {
   getBootstrap(): Promise<BootstrapInfo>;
   pickFolder(): Promise<string | null>;
   onMenuAction(callback: (action: string) => void): () => void;
   setTheme(theme: Theme): void;
+  checkForUpdates(): Promise<UpdateCheckOutcome>;
 }
 
 export const BOOTSTRAP_CHANNEL = 'bootstrap:get';
+export const CHECK_UPDATES_CHANNEL = 'updates:check';
 export const PICK_FOLDER_CHANNEL = 'dialog:pick-folder';
 export const MENU_ACTION_CHANNEL = 'menu:action';
 export const SET_THEME_CHANNEL = 'theme:set';
