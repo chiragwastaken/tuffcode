@@ -159,9 +159,13 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     'aria-checked',
     'true',
   );
-  // The switch is the topbar's child, not the thread header's.
+  // The switch is the topbar's child, not the thread header's; the header keeps a
+  // compact fallback, which stays out of the way at this width.
   await expect(topbar.getByTestId('thread-mode-switch')).toBeVisible();
   await expect(header.getByTestId('thread-mode-switch')).toHaveCount(0);
+  const compactSwitch = page.getByTestId('thread-mode-switch-compact');
+  await expect(header.getByTestId('thread-mode-switch-compact')).toHaveCount(1);
+  await expect(compactSwitch).toBeHidden();
 
   const topbarBox = await boxOf(topbar);
   const switchBox = await boxOf(modeSwitch);
@@ -182,18 +186,77 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     'in the topbar at 1440x900',
   );
 
-  // Below 900px the switch would collide with the brand and the right controls, so
-  // the topbar hides it instead of squeezing them.
+  // Below 900px the topbar switch would collide with the brand and the right
+  // controls, so the topbar hides it and the thread header shows a compact one.
+  // The window may clamp on some platforms, so measure what actually happened.
   await session.app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0]?.setSize(860, 900);
   });
-  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThan(900);
-  await expect(modeSwitch).toBeHidden();
+  const modeGateState = () =>
+    page.evaluate(() => {
+      const isLaidOut = (testId: string): boolean => {
+        const element = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+        return element !== null && element.getClientRects().length > 0;
+      };
+      const width = window.innerWidth;
+      const compactVisible = isLaidOut('thread-mode-switch-compact');
+      const topbarVisible = isLaidOut('thread-mode-switch');
+      const narrowRule = compactVisible && !topbarVisible;
+      const wideRule = !compactVisible && topbarVisible;
+      return width < 900 ? narrowRule : wideRule;
+    });
+  await expect.poll(modeGateState, { timeout: 5000 }).toBe(true);
+  const narrowWidth = await page.evaluate(() => window.innerWidth);
+  const narrowSwitchVisible = narrowWidth < 900 ? 'compact' : 'topbar';
+
+  if (narrowWidth < 900) {
+    expect(narrowWidth).toBeLessThan(900);
+    await expect(modeSwitch).toBeHidden();
+    await expect(compactSwitch).toBeVisible();
+    await expect(page.getByTestId('thread-status')).toBeHidden();
+
+    // The compact control is the real switch, not a decoration: it flips the mode.
+    await compactSwitch.getByRole('radio', { name: 'Council' }).click();
+    await expect(compactSwitch.getByRole('radio', { name: 'Council' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await compactSwitch.getByRole('radio', { name: 'Work' }).click();
+    await expect(compactSwitch.getByRole('radio', { name: 'Work' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    // The narrow header fits: the compact switch and Activity share the row without
+    // touching, and the switch stays inside the header.
+    const compactBox = await boxOf(compactSwitch);
+    const narrowHeaderBox = await boxOf(header);
+    expectDisjointHeaderControls(
+      {
+        'thread-mode-switch-compact': compactBox,
+        'activity-button': await boxOf(page.getByTestId('activity-button')),
+      },
+      'in the thread header at the narrow width',
+    );
+    expect(compactBox.x).toBeGreaterThanOrEqual(narrowHeaderBox.x);
+    expect(compactBox.x + compactBox.width).toBeLessThanOrEqual(
+      narrowHeaderBox.x + narrowHeaderBox.width,
+    );
+  } else {
+    // The platform clamped the window at or above 900px, so both controls follow the
+    // same 900px rule: the topbar keeps the switch and the compact one stays hidden.
+    expect(narrowWidth).toBeGreaterThanOrEqual(900);
+    await expect(modeSwitch).toBeVisible();
+    await expect(compactSwitch).toBeHidden();
+    await expect(page.getByTestId('thread-status')).toBeVisible();
+  }
+
   await session.app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0]?.setSize(1440, 900);
   });
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1440);
   await expect(modeSwitch).toBeVisible();
+  await expect(compactSwitch).toBeHidden();
 
   const headerBox = await boxOf(header);
 
@@ -386,6 +449,8 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
         topbarHeight: topbarBox.height,
         modeSwitchWidth: switchBox.width,
         modeSwitchCenterOffset: switchOffset,
+        narrowInnerWidth: narrowWidth,
+        narrowSwitchVisible,
         headerWidthAt1550: wideHeaderBox.width,
         headerWidthAt1920: wideHeaderBoxAt1920.width,
         branchWidthAt1920: wideBranchBox.width,
