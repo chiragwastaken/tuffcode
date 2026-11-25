@@ -34,6 +34,10 @@ the project uses semantic versioning.
 - Claude subscription threads receive the enabled MCP servers through the Agent SDK. Codex uses
   its own MCP configuration. The memory and config tools are harness-only.
 
+### Updates
+- Packaged builds check for updates on launch, download in the background, and ask to restart
+  when the update is ready. Settings > Updates now runs the same check through the desktop bridge.
+
 ### Known issues
 - The installer artifact reports `0.0.0` until the release workflow stamps the tag.
 - Codex remains fixture-tested only; its CLI is not installed on this host.

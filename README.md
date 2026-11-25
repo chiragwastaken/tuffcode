@@ -51,7 +51,8 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
   thread checkpoints snapshot the worktree.
 - **Settings.** Providers, models, subagent models, custom instructions, appearance, agents and
   tools, permissions, terminal, brain, updates, diagnostics, capabilities, keybindings.
-- **Installer.** A per-user NSIS installer for Windows x64, with optional auto-update.
+- **Installer.** A per-user NSIS installer for Windows x64. Packaged builds check for updates on
+  launch, download in the background, and ask you to restart when it is ready.
 
 v0.1.3 adds nested subagents, the Activity panel, model metadata, MCP, self-configuration, brain
 links and a rewritten prompt set. v0.1.2 added model discovery, subagents, split panes and the
