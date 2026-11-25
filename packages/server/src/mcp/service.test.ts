@@ -28,6 +28,7 @@ function fakeChild(
         onMessage(message, fake);
         return true;
       },
+      on: () => undefined,
     },
     stdout: { on: (event, listener) => stdout.on(event, listener) },
     stderr: { on: (event, listener) => stderr.on(event, listener) },
