@@ -9,6 +9,7 @@ import {
   type LocalUserMessage,
   type TimelineItem,
 } from './grouping';
+import { groupTurnBlocks } from './turn-blocks';
 
 function event(
   seq: number,
@@ -207,6 +208,69 @@ describe('groupTimeline', () => {
     if (reasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning row.');
     expect(reasoning.text).toBe('Consider options');
     expect(reasoning.streaming).toBe(false);
+  });
+
+  it('opens a new reasoning and assistant segment after every tool call', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'A' }, '2026-01-01T00:00:01.000Z'),
+        event(2, { type: 'text.delta', turnId: 'turn-1', text: 'P1' }, '2026-01-01T00:00:02.000Z'),
+        event(
+          3,
+          { type: 'tool.started', turnId: 'turn-1', toolCallId: 'c1', name: 'read', input: {} },
+          '2026-01-01T00:00:03.000Z',
+        ),
+        event(
+          4,
+          { type: 'tool.finished', turnId: 'turn-1', toolCallId: 'c1', output: 'ok', isError: false },
+          '2026-01-01T00:00:04.000Z',
+        ),
+        event(5, { type: 'reasoning.delta', turnId: 'turn-1', text: 'B' }, '2026-01-01T00:00:05.000Z'),
+        event(6, { type: 'text.delta', turnId: 'turn-1', text: 'P2' }, '2026-01-01T00:00:06.000Z'),
+        event(
+          7,
+          { type: 'tool.started', turnId: 'turn-1', toolCallId: 'c2', name: 'grep', input: {} },
+          '2026-01-01T00:00:07.000Z',
+        ),
+        event(
+          8,
+          { type: 'tool.finished', turnId: 'turn-1', toolCallId: 'c2', output: 'ok', isError: false },
+          '2026-01-01T00:00:08.000Z',
+        ),
+        event(9, { type: 'text.delta', turnId: 'turn-1', text: 'ANSWER' }, '2026-01-01T00:00:09.000Z'),
+        event(10, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '2026-01-01T00:00:09.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'assistant' ? item.text : item.kind))).toEqual([
+      'reasoning',
+      'P1',
+      'tool',
+      'reasoning',
+      'P2',
+      'tool',
+      'ANSWER',
+    ]);
+    const reasoningTexts = items.flatMap((item) => (item.kind === 'reasoning' ? item.text : []));
+    expect(reasoningTexts).toEqual(['A', 'B']);
+
+    const blocks = groupTurnBlocks(items);
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'reasoning',
+      'prose',
+      'tools',
+      'reasoning',
+      'prose',
+      'tools',
+      'final',
+    ]);
+    const finals = blocks.filter((block) => block.kind === 'final');
+    expect(finals).toHaveLength(1);
+    expect(finals[0]?.kind === 'final' ? finals[0].text : null).toBe('ANSWER');
+    const proseTexts = blocks.flatMap((block) => (block.kind === 'prose' ? [block.text] : []));
+    expect(proseTexts).toEqual(['P1', 'P2']);
   });
 
   it('renders error events as notices and ignores bookkeeping events', () => {

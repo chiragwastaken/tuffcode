@@ -103,12 +103,16 @@ export interface GroupTimelineInput {
 
 interface TurnState {
   usersPlaced: boolean;
+  /** The assistant segment still receiving text, or null once a tool closes it. */
   assistant: AssistantItem | null;
   /** Text of assistant rows already closed by a tool call, in order. */
   closedTexts: string[];
   /** Distinguishes the prose and answer rows of one turn. */
   assistantSeq: number;
+  /** The reasoning segment still receiving deltas, or null once it is closed. */
   reasoning: ReasoningItem | null;
+  /** Distinguishes the reasoning segments of one turn. */
+  reasoningSeq: number;
   tools: Map<string, ToolItem>;
   /** The assistant text came from the persisted row, so later deltas are stale. */
   assistantFinal: boolean;
@@ -219,11 +223,22 @@ function beforeEvent(message: Message, event: ThreadEventRow): boolean {
 }
 
 /**
+ * Ends the open reasoning segment. A later delta starts a fresh block, so
+ * reasoning that a tool or a text delta interrupted stays in event order.
+ */
+function closeReasoning(state: TurnState, at: string): void {
+  if (!state.reasoning) return;
+  state.reasoning.streaming = false;
+  if (state.reasoning.finishedAt === null) state.reasoning.finishedAt = at;
+  state.reasoning = null;
+}
+
+/**
  * Folds the per-thread event log into render rows. Persisted message rows are
  * interleaved by `createdAt`, so a reopened thread keeps its user turns and any
- * assistant text the replay does not cover. Text deltas accumulate into one row
- * until a tool starts; the persisted row replaces the closing text instead of
- * adding a duplicate.
+ * assistant text the replay does not cover. Reasoning and text deltas accumulate
+ * into their open segment until a tool closes both; the persisted row replaces
+ * the closing text instead of adding a duplicate.
  */
 export function groupTimeline({
   events,
@@ -265,6 +280,7 @@ export function groupTimeline({
         closedTexts: [],
         assistantSeq: 0,
         reasoning: null,
+        reasoningSeq: 0,
         tools: new Map(),
         assistantFinal: false,
       };
@@ -374,10 +390,7 @@ export function groupTimeline({
       case 'text.delta': {
         if (payload.text.length === 0) break;
         const state = turnState(payload.turnId);
-        if (state.reasoning?.finishedAt === null) {
-          state.reasoning.finishedAt = event.createdAt;
-          state.reasoning.streaming = false;
-        }
+        closeReasoning(state, event.createdAt);
         if (state.assistantFinal) break;
         if (!state.assistant) {
           state.assistant = {
@@ -396,27 +409,27 @@ export function groupTimeline({
       case 'reasoning.delta': {
         if (payload.text.length === 0) break;
         const state = turnState(payload.turnId);
-        if (!state.reasoning) {
-          state.reasoning = {
+        let segment = state.reasoning;
+        if (!segment || segment.finishedAt !== null) {
+          segment = {
             kind: 'reasoning',
-            key: `reasoning-${payload.turnId}`,
+            key: `reasoning-${payload.turnId}-${state.reasoningSeq}`,
             turnId: payload.turnId,
             text: '',
             streaming: true,
             startedAt: event.createdAt,
             finishedAt: null,
           };
-          items.push(state.reasoning);
+          state.reasoning = segment;
+          state.reasoningSeq += 1;
+          items.push(segment);
         }
-        state.reasoning.text += payload.text;
+        segment.text += payload.text;
         break;
       }
       case 'tool.started': {
         const state = turnState(payload.turnId);
-        if (state.reasoning?.finishedAt === null) {
-          state.reasoning.finishedAt = event.createdAt;
-          state.reasoning.streaming = false;
-        }
+        closeReasoning(state, event.createdAt);
         // Text before a tool is prose, not the answer; the next delta starts a new row.
         if (state.assistant) {
           state.assistant.streaming = false;

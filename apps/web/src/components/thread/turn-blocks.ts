@@ -264,15 +264,14 @@ export function blockCopyText(block: TimelineBlock): string {
 }
 
 /**
- * Folds flat timeline rows into Claude-style turn blocks: reasoning first, prose
- * until a tool starts, consecutive tools as one surface, then the closing answer.
- * The last text of a turn is the answer; earlier text is prose. Text after the
- * last tool is always the answer.
+ * Folds flat timeline rows into Claude-style turn blocks: reasoning, prose and
+ * tool runs keep their event order, and consecutive tools share one surface.
+ * The last assistant text of a turn is the answer; earlier text is prose.
  */
 export function groupTurnBlocks(items: readonly TimelineItem[]): TimelineBlock[] {
-  const lastToolIndex = new Map<string, number>();
+  const lastAssistantIndex = new Map<string, number>();
   items.forEach((item, index) => {
-    if (item.kind === 'tool' || item.kind === 'tool-group') lastToolIndex.set(item.turnId, index);
+    if (item.kind === 'assistant') lastAssistantIndex.set(item.turnId, index);
   });
 
   const blocks: TimelineBlock[] = [];
@@ -297,7 +296,7 @@ export function groupTurnBlocks(items: readonly TimelineItem[]): TimelineBlock[]
         break;
       }
       case 'assistant': {
-        const closing = index > (lastToolIndex.get(item.turnId) ?? -1);
+        const closing = index === lastAssistantIndex.get(item.turnId);
         if (closing) {
           blocks.push({
             kind: 'final',

@@ -89,6 +89,24 @@ describe('groupTurnBlocks', () => {
     expect(blocks.map((block) => block.kind)).toEqual(['final']);
   });
 
+  it('keeps one reasoning block and one final answer when the turn runs no tools', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Weigh ' }, '00'),
+      event(2, { type: 'reasoning.delta', turnId: 'turn-1', text: 'the options' }, '01'),
+      event(3, { type: 'text.delta', turnId: 'turn-1', text: 'All ' }, '02'),
+      event(4, { type: 'text.delta', turnId: 'turn-1', text: 'done.' }, '03'),
+      event(5, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '03'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['reasoning', 'final']);
+    const [reasoning, final] = blocks;
+    if (reasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning block.');
+    expect(reasoning.text).toBe('Weigh the options');
+    expect(reasoning.durationMs).toBe(2000);
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.text).toBe('All done.');
+  });
+
   it('splits interleaved prose from the answer around each tool run', () => {
     const blocks = blocksOf([
       event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Opening the file.' }, '00'),
