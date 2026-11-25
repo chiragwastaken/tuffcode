@@ -399,8 +399,17 @@ export interface CompactHistoryOptions {
   signal: AbortSignal;
 }
 
+/** Flattens a multimodal message to text, so a compaction summary never sees `[object Object]`. */
+function contentText(content: ChatMessage['content']): string {
+  if (content === null) return '';
+  if (typeof content === 'string') return content;
+  return content
+    .map((part) => (part.type === 'text' ? (part.text ?? '') : '[image omitted from summary]'))
+    .join(LF);
+}
+
 function renderTranscriptMessage(message: ChatMessage): string {
-  const lines = [`[${message.role}] ${message.content ?? ''}`];
+  const lines = [`[${message.role}] ${contentText(message.content)}`];
   if (message.tool_calls !== undefined && message.tool_calls.length > 0) {
     const calls = message.tool_calls
       .map((call) => `${call.function.name}(${call.function.arguments})`)

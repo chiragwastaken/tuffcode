@@ -29,6 +29,7 @@ function context(overrides: Partial<TurnContext> = {}): TurnContext {
     model: 'claude-test',
     brainSlice: 'brain',
     attachments: [],
+    vision: false,
     signal: new AbortController().signal,
     ...overrides,
   };

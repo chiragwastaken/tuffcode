@@ -11,7 +11,7 @@ import {
 } from '@tuffcode/contracts';
 import { newId, resolveWithin, type Logger } from '@tuffcode/shared';
 import { captureStandingRules } from '../brain/rules.js';
-import { threadLimits, type ModelLimits } from '../context/limits.js';
+import { threadLimits, threadVision, type ModelLimits } from '../context/limits.js';
 import { measureContext } from '../context/service.js';
 import type { ContextSectionInput } from '../context/usage.js';
 import type { ProviderRecord, Repos, TurnStatus } from '../db/repos/index.js';
@@ -129,11 +129,28 @@ export function recordTurnStart(repos: Repos, input: TurnStartInput): void {
   });
 }
 
+/**
+ * Resolves each attachment into the shape an adapter reads. A path attachment must stay
+ * inside the worktree; an inline attachment is already bytes and only needs its kind.
+ */
 function resolveAttachments(
   worktreePath: string,
   attachments: readonly Attachment[],
 ): TurnContext['attachments'] {
   return attachments.map((attachment) => {
+    const kind = attachment.mimeType?.startsWith('image/') === true ? 'image' : 'file';
+    const name = attachment.name.length > 0 ? { name: attachment.name } : {};
+    if (attachment.data !== undefined) {
+      return {
+        ...name,
+        data: attachment.data,
+        ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
+        kind,
+      };
+    }
+    if (attachment.path === undefined) {
+      throw badRequest(`attachment has neither a path nor inline data: ${attachment.name}`);
+    }
     let resolved: string;
     try {
       resolved = resolveWithin(worktreePath, attachment.path);
@@ -141,8 +158,10 @@ function resolveAttachments(
       throw badRequest(`attachment escapes the worktree: ${attachment.name}`);
     }
     return {
+      ...name,
       path: resolved,
-      kind: attachment.mimeType?.startsWith('image/') === true ? 'image' : 'file',
+      ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
+      kind,
     };
   });
 }
@@ -517,6 +536,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         model: thread.modelId,
         brainSlice: '',
         attachments: turnAttachments,
+        vision: threadVision(repos, thread),
         signal: controller.signal,
         ...(policy.toolAllowlist === undefined ? {} : { toolAllowlist: policy.toolAllowlist }),
         toolOptions: policy.toolOptions,

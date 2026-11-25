@@ -83,3 +83,26 @@ export function threadLimits(repos: Repos, thread: Thread, settings: Settings): 
     settings,
   });
 }
+
+/**
+ * True when the thread's model can read images. The model row wins; a provider the user
+ * marked as vision capable answers for a model row that never declared capabilities,
+ * because discovery leaves them null for endpoints that publish no modality hints.
+ */
+export function threadVision(repos: Repos, thread: Thread): boolean {
+  const provider = repos.providers.get(thread.providerId);
+  if (provider === undefined) return false;
+  const row = repos.providers.listModels(provider.id).find((m) => m.modelId === thread.modelId);
+  if (row?.capabilities !== null && row?.capabilities !== undefined) {
+    return row.capabilities.vision;
+  }
+  return providerCapabilityFlag(provider.config, 'vision');
+}
+
+/** One boolean out of a provider's `capabilities` object; false when absent or malformed. */
+function providerCapabilityFlag(config: Record<string, unknown>, key: string): boolean {
+  const capabilities = config['capabilities'];
+  if (typeof capabilities !== 'object' || capabilities === null) return false;
+  const value = (capabilities as Record<string, unknown>)[key];
+  return typeof value === 'boolean' ? value : false;
+}

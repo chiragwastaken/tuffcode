@@ -40,6 +40,8 @@ export interface TuffcodeBridge {
   getBootstrap(): Promise<BootstrapInfo>;
   pickFolder(): Promise<string | null>;
   pickFile(request: PickFileRequest): Promise<string | null>;
+  /** The filesystem path behind a picked or dropped File; Electron 32 removed `File.path`. */
+  getPathForFile(file: File): string;
   onMenuAction(callback: (action: string) => void): () => void;
   setTheme(theme: Theme): void;
   checkForUpdates(): Promise<UpdateCheckOutcome>;

@@ -20,6 +20,7 @@ const turnContext: TurnContext = {
   model: 'claude-opus-4-5',
   brainSlice: 'rules: never use emdash',
   attachments: [{ path: 'C:/work/a.txt', kind: 'file' }],
+  vision: false,
   signal: new AbortController().signal,
 };
 

@@ -550,8 +550,8 @@ describe('thread runner', () => {
     expect(turnId).toMatch(/^turn_/);
     const ctx = f.adapter.sends[0]?.ctx;
     expect(ctx?.attachments).toEqual([
-      { path: join(f.ctx.env.root, 'shot.png'), kind: 'image' },
-      { path: join(f.ctx.env.root, 'notes.txt'), kind: 'file' },
+      { name: 'shot.png', path: join(f.ctx.env.root, 'shot.png'), mimeType: 'image/png', kind: 'image' },
+      { name: 'notes.txt', path: join(f.ctx.env.root, 'notes.txt'), kind: 'file' },
     ]);
     f.adapter.end();
 
@@ -559,6 +559,73 @@ describe('thread runner', () => {
     await expect(
       other.runner.send('thr_a', '', [{ name: 'escape', path: '../escape.txt' }]),
     ).rejects.toMatchObject({ code: 'bad-request' });
+  });
+
+  it('passes inline image bytes through without a worktree path', async () => {
+    const f = setup();
+    const { turnId } = await f.runner.send('thr_a', '', [
+      { name: 'pasted.png', data: 'AAAA', mimeType: 'image/png' },
+    ]);
+    expect(turnId).toMatch(/^turn_/);
+    expect(f.adapter.sends[0]?.ctx.attachments).toEqual([
+      { name: 'pasted.png', data: 'AAAA', mimeType: 'image/png', kind: 'image' },
+    ]);
+    f.adapter.end();
+  });
+
+  it('rejects an attachment that carries neither a path nor data', async () => {
+    const f = setup();
+    await expect(f.runner.send('thr_a', '', [{ name: 'empty' }])).rejects.toMatchObject({
+      code: 'bad-request',
+    });
+  });
+
+  it('marks the turn as vision capable when the provider toggle is on', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { capabilities: { tools: true, vision: true, reasoning: false, reasoningEfforts: [] } },
+    });
+    const ended = waitForTurnEnd(f.bus);
+    await f.runner.send('thr_a', 'look at this');
+    expect(f.adapter.sends[0]?.ctx.vision).toBe(true);
+    f.adapter.end();
+    await ended;
+  });
+
+  it('leaves vision off when the provider toggle is off', async () => {
+    const f = setup();
+    const ended = waitForTurnEnd(f.bus);
+    await f.runner.send('thr_a', 'hello');
+    expect(f.adapter.sends[0]?.ctx.vision).toBe(false);
+    f.adapter.end();
+    await ended;
+  });
+
+  it('prefers a model row that declares its own capabilities over the provider toggle', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { capabilities: { tools: true, vision: true, reasoning: false, reasoningEfforts: [] } },
+    });
+    f.ctx.repos.providers.replaceModels('prv_test', [
+      {
+        modelId: 'model-x',
+        label: 'Model X',
+        contextWindow: null,
+        capabilities: { tools: true, vision: false, reasoning: false, reasoningEfforts: [] },
+        isDefault: true,
+      },
+    ]);
+    const ended = waitForTurnEnd(f.bus);
+    await f.runner.send('thr_a', 'hello');
+    expect(f.adapter.sends[0]?.ctx.vision).toBe(false);
+    f.adapter.end();
+    await ended;
   });
 
   it('denies an approval whose run died and fails the thread', async () => {

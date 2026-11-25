@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import {
   BOOTSTRAP_CHANNEL,
   CHECK_UPDATES_CHANNEL,
@@ -22,6 +22,11 @@ const bridge: TuffcodeBridge = {
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
   pickFile: (request: PickFileRequest): Promise<string | null> =>
     ipcRenderer.invoke(PICK_FILE_CHANNEL, request),
+  /**
+   * The filesystem path behind a picked or dropped File. Electron 32 removed `File.path`,
+   * so this is the only way a renderer can name a file it did not create itself.
+   */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   notify: (request: NotifyRequest): void => ipcRenderer.send(NOTIFY_CHANNEL, request),
   setKeepAwake: (on: boolean): void => ipcRenderer.send(KEEP_AWAKE_CHANNEL, on === true),
   openExternal: (url: string): void => ipcRenderer.send(OPEN_EXTERNAL_CHANNEL, url),

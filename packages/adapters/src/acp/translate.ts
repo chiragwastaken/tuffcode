@@ -11,7 +11,7 @@ import type {
   ToolCallStatus,
   ToolKind,
 } from '@agentclientprotocol/sdk';
-import type { AdapterEvent, ApprovalChoice, PermissionMode } from '@tuffcode/contracts';
+import type { AdapterEvent, ApprovalChoice, PermissionMode, TurnAttachment } from '@tuffcode/contracts';
 
 /**
  * ACP session updates are normalized onto the contract `AdapterEvent` union.
@@ -423,18 +423,32 @@ export function translatePermissionRequest(
   };
 }
 
-/** Converts the turn text and attachments into ACP prompt content blocks. */
+/**
+ * Converts the turn text and attachments into ACP prompt content blocks. An image
+ * becomes an `image` block when the agent declared the `image` prompt capability;
+ * otherwise it stays a resource link the agent can read from disk itself.
+ */
 export function buildPromptBlocks(
   text: string,
-  attachments: readonly { path: string; kind: 'file' | 'image' }[],
+  attachments: readonly TurnAttachment[],
+  options: { imageCapable?: boolean } = {},
 ): ContentBlock[] {
   const blocks: ContentBlock[] = [{ type: 'text', text }];
   for (const attachment of attachments) {
+    if (attachment.kind === 'image' && attachment.data !== undefined && options.imageCapable === true) {
+      blocks.push({
+        type: 'image',
+        data: attachment.data,
+        mimeType: attachment.mimeType ?? 'image/png',
+      });
+      continue;
+    }
+    if (attachment.path === undefined) continue;
     blocks.push({
       type: 'resource_link',
       name: basename(attachment.path),
       uri: pathToFileURL(attachment.path).href,
-      ...(attachment.kind === 'image' ? { mimeType: 'image/*' } : {}),
+      ...(attachment.kind === 'image' ? { mimeType: attachment.mimeType ?? 'image/png' } : {}),
     });
   }
   return blocks;

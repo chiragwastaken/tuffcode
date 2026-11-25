@@ -472,6 +472,7 @@ function renderAnthropicMessage(message: AnthropicMessage): string {
   if (typeof message.content === 'string') return `[${message.role}] ${message.content}`;
   const blocks = message.content.map((block) => {
     if (block.type === 'text') return block.text;
+    if (block.type === 'image') return '[image omitted from summary]';
     if (block.type === 'tool_use') {
       return `tool_use ${block.name}(${JSON.stringify(block.input)})`;
     }

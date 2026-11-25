@@ -13,6 +13,10 @@ const LF = String.fromCharCode(10);
 const DONE = 'data: ' + String.fromCharCode(91, 68, 79, 78, 69, 93) + LF + LF;
 const encoder = new TextEncoder();
 
+/** A 1x1 PNG: the smallest payload that is a real image to base64. */
+const TINY_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+
 const logger: AdapterLogger = { debug() {}, info() {}, warn() {}, error() {} };
 const deps: AdapterDeps = { logger, resolveCommand: async () => null, env: {} };
 
@@ -27,6 +31,7 @@ function context(overrides: Partial<TurnContext> = {}): TurnContext {
     model: 'test-model',
     brainSlice: '',
     attachments: [],
+    vision: false,
     signal: new AbortController().signal,
     ...overrides,
   };
@@ -518,6 +523,86 @@ describe('createOpenAIChatAdapter', () => {
     expect(lastBody.messages[0]?.role).toBe('system');
     expect(lastBody.messages.some((message) => message.role === 'tool')).toBe(true);
     expect(lastBody.messages.at(-1)).toMatchObject({ role: 'user' });
+    await adapter.dispose();
+  });
+
+  it('sends an attached image as an image_url part when the model has vision', async () => {
+    const bodies: unknown[] = [];
+    const fetchFn = async (_input: string, init: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(streamOf([{ choices: [{ delta: { content: 'seen' }, finish_reason: 'stop' }] }]), {
+        status: 200,
+      });
+    };
+    const adapter = await createOpenAIChatAdapter(
+      {
+        id: 'p',
+        kind: 'openai-compatible',
+        label: 'Local',
+        config: { baseUrl: 'http://127.0.0.1:1234/v1' },
+        secret: null,
+      },
+      deps,
+      { fetchFn },
+    );
+
+    await collect(
+      adapter.send(
+        'what is in this image?',
+        context({
+          vision: true,
+          attachments: [
+            { kind: 'image', name: 'shot.png', mimeType: 'image/png', data: TINY_PNG },
+          ],
+        }),
+      ),
+    );
+
+    const body = bodies[0] as { messages: { role: string; content: unknown }[] };
+    const user = body.messages.at(-1);
+    expect(user?.role).toBe('user');
+    expect(user?.content).toEqual([
+      { type: 'text', text: 'what is in this image?' },
+      { type: 'text', text: 'Image file: shot.png' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,' + TINY_PNG } },
+    ]);
+    await adapter.dispose();
+  });
+
+  it('names the image instead of sending it when the model has no vision', async () => {
+    const bodies: unknown[] = [];
+    const fetchFn = async (_input: string, init: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(streamOf([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]), {
+        status: 200,
+      });
+    };
+    const adapter = await createOpenAIChatAdapter(
+      {
+        id: 'p',
+        kind: 'openai-compatible',
+        label: 'Local',
+        config: { baseUrl: 'http://127.0.0.1:1234/v1' },
+        secret: null,
+      },
+      deps,
+      { fetchFn },
+    );
+
+    await collect(
+      adapter.send(
+        'look',
+        context({
+          vision: false,
+          attachments: [{ kind: 'image', name: 'shot.png', mimeType: 'image/png', data: TINY_PNG }],
+        }),
+      ),
+    );
+
+    const body = bodies[0] as { messages: { role: string; content: unknown }[] };
+    const content = body.messages.at(-1)?.content;
+    expect(typeof content).toBe('string');
+    expect(String(content)).toContain('[Image attached: shot.png - this model cannot view images]');
     await adapter.dispose();
   });
 });
