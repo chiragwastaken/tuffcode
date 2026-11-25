@@ -117,6 +117,7 @@ function SidebarItemView({ item, actions }: { item: SidebarItem; actions: Sideba
         <ChildThreadRow
           thread={item.thread}
           parentId={item.parentId}
+          depth={item.depth}
           selected={item.thread.id === actions.activeThreadId}
           onOpen={actions.onOpenChild}
         />

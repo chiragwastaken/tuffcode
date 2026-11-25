@@ -15,7 +15,7 @@ import {
 } from '../subagents/subagent-model';
 import { StatusChip } from '../thread/status-chip';
 import { formatDuration, outputTail } from '../thread/turn-blocks';
-import { runningElapsedMs, runningToolRows } from './activity-model';
+import { runningElapsedMs, runningToolRows, waitingItems } from './activity-model';
 
 export interface ActivityPanelProps {
   threadId: string;
@@ -48,6 +48,7 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
     useShallow((state) => subagentsOfThread(state.subagents, threadId)),
   );
   const openSubagent = useAppStore((state) => state.openSubagent);
+  const threadStatus = useAppStore((state) => state.threads[threadId]?.status);
 
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
@@ -55,7 +56,7 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
     () => runningToolRows(events ?? EMPTY_EVENTS, subagents),
     [events, subagents],
   );
-  const queued = subagents.filter((child) => child.status === 'queued');
+  const waiting = waitingItems(subagents, threadStatus);
   const live = tools.length > 0 || subagents.some(isRunningSubagent);
   const now = useLiveClock(live);
 
@@ -181,28 +182,39 @@ export function ActivityPanel({ threadId }: ActivityPanelProps) {
         ) : null}
 
         <section aria-label="Waiting" className="flex flex-col gap-0.5">
-          <SectionHeading label="Waiting" count={queued.length} />
-          {queued.length === 0 ? (
+          <SectionHeading label="Waiting" count={waiting.length} />
+          {waiting.length === 0 ? (
             <p
               data-testid="activity-waiting-empty"
               className="px-1.5 text-2xs text-muted-foreground"
             >
-              No pending approvals
+              Nothing is waiting
             </p>
           ) : (
-            queued.map((child) => (
-              <button
-                key={child.childId}
-                type="button"
-                data-testid="activity-waiting-row"
-                onClick={() => openSubagent(child.childId)}
-                className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
-              >
-                <span className="min-w-0 flex-1 truncate">
-                  {SUBAGENT_TYPE_LABEL[child.type]} {SUBAGENT_STATUS_LABEL[child.status]}
-                </span>
-              </button>
-            ))
+            waiting.map((item) =>
+              item.kind === 'approval' ? (
+                <p
+                  key="approval"
+                  data-testid="activity-waiting-approval"
+                  className="flex h-8 items-center px-1.5 text-xs text-muted-foreground"
+                >
+                  An approval is waiting in the timeline
+                </p>
+              ) : (
+                <button
+                  key={item.child.childId}
+                  type="button"
+                  data-testid="activity-waiting-row"
+                  onClick={() => openSubagent(item.child.childId)}
+                  className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {SUBAGENT_TYPE_LABEL[item.child.type]}{' '}
+                    {SUBAGENT_STATUS_LABEL[item.child.status]}
+                  </span>
+                </button>
+              ),
+            )
           )}
         </section>
       </div>

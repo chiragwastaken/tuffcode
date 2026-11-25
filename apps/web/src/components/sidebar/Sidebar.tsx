@@ -1,5 +1,5 @@
 import { useNavigate, useRouter } from '@tanstack/react-router';
-import type { Project, Thread } from '@tuffcode/contracts';
+import type { Project, SubagentView, Thread } from '@tuffcode/contracts';
 import { Button, EmptyState, IconButton, Input, Kbd } from '@tuffcode/ui';
 import { FolderPlus, Search, SearchX, X } from 'lucide-react';
 import {
@@ -156,7 +156,11 @@ export function Sidebar() {
         openSubagent(live.childId);
         return;
       }
-      if (isCouncilChild(thread)) requestInspectorTab('council');
+      if (isCouncilChild(thread)) {
+        // The inspector subscribes per thread, so let the new active thread land
+        // before asking for the council tab.
+        queueMicrotask(() => requestInspectorTab('council'));
+      }
     },
     [navigate, openSubagent, setActiveThread],
   );
@@ -205,6 +209,34 @@ export function Sidebar() {
       projectPathFor,
     ],
   );
+
+  /**
+   * After a reload the store has no live child frames, so a child row could not
+   * open its pane. One list of every persisted child restores the thread id to
+   * child id mapping; a failed call leaves the sidebar working without panes.
+   */
+  useEffect(() => {
+    let disposed = false;
+    void rpc.request('subagents.listAll', {}).then(
+      (views) => {
+        if (disposed) return;
+        const byThread = new Map<string, SubagentView[]>();
+        for (const view of views) {
+          const siblings = byThread.get(view.threadId);
+          if (siblings === undefined) byThread.set(view.threadId, [view]);
+          else siblings.push(view);
+        }
+        const { mergeSubagentViews } = useAppStore.getState();
+        for (const [threadId, threadViews] of byThread) {
+          mergeSubagentViews(threadId, threadViews);
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [rpc]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
