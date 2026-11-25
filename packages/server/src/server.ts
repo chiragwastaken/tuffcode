@@ -3,8 +3,15 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { McpServerLaunch } from '@tuffcode/contracts';
-import { createLogger, dbPath as defaultDbPath, logsDir, serverJsonPath, type Logger } from '@tuffcode/shared';
+import {
+  cacheRoot,
+  createLogger,
+  dbPath as defaultDbPath,
+  logsDir,
+  pluginsRoot,
+  serverJsonPath,
+  type Logger,
+} from '@tuffcode/shared';
 import {
   createAdapterDeps,
   createAdapterForProvider,
@@ -30,6 +37,15 @@ import { createRunner, type Runner } from './runner/runner.js';
 import { createSecretBridge, type SecretPort, type Secrets } from './secrets/bridge.js';
 import { createSkillHandlers } from './skills/handlers.js';
 import { createSubagents } from './subagents/service.js';
+import { backfillTitles } from './titles.js';
+import { createFileHandlers } from './files/service.js';
+import { loadSkill } from './skills/discover.js';
+import { pluginSkillRoots } from './skills/roots.js';
+import { createPluginHandlers } from './plugins/rpc.js';
+import { createPluginsService } from './plugins/service.js';
+import { createTodoHandlers } from './todos/rpc.js';
+import { createTodoService } from './todos/service.js';
+import { createWebFetch } from './tools/web-fetch.js';
 import type { Subagents } from './subagents/types.js';
 import { createExtraTools } from './tools/extra.js';
 import { attachWebSocket, type AttachedWebSocket } from './ws.js';
@@ -120,8 +136,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (event.type === 'server.warning') warnings.push(event.payload.message);
   });
 
-  const providers = createProvidersService({ repos, bus, secrets, resolveCommand });
-  const mcp = createMcpService(repos);
+  const providers = createProvidersService({
+    repos,
+    bus,
+    secrets,
+    resolveCommand,
+    cacheDir: cacheRoot(),
+  });
+  const mcp = createMcpService(repos, { secrets });
+  // Connector tokens load once so Claude's synchronous launch map can attach them.
+  void mcp.warmSecrets().catch(() => undefined);
+  const todos = createTodoService({ repos, bus });
+  const plugins = createPluginsService({
+    repos,
+    bus,
+    mcp,
+    pluginsDir: pluginsRoot(),
+    cacheDir: cacheRoot(),
+  });
   const brainStore = createBrainStore(repos.brain);
   const extraTools = createExtraTools({
     repos,
@@ -132,28 +164,33 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       search: (input) => searchMemory(brainStore, input),
       add: (input) => brainStore.upsert(input),
     },
+    todos,
+    skills: {
+      read: (projectId, name) => {
+        const project = repos.projects.get(projectId);
+        if (project === undefined) throw new Error('project not found');
+        return loadSkill(project.path, name, {
+          pluginRoots: pluginSkillRoots(repos),
+          onWarning: () => undefined,
+        });
+      },
+    },
+    webFetch: createWebFetch(),
   });
   // The runner needs adapter deps and the subagent service needs the runner, so the
   // harness hook resolves the service through a holder assigned right after creation.
   let subagentsRef: Subagents | undefined;
-  // Claude launches MCP servers itself, so it gets the enabled stdio configs keyed by
-  // a unique name; a label shared by two servers takes the server id as a suffix.
-  const enabledServers = repos.mcp.list().filter((server) => server.enabled);
-  const labelCounts = new Map<string, number>();
-  for (const server of enabledServers) {
-    labelCounts.set(server.label, (labelCounts.get(server.label) ?? 0) + 1);
-  }
-  const mcpServers: Record<string, McpServerLaunch> = {};
-  for (const server of enabledServers) {
-    const key =
-      (labelCounts.get(server.label) ?? 0) > 1 ? `${server.label}-${server.id}` : server.label;
-    mcpServers[key] = { command: server.command, args: server.args, env: server.env };
-  }
+  // Claude launches MCP servers itself; the map is read per session, so a connector
+  // added or toggled in Plugins reaches the next Claude session without a restart.
   const adapterDeps = createAdapterDeps({
     logger: adapterLogger,
     resolveCommand,
     extraTool: extraTools.run,
-    mcpServers,
+    mcpServers: () => mcp.launchMap(),
+    subagentControl: async (request) => {
+      if (subagentsRef === undefined) throw new Error('subagent service is not ready');
+      return subagentsRef.control(request);
+    },
     spawnSubagent: async (request) => {
       if (subagentsRef === undefined) throw new Error('subagent service is not ready');
       return subagentsRef.spawnFromTool(request);
@@ -188,6 +225,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   });
   subagentsRef = subagents;
   subagents.recoverOrphaned();
+  try {
+    const renamed = backfillTitles(repos);
+    if (renamed > 0) logger.info('legacy thread titles backfilled', { count: renamed });
+  } catch (error) {
+    logger.warn('thread title backfill failed', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const diagnostics: DiagnosticsInput = {
     version,
@@ -227,6 +272,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     mcp,
     featureHandlers: [
       createTerminalHandlers(terminals),
+      createTodoHandlers({ todos }),
+      createFileHandlers({ repos }),
+      createPluginHandlers({ plugins }),
       ...(options.featureHandlers ?? []),
     ],
   });

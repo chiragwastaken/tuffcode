@@ -2,6 +2,8 @@ import type {
   AdapterEvent,
   PermissionMode,
   Settings,
+  SubagentControlRequest,
+  SubagentMessage,
   SubagentSpec,
   SubagentStatus,
   SubagentType,
@@ -17,6 +19,7 @@ import { badRequest, conflict, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
 import { provisionWorktree, removeWorktree } from '../git/index.js';
 import type { Runner } from '../runner/runner.js';
+import { subagentTitle } from '../titles.js';
 import type {
   SubagentChildRequest,
   SubagentPorts,
@@ -193,6 +196,62 @@ interface ChildRun {
   childThreadId: string | null;
 }
 
+/** Live counters for one child; flushed to the row and the bus at most every 500 ms. */
+interface Telemetry {
+  toolCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  activity: string | null;
+  flushedAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const TELEMETRY_FLUSH_MS = 500;
+const ACTIVITY_CHARS = 160;
+/** Follow-ups queued for one child before new ones are refused. */
+const INBOX_LIMIT = 20;
+export const DEFAULT_WAIT_SECONDS = 120;
+export const MAX_WAIT_SECONDS = 600;
+
+const ACTIVITY_KEYS = ['command', 'path', 'pattern', 'url', 'task', 'query', 'name', 'action'] as const;
+
+/** "bash: pnpm test" from a tool.started frame: the tool and its most telling argument. */
+export function describeActivity(name: string, input: unknown): string {
+  let detail = '';
+  if (typeof input === 'object' && input !== null) {
+    const record = input as Record<string, unknown>;
+    for (const key of ACTIVITY_KEYS) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        detail = value.replace(/\s+/g, ' ').trim();
+        break;
+      }
+    }
+  }
+  const line = detail.length === 0 ? name : `${name}: ${detail}`;
+  return line.length <= ACTIVITY_CHARS ? line : `${line.slice(0, ACTIVITY_CHARS - 3)}...`;
+}
+
+function elapsedLabel(view: SubagentView, now: number): string {
+  const start = view.startedAt ?? view.createdAt;
+  const end = view.finishedAt ?? null;
+  const ms = (end === null ? now : Date.parse(end)) - Date.parse(start);
+  if (!Number.isFinite(ms) || ms < 0) return '-';
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/** One status line per child, the format `status` and `wait` hand back to the model. */
+export function formatChildLine(view: SubagentView, now = Date.now()): string {
+  const usage =
+    view.toolCount === undefined
+      ? 'usage -'
+      : `${view.toolCount} tools, ${view.inputTokens ?? 0} in / ${view.outputTokens ?? 0} out tokens`;
+  const activity = view.activity ? `, now ${view.activity}` : '';
+  const unread = (view.unread ?? 0) > 0 ? `, ${view.unread} unread` : '';
+  return `${view.childId} ${view.type} [${view.status}] ${view.model}: ${usage}, ${elapsedLabel(view, now)}${activity}${unread}`;
+}
+
 /**
  * Typed subagent runtime: one persisted row and one child session per spawn, a
  * per-parent queue capped by `subagentConcurrency`, a per-child token budget, and
@@ -219,6 +278,103 @@ export function createSubagents(deps: SubagentDeps): Subagents {
   const active = new Map<string, ChildRun>();
   const settled = new Set<string>();
   const waiters = new Map<string, (view: SubagentView) => void>();
+  const telemetry = new Map<string, Telemetry>();
+  /** Follow-ups waiting for the child's current turn to end, oldest first. */
+  const inboxes = new Map<string, string[]>();
+
+  function telemetryFor(record: SubagentRecord): Telemetry {
+    const existing = telemetry.get(record.childId);
+    if (existing !== undefined) return existing;
+    const created: Telemetry = {
+      toolCount: record.toolCount ?? 0,
+      inputTokens: record.inputTokens ?? 0,
+      outputTokens: record.outputTokens ?? 0,
+      activity: record.activity ?? null,
+      flushedAt: 0,
+      timer: null,
+    };
+    telemetry.set(record.childId, created);
+    return created;
+  }
+
+  function flushTelemetry(childId: string, parentThreadId: string): void {
+    const state = telemetry.get(childId);
+    if (state === undefined) return;
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    state.flushedAt = Date.now();
+    const counters = {
+      toolCount: state.toolCount,
+      inputTokens: state.inputTokens,
+      outputTokens: state.outputTokens,
+      activity: state.activity,
+    };
+    try {
+      repos.subagents.recordTelemetry(childId, counters);
+    } catch (error) {
+      // A late timer after shutdown finds the database closed; the counters are advisory.
+      logger.debug('subagent telemetry not persisted', { childId, reason: errorMessage(error) });
+      return;
+    }
+    bus.emit({
+      kind: 'event',
+      type: 'subagent.telemetry',
+      threadId: parentThreadId,
+      payload: { childId, threadId: parentThreadId, ...counters },
+    });
+  }
+
+  /** Coalesces bursts: the first change after a quiet period writes at once, the rest wait. */
+  function touchTelemetry(childId: string, parentThreadId: string): void {
+    const state = telemetry.get(childId);
+    if (state === undefined) return;
+    const wait = TELEMETRY_FLUSH_MS - (Date.now() - state.flushedAt);
+    if (wait <= 0) {
+      flushTelemetry(childId, parentThreadId);
+      return;
+    }
+    if (state.timer === null) {
+      state.timer = setTimeout(() => flushTelemetry(childId, parentThreadId), wait);
+      state.timer.unref?.();
+    }
+  }
+
+  function recordEvent(childId: string, parentThreadId: string, event: AdapterEvent): void {
+    const state = telemetry.get(childId);
+    if (state === undefined) return;
+    if (event.type === 'tool.started') {
+      state.toolCount += 1;
+      state.activity = describeActivity(event.name, event.input);
+      touchTelemetry(childId, parentThreadId);
+    } else if (event.type === 'usage') {
+      state.inputTokens += event.inputTokens ?? 0;
+      state.outputTokens += event.outputTokens ?? 0;
+      touchTelemetry(childId, parentThreadId);
+    }
+  }
+
+  function postMessage(
+    record: Pick<SubagentRecord, 'childId' | 'threadId'>,
+    direction: SubagentMessage['direction'],
+    text: string,
+  ): SubagentMessage {
+    const message = repos.subagents.addMessage({
+      id: newId('smsg'),
+      childId: record.childId,
+      direction,
+      text: truncate(text, SUMMARY_LIMIT),
+      createdAt: nowIso(),
+    });
+    bus.emit({
+      kind: 'event',
+      type: 'subagent.message',
+      threadId: record.threadId,
+      payload: { childId: record.childId, threadId: record.threadId, message },
+    });
+    return message;
+  }
 
   function requireRecord(childId: string): SubagentRecord {
     const record = repos.subagents.get(childId);
@@ -250,6 +406,8 @@ export function createSubagents(deps: SubagentDeps): Subagents {
     if (existing === undefined) return undefined;
     if (settled.has(childId)) return existing;
     settled.add(childId);
+    flushTelemetry(childId, existing.threadId);
+    inboxes.delete(childId);
     const record = repos.subagents.finish(childId, {
       status,
       summary: summary === null ? null : truncate(summary, SUMMARY_LIMIT),
@@ -275,7 +433,13 @@ export function createSubagents(deps: SubagentDeps): Subagents {
       running.set(parentThreadId, (running.get(parentThreadId) ?? 0) + 1);
       void runChild(childId).finally(() => {
         running.set(parentThreadId, Math.max(0, (running.get(parentThreadId) ?? 1) - 1));
-        pump(parentThreadId);
+        // Nothing may wait: settle after shutdown finds the database closed and stops here.
+        if ((queues.get(parentThreadId)?.length ?? 0) === 0) return;
+        try {
+          pump(parentThreadId);
+        } catch (error) {
+          logger.warn('subagent queue could not advance', { parentThreadId, reason: errorMessage(error) });
+        }
       });
     }
   }
@@ -320,6 +484,7 @@ export function createSubagents(deps: SubagentDeps): Subagents {
           modelId: record.model,
           permissionMode: permissionForSubagent(record.type),
           worktree: subagentWorktree(record.type),
+          task: record.task,
         });
       } catch (error) {
         finish(childId, 'failed', `child session could not start: ${errorMessage(error)}`);
@@ -333,9 +498,11 @@ export function createSubagents(deps: SubagentDeps): Subagents {
         return;
       }
       repos.subagents.setRunning(childId, child.id, nowIso());
+      const runningRecord = repos.subagents.get(childId) ?? record;
+      telemetryFor(runningRecord);
+      flushTelemetry(childId, parent.id);
 
       const project = repos.projects.get(parent.projectId);
-      const budget = record.budgetTokens ?? DEFAULT_SUBAGENT_BUDGET_TOKENS;
       const text = buildSubagentMessage({
         type: record.type,
         task: record.task,
@@ -343,32 +510,53 @@ export function createSubagents(deps: SubagentDeps): Subagents {
         ...(project === undefined ? {} : { projectName: project.name }),
         parentTitle: parent.title,
       });
+      await driveTurns(run, child.id, record, parent, text);
+    } finally {
+      active.delete(childId);
+    }
+  }
 
-      let used = 0;
-      let exceeded = false;
-      const onEvent = (event: AdapterEvent): void => {
-        bus.emit({
-          kind: 'event',
-          type: 'subagent.event',
-          threadId: parent.id,
-          payload: { childId, threadId: parent.id, event },
-        });
-        if (event.type !== 'text.delta') return;
-        used += estimateTokens(event.text);
-        if (used <= budget || exceeded) return;
-        exceeded = true;
-        logger.warn('subagent token budget exceeded', { childId, budget });
-        run.controller.abort();
-        void deps.runner.interrupt(child.id).catch(() => undefined);
-      };
+  /**
+   * Runs the child's first turn, then every follow-up that arrived meanwhile, and
+   * settles once. Each completed turn's answer is posted to the parent's mailbox, so a
+   * steered child reports every round, not only the last one.
+   */
+  async function driveTurns(
+    run: ChildRun,
+    childThreadId: string,
+    record: SubagentRecord,
+    parent: Thread,
+    firstText: string,
+  ): Promise<void> {
+    const childId = record.childId;
+    const budget = record.budgetTokens ?? DEFAULT_SUBAGENT_BUDGET_TOKENS;
+    let used = 0;
+    let exceeded = false;
+    const onEvent = (event: AdapterEvent): void => {
+      bus.emit({
+        kind: 'event',
+        type: 'subagent.event',
+        threadId: parent.id,
+        payload: { childId, threadId: parent.id, event },
+      });
+      recordEvent(childId, parent.id, event);
+      if (event.type !== 'text.delta') return;
+      used += estimateTokens(event.text);
+      if (used <= budget || exceeded) return;
+      exceeded = true;
+      logger.warn('subagent token budget exceeded', { childId, budget });
+      run.controller.abort();
+      void deps.runner.interrupt(childThreadId).catch(() => undefined);
+    };
 
+    let text = firstText;
+    for (;;) {
       const result = await ports.runTurn({
-        threadId: child.id,
+        threadId: childThreadId,
         text,
         signal: run.controller.signal,
         onEvent,
       });
-
       if (exceeded) {
         finish(
           childId,
@@ -381,17 +569,213 @@ export function createSubagents(deps: SubagentDeps): Subagents {
         finish(childId, 'cancelled', result.text);
         return;
       }
-      if (result.status === 'complete') {
-        finish(childId, 'done', await summarize(record, parent, result.text));
+      if (result.status !== 'complete') {
+        finish(
+          childId,
+          'failed',
+          result.status === 'interrupted'
+            ? 'child turn was interrupted'
+            : (result.error ?? result.text),
+        );
         return;
       }
-      if (result.status === 'interrupted') {
-        finish(childId, 'failed', 'child turn was interrupted');
+      const queued = inboxes.get(childId) ?? [];
+      const next = queued.shift();
+      if (next === undefined) {
+        const summary = await summarize(record, parent, result.text);
+        if (summary.trim().length > 0) postMessage(record, 'to-parent', summary);
+        finish(childId, 'done', summary);
         return;
       }
-      finish(childId, 'failed', result.error ?? result.text);
+      if (result.text.trim().length > 0) postMessage(record, 'to-parent', result.text);
+      text = followUpText(next);
+    }
+  }
+
+  function followUpText(message: string): string {
+    return `Follow-up from your parent agent. Continue in the same worktree and answer with a self-contained report.\n\n${message.trim()}`;
+  }
+
+  /** A follow-up for a settled done or failed child: reopen it and run one more round. */
+  async function resumeChild(record: SubagentRecord, message: string): Promise<void> {
+    const parent = repos.threads.get(record.threadId);
+    if (parent === undefined || record.childThreadId === null) {
+      throw conflict('the child has no session to resume');
+    }
+    const reopened = repos.subagents.reopen(record.childId, nowIso());
+    if (reopened === undefined || reopened.status !== 'running') {
+      throw conflict('the child could not be reopened');
+    }
+    settled.delete(record.childId);
+    telemetryFor(reopened);
+    const run: ChildRun = {
+      childId: record.childId,
+      parentThreadId: parent.id,
+      controller: new AbortController(),
+      cancelled: false,
+      childThreadId: record.childThreadId,
+    };
+    active.set(record.childId, run);
+    bus.emit({
+      kind: 'event',
+      type: 'subagent.started',
+      threadId: parent.id,
+      payload: { childId: record.childId, threadId: parent.id, type: record.type, model: record.model },
+    });
+    const childThreadId = record.childThreadId;
+    void driveTurns(run, childThreadId, reopened, parent, followUpText(message))
+      .catch((error: unknown) => {
+        finish(record.childId, 'failed', `follow-up failed: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        if (active.get(record.childId) === run) active.delete(record.childId);
+      });
+  }
+
+  async function sendMessage(
+    childId: string,
+    text: string,
+  ): Promise<{ delivered: 'queued' | 'started' }> {
+    const record = requireRecord(childId);
+    const body = text.trim();
+    if (body.length === 0) throw badRequest('message text is empty');
+    if (record.status === 'cancelled') throw conflict('subagent was stopped');
+    postMessage(record, 'to-child', body);
+    if (record.status === 'queued' || record.status === 'running') {
+      const queue = inboxes.get(childId) ?? [];
+      if (queue.length >= INBOX_LIMIT) throw conflict('the child already has 20 queued messages');
+      queue.push(body);
+      inboxes.set(childId, queue);
+      return { delivered: 'queued' };
+    }
+    await resumeChild(record, body);
+    return { delivered: 'started' };
+  }
+
+  function parentFor(request: SubagentControlRequest): { thread: Thread; isChild: boolean } {
+    if (request.threadId !== undefined) {
+      const thread = repos.threads.get(request.threadId);
+      if (thread !== undefined) {
+        const isChild = repos.subagents
+          .listAll()
+          .some((entry) => entry.childThreadId === thread.id);
+        return { thread, isChild };
+      }
+    }
+    const thread = resolveThreadForCwd(request.cwd);
+    if (thread === undefined) throw new RpcError('bad-request', 'no thread owns this worktree');
+    return { thread, isChild: false };
+  }
+
+  function ownChild(parentThreadId: string, childId: string | undefined): SubagentRecord {
+    if (childId === undefined) throw badRequest('id is required');
+    const record = repos.subagents.get(childId);
+    if (record === undefined || record.threadId !== parentThreadId) {
+      throw notFound(`no subagent ${childId} under this thread`);
+    }
+    return record;
+  }
+
+  function childrenOf(parentThreadId: string, childId: string | undefined): SubagentRecord[] {
+    return childId === undefined
+      ? repos.subagents.listByThread(parentThreadId)
+      : [ownChild(parentThreadId, childId)];
+  }
+
+  async function waitFor(
+    records: SubagentRecord[],
+    timeoutSeconds: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const pending = records.filter((record) => record.status === 'queued' || record.status === 'running');
+    if (pending.length === 0) return;
+    const { promise: timeout, resolve: expire } = Promise.withResolvers<void>();
+    const timer = setTimeout(expire, timeoutSeconds * 1000);
+    const onAbort = (): void => expire();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      await Promise.race([
+        Promise.all(pending.map((record) => api.awaitChild(record.childId))),
+        timeout,
+      ]);
     } finally {
-      active.delete(childId);
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  function readInbox(parentThreadId: string, childId: string | undefined): string {
+    const records = childrenOf(parentThreadId, childId);
+    const lines: string[] = [];
+    const now = nowIso();
+    for (const record of records) {
+      for (const message of repos.subagents.unreadMessages(record.childId)) {
+        lines.push(`${record.childId} (${record.type}): ${message.text}`);
+      }
+      repos.subagents.markRead(record.childId, now);
+    }
+    return lines.length === 0 ? 'No unread reports.' : lines.join('\n\n');
+  }
+
+  async function control(request: SubagentControlRequest): Promise<string> {
+    const { thread, isChild } = parentFor(request);
+    if (isChild) {
+      // A child may report to its parent and read its own status, nothing else.
+      const self = repos.subagents.listAll().find((entry) => entry.childThreadId === thread.id);
+      if (self === undefined) throw notFound('subagent not found');
+      if (request.action === 'report') {
+        const text = (request.text ?? '').trim();
+        if (text.length === 0) throw badRequest('text is required');
+        postMessage(self, 'to-parent', text);
+        return 'Report delivered to the parent.';
+      }
+      if (request.action === 'status') return formatChildLine(toSubagentView(self));
+      throw new RpcError('permission-denied', `a subagent cannot ${request.action} other subagents`);
+    }
+    switch (request.action) {
+      case 'status': {
+        const records = childrenOf(thread.id, request.id);
+        if (records.length === 0) return 'No subagents under this thread.';
+        return records.map((record) => formatChildLine(toSubagentView(record))).join('\n');
+      }
+      case 'wait': {
+        const seconds = Math.min(
+          MAX_WAIT_SECONDS,
+          Math.max(1, Math.floor(request.timeoutSeconds ?? DEFAULT_WAIT_SECONDS)),
+        );
+        await waitFor(childrenOf(thread.id, request.id), seconds, request.signal);
+        const records = childrenOf(thread.id, request.id);
+        if (records.length === 0) return 'No subagents under this thread.';
+        const running = records.filter((record) => record.status === 'queued' || record.status === 'running');
+        const parts = records
+          .filter((record) => record.status !== 'queued' && record.status !== 'running')
+          .map((record) => `${formatChildLine(toSubagentView(record))}\n${record.summary ?? '(no summary)'}`);
+        if (running.length > 0) {
+          parts.push(`Still running after ${seconds}s: ${running.map((record) => record.childId).join(', ')}`);
+        }
+        for (const record of records) {
+          if (record.status !== 'queued' && record.status !== 'running') {
+            repos.subagents.markRead(record.childId, nowIso());
+          }
+        }
+        return parts.join('\n\n');
+      }
+      case 'message': {
+        const record = ownChild(thread.id, request.id);
+        const { delivered } = await sendMessage(record.childId, request.text ?? '');
+        return delivered === 'queued'
+          ? `Queued for ${record.childId}; it reads the message when its current turn ends.`
+          : `${record.childId} reopened with the message; wait for its next report.`;
+      }
+      case 'stop': {
+        const record = ownChild(thread.id, request.id);
+        await api.cancel(record.childId);
+        return `${record.childId} stopped.`;
+      }
+      case 'inbox':
+        return readInbox(thread.id, request.id);
+      case 'report':
+        throw badRequest('report is for subagents; the parent reads reports with inbox');
     }
   }
 
@@ -404,7 +788,8 @@ export function createSubagents(deps: SubagentDeps): Subagents {
   async function summarize(record: SubagentRecord, parent: Thread, text: string): Promise<string> {
     if (record.type !== 'notetaker') return text;
     const facts = parseNotetakerFacts(text);
-    if (facts.length === 0 || !deps.settings().brainEnabled) return text;
+    const settings = deps.settings();
+    if (facts.length === 0 || !settings.brainEnabled || !settings.brainCapture) return text;
     const anchor = repos.brain.list({
       kind: 'project',
       projectId: parent.projectId,
@@ -490,11 +875,25 @@ export function createSubagents(deps: SubagentDeps): Subagents {
     return { childId };
   }
 
-  return {
+  const api: Subagents = {
     spawn: spawnChild,
+    control,
+    message: sendMessage,
+    messages: (childId) => {
+      requireRecord(childId);
+      return repos.subagents.listMessages(childId);
+    },
+    get: (childId) => toSubagentView(requireRecord(childId)),
 
     async spawnFromTool(request) {
-      const parent = resolveThreadForCwd(request.cwd);
+      const known = request.threadId === undefined ? undefined : repos.threads.get(request.threadId);
+      if (
+        known !== undefined &&
+        repos.subagents.listAll().some((entry) => entry.childThreadId === known.id)
+      ) {
+        throw new RpcError('permission-denied', 'subagents cannot spawn their own subagents');
+      }
+      const parent = known ?? resolveThreadForCwd(request.cwd);
       if (parent === undefined) {
         throw new RpcError('bad-request', 'no thread owns this worktree');
       }
@@ -576,8 +975,14 @@ export function createSubagents(deps: SubagentDeps): Subagents {
       }
       queues.clear();
       active.clear();
+      for (const state of telemetry.values()) {
+        if (state.timer !== null) clearTimeout(state.timer);
+      }
+      telemetry.clear();
+      inboxes.clear();
     },
   };
+  return api;
 }
 
 /**
@@ -598,7 +1003,7 @@ async function createChildThread(
 
   const id = newId('thr');
   const now = nowIso();
-  const title = `Subagent ${request.type} ${id.slice(4, 12)}`;
+  const title = subagentTitle(request.type, request.task);
   const base = {
     id,
     projectId: project.id,

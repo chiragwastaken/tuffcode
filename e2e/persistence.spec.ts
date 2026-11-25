@@ -16,7 +16,9 @@ test('thread history survives a restart', async ({ session, workspace, mock, rpc
   await addProjectThroughUi(session, workspace);
   await addMockProvider(page, mock);
   await seedDefaultModel(rpc);
-  const title = await createThreadThroughSidebar(page);
+  await createThreadThroughSidebar(page);
+  // The first message names the thread (round 4 titles).
+  const title = 'Say hello before the restart';
 
   await sendMessage(page, 'Say hello before the restart');
   await expectAssistantText(page, MOCK_TEXT);

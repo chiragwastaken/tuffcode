@@ -13,6 +13,7 @@ import type { EventBus } from '../events.js';
 import { planPrompt } from '../prompt/service.js';
 import type { Runner } from '../runner/runner.js';
 import { discoverSkills } from '../skills/discover.js';
+import { pluginCommandDirs, pluginSkillRoots } from '../skills/roots.js';
 import type { Subagents } from '../subagents/types.js';
 import { clearThread, compactThread, getThread, updateThread } from '../threads.js';
 import { listCommands } from './discover.js';
@@ -96,7 +97,10 @@ function helpText(
       text: `/${target.name}${usage}\n${target.description}\n${origin}`,
     };
   }
-  const skills = discoverSkills(project.path, { onWarning: deps.onWarning });
+  const skills = discoverSkills(project.path, {
+    ...(deps.onWarning === undefined ? {} : { onWarning: deps.onWarning }),
+    pluginRoots: pluginSkillRoots(deps.repos),
+  });
   const commandLines = commands.map((command) => {
     const usage = command.argumentHint === null ? '' : ` ${command.argumentHint}`;
     return `/${command.name}${usage}: ${command.description}`;
@@ -145,7 +149,10 @@ export async function runCommand(
   const project = deps.repos.projects.get(thread.projectId);
   if (project === undefined) throw notFound('project not found');
 
-  const commands = listCommands(project.path, { onWarning: deps.onWarning });
+  const commands = listCommands(project.path, {
+    ...(deps.onWarning === undefined ? {} : { onWarning: deps.onWarning }),
+    pluginDirs: pluginCommandDirs(deps.repos),
+  });
   const parsed = parseCommand(
     input.input,
     commands.map((command) => command.name),

@@ -169,7 +169,8 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   const topbar = page.getByTestId('topbar');
   await expect(topbar).toBeVisible();
   const header = page.getByTestId('thread-header');
-  const inspector = page.locator('aside[aria-label="Inspector"]');
+  // Round 4: the right dock opens from the toolbar and starts closed.
+  const inspector = page.getByTestId('dock');
   await expect(header).toBeVisible();
   const modeSwitch = page.getByTestId('thread-mode-switch');
   await expect(modeSwitch).toBeVisible();
@@ -200,7 +201,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     {
       'thread-mode-switch': switchBox,
       'sidebar-toggle': await boxOf(topbar.getByRole('button', { name: /sidebar/ })),
-      'inspector-toggle': await boxOf(topbar.getByRole('button', { name: /inspector/ })),
+      'dock-toolbar': await boxOf(topbar.getByTestId('dock-toolbar')),
     },
     'in the topbar at 1440x900',
   );
@@ -284,8 +285,9 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
   const titleBox = await boxOf(threadTitle);
   expect(titleBox.width).toBeGreaterThanOrEqual(THREAD_TITLE_MIN_WIDTH_PX);
 
-  // D43: the header is one row, so no control may sit on another. The inspector
-  // column is open at this width, which is the narrow-header case from the report.
+  // D43: the header is one row, so no control may sit on another. With the dock open
+  // at this width, this is the narrow-header case from the report.
+  if ((await inspector.count()) === 0) await page.getByTestId('dock-toggle-activity').click();
   await expect(inspector).toBeVisible();
   const branchChip = page.getByTestId('thread-branch');
   // The thread owns a worktree branch, so the chip is in the document; the header
@@ -464,7 +466,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
 
   // Settings > MCP: the empty state and the add form on one screen.
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
-  await page.getByRole('link', { name: 'MCP', exact: true }).click();
+  await page.getByRole('link', { name: 'Plugins', exact: true }).click();
   await expect(page.getByText('No MCP servers yet')).toBeVisible();
   await page.getByTestId('mcp-add-server').click();
   await expect(page.getByTestId('mcp-label-input')).toBeVisible();

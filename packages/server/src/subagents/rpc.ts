@@ -26,5 +26,15 @@ export function createSubagentHandlers(deps: SubagentHandlerDeps): RpcHandlers {
     deps.subagents.list((params as RpcParams<'subagents.list'>).threadId),
   );
   handlers.set('subagents.listAll', () => deps.subagents.listAll());
+  handlers.set('subagents.get', (params) =>
+    deps.subagents.get((params as RpcParams<'subagents.get'>).childId),
+  );
+  handlers.set('subagents.message', (params) => {
+    const { childId, text } = params as RpcParams<'subagents.message'>;
+    return deps.subagents.message(childId, text);
+  });
+  handlers.set('subagents.messages', (params) =>
+    deps.subagents.messages((params as RpcParams<'subagents.messages'>).childId),
+  );
   return handlers;
 }

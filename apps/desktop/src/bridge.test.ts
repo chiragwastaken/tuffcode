@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   attachSecretBridge,
   handleChildMessage,
+  isExternalUrl,
+  parseNotifyRequest,
+  parsePickFileRequest,
   type SecretBridgeChild,
   type SecretBridgeLogger,
 } from './bridge';
@@ -253,5 +256,39 @@ describe('attachSecretBridge', () => {
     expect(listeners).toHaveLength(1);
     listeners[0]?.({ id: 'r15', type: 'secret.get', key: 'openai' });
     expect(messages).toEqual([{ id: 'r15', ok: true, value: 'sk-test' }]);
+  });
+});
+
+describe('round 4 bridge validation', () => {
+  it('accepts a titled notification with a safe route and drops the rest', () => {
+    expect(parseNotifyRequest({ title: ' Turn finished ', body: 'Fix login', route: '/project/p1/thread/t1' })).toEqual({
+      title: 'Turn finished',
+      body: 'Fix login',
+      route: '/project/p1/thread/t1',
+      silent: false,
+    });
+    expect(parseNotifyRequest({ title: 'x', body: '', route: 'https://evil.example', silent: true })).toEqual({
+      title: 'x',
+      body: '',
+      silent: true,
+    });
+    expect(parseNotifyRequest({ body: 'no title' })).toBeNull();
+    expect(parseNotifyRequest('nope')).toBeNull();
+  });
+
+  it('opens only web links externally', () => {
+    expect(isExternalUrl('https://github.com/anthropics/skills')).toBe(true);
+    expect(isExternalUrl('http://localhost:5173')).toBe(true);
+    expect(isExternalUrl('file:///C:/Windows/System32/cmd.exe')).toBe(false);
+    expect(isExternalUrl('javascript:alert(1)')).toBe(false);
+    expect(isExternalUrl(42)).toBe(false);
+  });
+
+  it('keeps only plain extensions for the file picker', () => {
+    expect(parsePickFileRequest({ extensions: ['zip', 'skill', '../x', 'md'], title: 'Upload plugin' })).toEqual({
+      extensions: ['zip', 'skill', 'md'],
+      title: 'Upload plugin',
+    });
+    expect(parsePickFileRequest({ extensions: [] })).toBeNull();
   });
 });

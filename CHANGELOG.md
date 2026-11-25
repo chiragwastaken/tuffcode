@@ -5,6 +5,69 @@ the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
+### Workspace and layout
+- The left sidebar opens with New chat, Search and Plugins. Search is a dialog (`/` or
+  Ctrl+Shift+F) over chat titles, projects and message text; the inline filter is gone.
+- New chats name themselves from the first message with a one-line title; renames are kept, and
+  older id-style titles are repaired on startup.
+- The right panel is a dock that only appears when a panel is open: Activity, Terminal, Changes,
+  Browser and Files toggles plus a `+` menu (terminal, browser tab, side chat, split view). It
+  never overlays the chat, resizes by dragging, and the terminal starts only when asked for.
+- Other chats can open as side-by-side tiles, up to four panes with draggable dividers.
+- The Activity panel merges the old Context tab: environment, colored context usage, prompt
+  sections, the todo list, tool calls and subagents with tool counts, tokens and live activity.
+- A Files explorer with a filter (`?` for fuzzy matching) and a read-only preview, and a
+  sandboxed browser tab for previews and docs.
+- A card after a turn shows files changed with line counts, Review changes and Create PR.
+
+### Plugins, skills and connectors
+- A Plugins page with search, All, Connectors and Skills tabs, a Verified or Community filter and
+  an Add menu (upload a .zip, .skill or SKILL.md; add a remote MCP connector by URL; create a skill
+  with AI; add a marketplace). Catalogs come from anthropics/claude-plugins-official,
+  knowledge-work-plugins, skills and claude-plugins-community, cached for a day.
+- Installing a plugin fetches only its files with a shallow sparse git clone, refuses symlinks and
+  paths that escape, and registers its skills, commands and MCP servers; toggling and removing
+  apply on the next turn.
+- `$name` loads a skill into the message, and agents load other skills on demand with a
+  `skill` tool. Project `.claude/skills` and plugin skills are discovered too.
+- MCP servers can be remote (Streamable HTTP) with a bearer token kept in the OS keychain. The
+  Connectors tab searches the official MCP registry.
+
+### Agents
+- A `todo` tool keeps a phased task list per thread, shown live above the composer.
+- Subagents can be waited for, messaged, stopped and asked for status; children report back and
+  accept follow-ups after they finish. Subagents cannot spawn their own subagents.
+- Council threads get every tool regardless of capability switches.
+- Claude subscription threads get the todo, subagent, memory, skill and web fetch tools through an
+  in-process MCP server.
+- A `web_fetch` tool reads public pages; private, loopback and LAN addresses are refused at
+  every hop.
+- Reasoning effort (off to extra high, plus custom levels) reaches OpenAI-compatible, OpenRouter,
+  Anthropic, Claude and Codex providers.
+- Switching provider or model mid-chat replays a short digest of the conversation.
+
+### Settings
+- Providers and Models are one Models page; large model lists are searchable, and missing context
+  and capability data is filled from Ollama, LM Studio and models.dev on refresh.
+- Reasoning levels are pills instead of a comma-separated field.
+- Your Tuffcode replaces Instructions: name, role, about you, response style, instructions up to
+  2000 tokens, and memory on, pause and reset.
+- Capabilities are real switches; a new Notifications section adds desktop notifications and
+  keeping the computer awake while agents run.
+- The composer model menu lists every enabled provider, reasoning levels and per-subagent models.
+
+### Known issues
+- Remote connectors cannot sign in with OAuth yet; use a bearer token.
+- Plugin hooks and agents are listed but never run.
+- Codex threads do not get the todo and subagent tools.
+- The browser tab cannot show sites that forbid embedding; open them externally.
+- web_fetch does not guard against DNS rebinding between its address check and the connection.
+- The installer artifact reports `0.0.0` until the release workflow stamps the tag.
+- Codex remains fixture-tested only; its CLI is not installed on this host.
+
+
 ### Sidebar and navigation
 - Thread rows are 48px with a title and a meta line; project headers are 32px.
 - Subagent and council child threads nest under their parent instead of listing as top-level
@@ -37,10 +100,6 @@ the project uses semantic versioning.
 ### Updates
 - Packaged builds check for updates on launch, download in the background, and ask to restart
   when the update is ready. Settings > Updates now runs the same check through the desktop bridge.
-
-### Known issues
-- The installer artifact reports `0.0.0` until the release workflow stamps the tag.
-- Codex remains fixture-tested only; its CLI is not installed on this host.
 
 ### Brain and prompts
 - Brain injection has a real kill switch, standing-rule capture, typed edges and preview ids.

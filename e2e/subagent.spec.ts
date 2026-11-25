@@ -9,6 +9,8 @@ import {
   seedDefaultModel,
   sendMessage,
   setPermissionMode,
+  closeDock,
+  openDock,
 } from './helpers';
 import {
   MOCK_SUBAGENT_FINAL,
@@ -32,7 +34,7 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
   await setPermissionMode(page, 'Full auto');
   // The spec's two-pane view: thread plus subagent pane, no inspector competing
   // for the right side. The overlay case is asserted at the end.
-  await page.getByRole('button', { name: 'Hide inspector' }).click();
+  await closeDock(page);
 
   await sendMessage(page, 'spawn-subagent');
   await expectAssistantText(page, MOCK_SUBAGENT_FINAL);
@@ -86,7 +88,7 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
 
   // Reopening the inspector narrows the thread row below the pane's split width, so
   // the pane becomes a sheet but stays mounted.
-  await page.getByRole('button', { name: 'Show inspector' }).click();
+  await openDock(page, 'activity');
   await expect(page.getByTestId('inspector-header')).toBeVisible();
   await expect(page.getByTestId('subagent-pane')).toBeVisible();
   if (shots) {

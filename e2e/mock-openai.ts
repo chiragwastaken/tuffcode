@@ -52,6 +52,8 @@ export const MOCK_INTERLEAVE_PROSE_ONE = 'Reading the readme before the source.'
 export const MOCK_INTERLEAVE_REASONING_TWO = 'Now I check the source file.';
 export const MOCK_INTERLEAVE_PROSE_TWO = 'Reading the source after the readme.';
 export const MOCK_INTERLEAVE_FINAL = 'Both files were read in event order.';
+export const MOCK_TODO_ITEMS = ['Read the project', 'Write the change', 'Run the tests'];
+export const MOCK_TODO_FINAL = 'The plan is tracked in the todo list.';
 
 const LF = String.fromCharCode(10);
 const DONE = String.fromCharCode(91, 68, 79, 78, 69, 93);
@@ -279,6 +281,23 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
       return;
     }
     await streamText(response, MOCK_INTERLEAVE_FINAL);
+    response.end();
+    return;
+  }
+
+  if (prompt.includes('todo-plan')) {
+    const toolResults = messages.filter((message) => message.role === 'tool').length;
+    if (toolResults === 0) {
+      finishWithToolCalls(response, [
+        { id: 'call_e2e_todo_init', name: 'todo', args: { op: 'init', items: JSON.stringify(MOCK_TODO_ITEMS) } },
+      ]);
+    } else if (toolResults === 1) {
+      finishWithToolCalls(response, [
+        { id: 'call_e2e_todo_start', name: 'todo', args: { op: 'start', task: MOCK_TODO_ITEMS[0] } },
+      ]);
+    } else {
+      await streamText(response, MOCK_TODO_FINAL);
+    }
     response.end();
     return;
   }

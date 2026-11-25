@@ -3,7 +3,7 @@ import {
   type AdapterLogger,
   type ProviderConfig,
 } from '@tuffcode/contracts';
-import type { HarnessToolSchema } from '../tool-policy.js';
+import type { HarnessToolSchema, ToolListOptions } from '../tool-policy.js';
 import { allowedToolSchemas } from '../tool-policy.js';
 
 export interface OpenAIToolCall {
@@ -26,10 +26,17 @@ export interface ChatRequestBody {
   maxTokens?: number;
   /** Settings allowlist for this turn; unset offers every harness tool. */
   toolAllowlist?: string[];
-  /** Offer the `subagent` delegation tool for this turn. */
-  subagentTool?: boolean;
-  /** Offer the `mcp`, `memory` and `config` server tools for this turn. */
-  extraTools?: boolean;
+  /** Server tools offered this turn; unset offers none. */
+  toolOptions?: ToolListOptions;
+  /** Reasoning level; `none` asks the provider not to think. Unset sends nothing. */
+  reasoningEffort?: string;
+}
+
+/** OpenRouter takes a `reasoning` object; every other compatible server takes `reasoning_effort`. */
+export function reasoningParams(baseUrl: string, effort: string | undefined): Record<string, unknown> {
+  if (effort === undefined || effort.trim().length === 0) return {};
+  if (/openrouter\.ai/i.test(baseUrl)) return { reasoning: { effort } };
+  return { reasoning_effort: effort };
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -107,7 +114,7 @@ export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
 
 export function toOpenAITools(
   allowlist?: readonly string[],
-  options: { subagent?: boolean; extra?: boolean } = {},
+  options: ToolListOptions = {},
 ): unknown[] {
   return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
     type: 'function',
@@ -120,10 +127,7 @@ export function toOpenAITools(
 }
 
 function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record<string, unknown> {
-  const tools = toOpenAITools(request.toolAllowlist, {
-    subagent: request.subagentTool === true,
-    extra: request.extraTools === true,
-  });
+  const tools = toOpenAITools(request.toolAllowlist, request.toolOptions ?? {});
   const maxTokens = request.maxTokens ?? config.maxTokens;
   return {
     model: request.model,
@@ -133,6 +137,7 @@ function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record
     stream_options: { include_usage: true },
     ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
+    ...reasoningParams(config.baseUrl, request.reasoningEffort),
   };
 }
 

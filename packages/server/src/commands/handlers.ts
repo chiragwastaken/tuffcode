@@ -6,6 +6,7 @@ import type { EventBus } from '../events.js';
 import type { RpcHandler, RpcHandlers } from '../rpc.js';
 import type { Runner } from '../runner/runner.js';
 import type { Subagents } from '../subagents/types.js';
+import { pluginCommandDirs } from '../skills/roots.js';
 import { listCommands } from './discover.js';
 import { runCommand } from './run.js';
 
@@ -33,7 +34,7 @@ export function createCommandHandlers(deps: CommandHandlerDeps): RpcHandlers {
     const { projectId } = params as RpcParams<'commands.list'>;
     const project = deps.repos.projects.get(projectId);
     if (project === undefined) throw notFound('project not found');
-    return listCommands(project.path, { onWarning });
+    return listCommands(project.path, { onWarning, pluginDirs: pluginCommandDirs(deps.repos) });
   });
   handlers.set('commands.run', (params) => {
     const { threadId, input } = params as RpcParams<'commands.run'>;

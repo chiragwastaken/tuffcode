@@ -1,4 +1,6 @@
 import type {
+  SubagentControlRequest,
+  SubagentMessage,
   AdapterEvent,
   PermissionMode,
   SubagentSpec,
@@ -17,6 +19,8 @@ export interface SubagentChildRequest {
   permissionMode: PermissionMode;
   /** True only for workers: a fresh `tuffcode/<childId>` worktree. */
   worktree: boolean;
+  /** The child's task, which names the child thread. */
+  task: string;
 }
 
 export interface SubagentTurnInput {
@@ -59,13 +63,20 @@ export interface SubagentSpawnInput {
 export interface Subagents {
   /** Persists the child as queued and returns at once; the queue starts it. */
   spawn(input: SubagentSpawnInput): Promise<{ childId: string }>;
-  /** Harness-tool entry point: resolves the parent thread from the turn cwd. */
+  /** Harness-tool entry point: the parent is the turn's thread, else the cwd's owner. */
   spawnFromTool(request: {
     cwd: string;
+    threadId?: string;
     type: SubagentType;
     task: string;
     model?: string;
   }): Promise<{ childId: string; status: SubagentStatus }>;
+  /** status, wait, message, stop, inbox and report for the `subagent` tool. */
+  control(request: SubagentControlRequest): Promise<string>;
+  /** A follow-up: queued while the child runs, a new turn once it settled. */
+  message(childId: string, text: string): Promise<{ delivered: 'queued' | 'started' }>;
+  messages(childId: string): SubagentMessage[];
+  get(childId: string): SubagentView;
   /** Cancels a queued child or interrupts a running one; settled children are a no-op. */
   cancel(childId: string): Promise<void>;
   list(threadId: string): SubagentView[];

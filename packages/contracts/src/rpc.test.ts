@@ -76,6 +76,7 @@ const thread: Thread = {
   branch: 'feat/contracts',
   baseBranch: 'main',
   prUrl: null,
+  reasoningEffort: null,
   lastSeq: 12,
   createdAt: at,
   updatedAt: at,
@@ -130,10 +131,14 @@ const model: Model = {
 const mcpServer: McpServer = {
   id: 'mcp-1',
   label: 'filesystem',
+  transport: 'stdio',
   command: 'npx',
   args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:/work'],
   env: { DEBUG: '1' },
   cwd: null,
+  url: null,
+  hasSecret: false,
+  pluginId: null,
   enabled: true,
   createdAt: at,
   updatedAt: at,
@@ -239,6 +244,69 @@ const skill: Skill = {
   description: 'Deploy the app',
   body: 'Run the deploy script',
   path: 'C:/work/tuffcode/.claude/skills/deploy/SKILL.md',
+  source: 'claude-project',
+  pluginId: null,
+};
+
+const marketplace = {
+  id: 'official',
+  label: 'Anthropic official',
+  url: 'anthropics/claude-plugins-official',
+  verified: true,
+  builtIn: true,
+  fetchedAt: at,
+  error: null,
+  skipped: 0,
+};
+
+const components = {
+  skills: ['deploy'],
+  commands: ['ship'],
+  mcpServers: ['github'],
+  agents: [],
+  hooks: false,
+};
+
+const catalogEntry = {
+  id: 'official/github',
+  marketplaceId: 'official',
+  name: 'github',
+  displayName: 'GitHub',
+  description: 'Work with issues and pull requests',
+  category: 'development',
+  author: 'GitHub',
+  homepage: 'https://github.com',
+  repo: 'github/github-mcp-server',
+  kind: 'connector' as const,
+  verified: true,
+  components: { mcpServers: ['github'] },
+  installed: false,
+};
+
+const installedPlugin = {
+  id: 'plg-1',
+  marketplaceId: 'official',
+  name: 'github',
+  displayName: 'GitHub',
+  description: 'Work with issues and pull requests',
+  version: '1.0.0',
+  kind: 'plugin' as const,
+  enabled: true,
+  installPath: 'C:/Users/Hp/.tuffcode/plugins/official/github',
+  components,
+  source: 'marketplace' as const,
+  installedAt: at,
+};
+
+const connectorEntry = {
+  name: 'io.github.example/weather',
+  title: 'Weather',
+  description: 'Forecasts',
+  version: '1.0.0',
+  remoteUrl: 'https://mcp.example.com/mcp',
+  npmPackage: null,
+  requiredEnv: [],
+  repository: null,
 };
 
 const approval: Approval = {
@@ -346,6 +414,25 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     result: thread,
   },
   'threads.delete': { params: { id: 't1', removeWorktree: true }, result: {} },
+  'threads.search': {
+    params: { query: 'login', limit: 10 },
+    result: [
+      { threadId: 't1', projectId: 'p1', title: 'Contracts', snippet: 'fix login', matchedIn: 'message' },
+    ],
+  },
+  'todos.get': {
+    params: { threadId: 't1' },
+    result: {
+      threadId: 't1',
+      phases: [{ name: 'Tasks', tasks: [{ content: 'write tests', status: 'in_progress' }] }],
+      updatedAt: at,
+    },
+  },
+  'files.tree': { params: { threadId: 't1' }, result: { paths: ['src/a.ts'], truncated: false } },
+  'files.read': {
+    params: { threadId: 't1', path: 'src/a.ts' },
+    result: { text: 'export {}', truncated: false, binary: false },
+  },
   'threads.send': {
     params: {
       id: 't1',
@@ -503,6 +590,7 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     result: brainEntry,
   },
   'brain.delete': { params: { id: 'b1' }, result: {} },
+  'brain.reset': { params: { projectId: 'p1' }, result: { removed: 3 } },
   'brain.preview': {
     params: { projectId: 'p1', threadId: 't1', message: 'how do I run tests' },
     result: { always: [brainEntry], retrieved: [brainEntry], tokens: 120 },
@@ -564,6 +652,18 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
   },
   'subagents.cancel': { params: { childId: 'child-1' }, result: {} },
   'subagents.list': { params: { threadId: 't1' }, result: [subagentView] },
+  'subagents.get': {
+    params: { childId: 'sub-1' },
+    result: { ...subagentView, toolCount: 3, inputTokens: 120, outputTokens: 40, unread: 1 },
+  },
+  'subagents.message': {
+    params: { childId: 'sub-1', text: 'also check the tests' },
+    result: { delivered: 'queued' },
+  },
+  'subagents.messages': {
+    params: { childId: 'sub-1' },
+    result: [{ id: 'sm-1', childId: 'sub-1', direction: 'to-parent', text: 'done', createdAt: at }],
+  },
   'subagents.listAll': { params: {}, result: [subagentView] },
   'commands.list': { params: { projectId: 'p1' }, result: [command] },
   'commands.run': {
@@ -580,6 +680,24 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     },
   },
   'skills.list': { params: { projectId: 'p1' }, result: [skill] },
+  'skills.read': { params: { projectId: 'p1', name: 'deploy' }, result: skill },
+  'plugins.marketplaces': { params: {}, result: [marketplace] },
+  'plugins.addMarketplace': { params: { url: 'acme/plugins' }, result: marketplace },
+  'plugins.removeMarketplace': { params: { id: 'official' }, result: {} },
+  'plugins.catalog': {
+    params: { marketplaceId: 'official', refresh: true },
+    result: { entries: [catalogEntry], marketplaces: [marketplace] },
+  },
+  'plugins.installed': { params: {}, result: [installedPlugin] },
+  'plugins.install': { params: { entryId: 'official/github' }, result: installedPlugin },
+  'plugins.upload': { params: { path: 'C:/Downloads/deploy.skill' }, result: installedPlugin },
+  'plugins.setEnabled': { params: { id: 'plg-1', enabled: false }, result: installedPlugin },
+  'plugins.remove': { params: { id: 'plg-1' }, result: {} },
+  'connectors.search': { params: { query: 'weather' }, result: { entries: [connectorEntry], error: null } },
+  'connectors.install': {
+    params: { entry: connectorEntry },
+    result: { ...mcpServer, transport: 'http', command: '', url: 'https://mcp.example.com/mcp' },
+  },
   'diagnostics.export': {
     params: {},
     result: { path: 'C:/Users/Hp/AppData/Local/Tuffcode/logs/diagnostics.zip' },
@@ -593,6 +711,7 @@ const expectedMethods: RpcMethod[] = [
   'brain.link',
   'brain.list',
   'brain.preview',
+  'brain.reset',
   'brain.upsert',
   'checkpoints.create',
   'checkpoints.list',
@@ -602,12 +721,16 @@ const expectedMethods: RpcMethod[] = [
   'comments.add',
   'comments.list',
   'comments.resolve',
+  'connectors.install',
+  'connectors.search',
   'council.cancel',
   'council.latest',
   'council.start',
   'council.status',
   'diagnostics.export',
   'diff.get',
+  'files.read',
+  'files.tree',
   'git.commit',
   'git.pr',
   'git.push',
@@ -618,6 +741,15 @@ const expectedMethods: RpcMethod[] = [
   'memory.search',
   'messages.list',
   'models.list',
+  'plugins.addMarketplace',
+  'plugins.catalog',
+  'plugins.install',
+  'plugins.installed',
+  'plugins.marketplaces',
+  'plugins.remove',
+  'plugins.removeMarketplace',
+  'plugins.setEnabled',
+  'plugins.upload',
   'projects.add',
   'projects.list',
   'projects.refresh',
@@ -633,9 +765,13 @@ const expectedMethods: RpcMethod[] = [
   'settings.get',
   'settings.set',
   'skills.list',
+  'skills.read',
   'subagents.cancel',
+  'subagents.get',
   'subagents.list',
   'subagents.listAll',
+  'subagents.message',
+  'subagents.messages',
   'subagents.spawn',
   'terminal.close',
   'terminal.input',
@@ -649,8 +785,10 @@ const expectedMethods: RpcMethod[] = [
   'threads.get',
   'threads.interrupt',
   'threads.list',
+  'threads.search',
   'threads.send',
   'threads.update',
+  'todos.get',
 ];
 
 describe('protocol envelope', () => {
@@ -729,8 +867,8 @@ function parseCommandRunResult(result: unknown) {
 }
 
 describe('rpc methods', () => {
-  it('exposes exactly 64 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(64);
+  it('exposes exactly 84 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(84);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -1402,6 +1540,27 @@ describe('settings', () => {
       autoCompact: true,
       maxOutputTokens: 8192,
       showContextMeter: true,
+      profile: { name: '', role: '', about: '' },
+      responseStyle: 'default',
+      brainCapture: true,
+      capabilities: {
+        skills: true,
+        connectors: true,
+        subagents: true,
+        todo: true,
+        worktrees: true,
+        webFetch: true,
+        browser: true,
+      },
+      notifications: {
+        turnFinished: true,
+        approvalNeeded: true,
+        subagentFinished: true,
+        councilEscalation: true,
+        sound: true,
+        onlyWhenUnfocused: true,
+      },
+      keepAwake: false,
     });
     expect(SettingsSchema.parse({})).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
@@ -1507,11 +1666,13 @@ describe('settings', () => {
     expect(parsed.subagentConcurrency).toBe(6);
 
     expect(
-      SettingsSchema.parse({ customInstructions: 'x'.repeat(4000) }).customInstructions,
-    ).toHaveLength(4000);
+      SettingsSchema.parse({ customInstructions: 'x'.repeat(16000) }).customInstructions,
+    ).toHaveLength(16000);
     expect(SettingsSchema.parse({ subagentConcurrency: 1 }).subagentConcurrency).toBe(1);
     expect(SettingsSchema.parse({ subagentConcurrency: 8 }).subagentConcurrency).toBe(8);
-    expect(SettingsSchema.safeParse({ customInstructions: 'x'.repeat(4001) }).success).toBe(false);
+    expect(SettingsSchema.safeParse({ customInstructions: 'x'.repeat(16001) }).success).toBe(
+      false,
+    );
     expect(SettingsSchema.safeParse({ customInstructions: 12 }).success).toBe(false);
     expect(SettingsSchema.safeParse({ subagentConcurrency: 0 }).success).toBe(false);
     expect(SettingsSchema.safeParse({ subagentConcurrency: 9 }).success).toBe(false);
@@ -1589,7 +1750,14 @@ describe('entity schemas', () => {
         reasoningEfforts: ['low', 'high'],
       }),
     ).toEqual({ tools: true, vision: false, reasoning: true, reasoningEfforts: ['low', 'high'] });
-    expect(ReasoningEffortSchema.options).toEqual(['none', 'minimal', 'low', 'medium', 'high']);
+    expect(ReasoningEffortSchema.options).toEqual([
+      'none',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+    ]);
     expect(ModelSchema.safeParse({ ...model, reasoningEffort: 'turbo' }).success).toBe(false);
     expect(
       ModelSchema.safeParse({
@@ -1617,6 +1785,88 @@ describe('entity schemas', () => {
     expect(McpServerSchema.safeParse({ ...mcpServer, args: 'C:/work' }).success).toBe(false);
     expect(McpServerSchema.safeParse({ ...mcpServer, env: { TOKEN: 7 } }).success).toBe(false);
     expect(McpServerSchema.safeParse({ ...mcpServer, updatedAt: 'yesterday' }).success).toBe(false);
+  });
+
+  it('accepts an http MCP server only with a url', () => {
+    const http = { ...mcpServer, transport: 'http', command: '', url: 'https://mcp.example.com/mcp' };
+    expect(McpServerSchema.parse(http)).toEqual(http);
+    expect(McpServerSchema.safeParse({ ...http, url: null }).success).toBe(false);
+    expect(McpServerSchema.safeParse({ ...http, transport: 'ws' }).success).toBe(false);
+    expect(
+      methods['mcp.upsert'].params.safeParse({ label: 'remote', transport: 'http', url: '' })
+        .success,
+    ).toBe(false);
+    expect(
+      methods['mcp.upsert'].params.safeParse({
+        label: 'remote',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        secret: 'kept out of logs',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('round-trips a todo list and rejects unknown statuses', () => {
+    const list = methods['todos.get'].result.parse({
+      threadId: 't1',
+      phases: [
+        {
+          name: 'Build',
+          tasks: [
+            { content: 'write schema', status: 'completed' },
+            { content: 'wire tool', status: 'in_progress' },
+            { content: 'skip docs', status: 'abandoned' },
+          ],
+        },
+      ],
+      updatedAt: null,
+    });
+    expect(list.phases[0]?.tasks).toHaveLength(3);
+    expect(
+      methods['todos.get'].result.safeParse({
+        threadId: 't1',
+        phases: [{ name: 'Build', tasks: [{ content: 'x', status: 'blocked' }] }],
+        updatedAt: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      methods['todos.get'].result.safeParse({
+        threadId: 't1',
+        phases: [{ name: 'Build', tasks: [{ content: '', status: 'pending' }] }],
+        updatedAt: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('carries subagent telemetry and keeps it optional for old rows', () => {
+    const view = methods['subagents.get'].result.parse({
+      ...subagentView,
+      toolCount: 7,
+      inputTokens: 1200,
+      outputTokens: 300,
+      activity: 'bash: pnpm test',
+      startedAt: at,
+      finishedAt: null,
+      unread: 2,
+    });
+    expect(view.toolCount).toBe(7);
+    expect(methods['subagents.get'].result.parse(subagentView).toolCount).toBeUndefined();
+    expect(
+      methods['subagents.get'].result.safeParse({ ...subagentView, toolCount: -1 }).success,
+    ).toBe(false);
+  });
+
+  it('lets threads.update move providers and set a reasoning level', () => {
+    const params = methods['threads.update'].params;
+    expect(
+      params.safeParse({ id: 't1', providerId: 'prov-openai', modelId: 'gpt-5' }).success,
+    ).toBe(true);
+    expect(params.safeParse({ id: 't1', reasoningEffort: 'xhigh' }).success).toBe(true);
+    expect(params.safeParse({ id: 't1', reasoningEffort: null }).success).toBe(true);
+    expect(params.safeParse({ id: 't1', reasoningEffort: 'Extra High' }).success).toBe(false);
+    expect(ThreadSchema.parse({ ...thread, reasoningEffort: undefined }).reasoningEffort).toBe(
+      null,
+    );
   });
 
   it('accepts only the four brain relations', () => {

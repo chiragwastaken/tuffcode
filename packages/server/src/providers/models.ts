@@ -16,6 +16,7 @@ import {
 import type { ResolveCommand } from '../adapters/resolveCommand.js';
 import { configuredCommand, resolveCliPath, windowsInvocation } from './command.js';
 import { DEFAULT_ANTHROPIC_BASE_URL } from './config.js';
+import { enrichModels } from './models-dev.js';
 
 /** Contract `providers.models.source`; `cache` only ever comes from a cache hit. */
 export type ModelSource = 'sdk' | 'api' | 'manual' | 'cache';
@@ -44,6 +45,10 @@ export interface ModelDiscoveryDeps {
   /** Clock seam for the 24h cache window. */
   now?: () => number;
   timeoutMs?: number;
+  /** Where the models.dev index is cached; unset skips that enrichment step. */
+  cacheDir?: string;
+  /** True on a user-pressed refresh: permits the weekly models.dev download. */
+  allowRegistryFetch?: boolean;
 }
 
 export interface DiscoveryResult {
@@ -638,7 +643,22 @@ export async function providerModels(
     return { models: cached, source: 'cache' };
   }
 
-  const result = await discoverModels(provider, deps);
+  const discovered = await discoverModels(provider, deps);
+  const result =
+    discovered.models.length === 0 || provider.kind === 'acp' || provider.kind === 'opencode'
+      ? discovered
+      : {
+          ...discovered,
+          models: await enrichModels(discovered.models, {
+            baseUrl: configString(provider.config, 'baseUrl'),
+            flavor: provider.config['flavor'],
+            headers: stringHeaders(provider.config['headers']),
+            ...(deps.fetchFn === undefined ? {} : { fetchFn: deps.fetchFn }),
+            ...(deps.cacheDir === undefined ? {} : { cacheDir: deps.cacheDir }),
+            allowRegistryFetch: deps.allowRegistryFetch === true,
+            ...(deps.now === undefined ? {} : { now: deps.now }),
+          }).catch(() => discovered.models),
+        };
   if (result.models.length === 0) {
     return {
       models: repos.providers.listModels(provider.id),

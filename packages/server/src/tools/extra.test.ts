@@ -80,6 +80,9 @@ describe('extra tools', () => {
         return ctx.repos.mcp.upsert(input);
       },
       remove: (id) => ctx.repos.mcp.remove(id),
+      save: async (input) => ctx.repos.mcp.upsert(input),
+      launchMap: () => ({}),
+      warmSecrets: async () => undefined,
       test: async () => ({ ok: true, detail: 'Connected', tools: [] }),
       listTools: async () => options.mcpTools ?? [],
       callTool: async (id, tool, args) => {

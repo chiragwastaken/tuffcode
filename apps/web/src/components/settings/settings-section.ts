@@ -1,21 +1,20 @@
 /**
- * The settings information architecture (spec section 3). The order here is the
- * order of the section nav; every entry is also a route under /settings/<id>.
+ * The settings information architecture. The order here is the order of the section
+ * nav; every entry is also a route under /settings/<id>.
  */
 export const SETTINGS_SECTIONS = [
   'appearance',
-  'providers',
   'models',
-  'instructions',
+  'your-tuffcode',
+  'capabilities',
+  'notifications',
+  'plugins',
   'agents',
-  'mcp',
   'permissions',
   'terminal',
-  'brain',
   'updates',
   'diagnostics',
   'keybindings',
-  'capabilities',
   'about',
 ] as const;
 
@@ -23,27 +22,30 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const SETTINGS_SECTION_LABEL: Record<SettingsSection, string> = {
   appearance: 'Appearance',
-  providers: 'Providers',
   models: 'Models',
-  instructions: 'Instructions',
+  'your-tuffcode': 'Your Tuffcode',
+  capabilities: 'Capabilities',
+  notifications: 'Notifications',
+  plugins: 'Plugins',
   agents: 'Agents and tools',
-  mcp: 'MCP',
   permissions: 'Permissions',
   terminal: 'Terminal',
-  brain: 'Brain',
   updates: 'Updates',
   diagnostics: 'Diagnostics',
   keybindings: 'Keybindings',
-  capabilities: 'Capabilities',
   about: 'About',
 };
 
 /**
- * Routes that shipped before this layout. They keep working and render the
- * section they were folded into.
+ * Routes that shipped before this layout. They keep working and render the section
+ * they were folded into.
  */
 const LEGACY_SECTIONS: Record<string, SettingsSection> = {
   general: 'appearance',
+  providers: 'models',
+  instructions: 'your-tuffcode',
+  brain: 'your-tuffcode',
+  mcp: 'plugins',
 };
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = 'appearance';

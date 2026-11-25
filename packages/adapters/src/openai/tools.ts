@@ -9,7 +9,13 @@ import type {
   PermissionMode,
   TurnContext,
 } from '@tuffcode/contracts';
-import { SUBAGENT_TOOL_NAME, TOOL_NAMES, isSubagentType, type ToolName } from '@tuffcode/prompt';
+import {
+  SUBAGENT_TOOL_NAME,
+  TOOL_NAMES,
+  isSubagentAction,
+  isSubagentType,
+  type ToolName,
+} from '@tuffcode/prompt';
 import { applyEol, dominantEol, normalizeEol, resolveWithin, type Eol } from '@tuffcode/shared';
 import { isExtraToolName } from '../extra-tools.js';
 
@@ -139,7 +145,13 @@ const EXTRA_TOOL_ACTIONS: Record<ExtraToolName, readonly string[]> = {
   mcp: ['list', 'call'],
   memory: ['search', 'add'],
   config: ['provider.add', 'provider.model.add', 'mcp.add', 'settings.set'],
+  todo: ['init', 'start', 'done', 'drop', 'rm', 'append', 'view'],
+  skill: [],
+  web_fetch: [],
 };
+
+/** Tools without an `action` argument; their key argument names what they do. */
+const ACTIONLESS_EXTRA_TOOLS: Partial<Record<ExtraToolName, true>> = { skill: true, web_fetch: true };
 
 /**
  * Server tools are classified by what they do, not only by mode: a memory search changes
@@ -152,8 +164,21 @@ export function classifyExtraTool(
   args: Record<string, unknown>,
   mode: PermissionMode,
 ): PermissionDecision {
+  // The task list and skill loading only change Tuffcode's own state, so they never ask.
+  if (name === 'todo') {
+    const op = typeof args.op === 'string' ? args.op : '';
+    return EXTRA_TOOL_ACTIONS.todo.includes(op) ? 'allow' : 'deny';
+  }
+  if (name === 'skill') return 'allow';
+  if (name === 'web_fetch') {
+    // A fetch reaches the network, so it follows the bash ladder.
+    if (mode === 'read-only') return 'deny';
+    return mode === 'ask' ? 'approve' : 'allow';
+  }
   const action = typeof args.action === 'string' ? args.action : '';
-  if (!EXTRA_TOOL_ACTIONS[name].includes(action)) return 'deny';
+  if (ACTIONLESS_EXTRA_TOOLS[name] !== true && !EXTRA_TOOL_ACTIONS[name].includes(action)) {
+    return 'deny';
+  }
   if (name === 'memory' && action === 'search') return 'allow';
   if (name === 'mcp' && action === 'list') return mode === 'read-only' ? 'deny' : 'allow';
   if (mode === 'read-only') return 'deny';
@@ -529,7 +554,16 @@ const bashTool: ToolExecutor = async (args, ctx, _state, deps) => {
  * Delegation is allowed everywhere except a read-only turn; asking first matches the
  * other side-effecting tools, so `ask` mode shows one approval per spawn.
  */
-export function classifySubagentTool(mode: PermissionMode): PermissionDecision {
+export function classifySubagentTool(
+  mode: PermissionMode,
+  args: Record<string, unknown> = {},
+): PermissionDecision {
+  const action = typeof args.action === 'string' ? args.action : 'spawn';
+  if (!isSubagentAction(action)) return 'deny';
+  // Reading status, waiting and reading reports change nothing; a report only posts a note.
+  if (action === 'status' || action === 'wait' || action === 'inbox' || action === 'report') {
+    return 'allow';
+  }
   if (mode === 'read-only') return 'deny';
   return mode === 'ask' ? 'approve' : 'allow';
 }
@@ -544,6 +578,33 @@ async function subagentTool(
   ctx: TurnContext,
   deps: AdapterDeps,
 ): Promise<ToolExecResult> {
+  const action = typeof args.action === 'string' && args.action.length > 0 ? args.action : 'spawn';
+  if (!isSubagentAction(action)) {
+    return fail('action must be one of spawn, status, wait, message, stop, inbox, report');
+  }
+  if (action !== 'spawn') {
+    if (deps.subagentControl === undefined) {
+      return fail('subagent ' + action + ' is unavailable in this session');
+    }
+    const id = typeof args.id === 'string' && args.id.trim().length > 0 ? args.id.trim() : undefined;
+    const text = typeof args.text === 'string' ? args.text : undefined;
+    const timeout =
+      typeof args.timeout_s === 'number' && Number.isFinite(args.timeout_s) ? args.timeout_s : undefined;
+    try {
+      const output = await deps.subagentControl({
+        action,
+        cwd: ctx.cwd,
+        ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }),
+        ...(id === undefined ? {} : { id }),
+        ...(text === undefined ? {} : { text }),
+        ...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
+        signal: ctx.signal,
+      });
+      return ok(capOutput(output));
+    } catch (error) {
+      return fail(errorMessage(error));
+    }
+  }
   if (deps.spawnSubagent === undefined) {
     return fail('the subagent tool is unavailable in this session');
   }
@@ -557,12 +618,13 @@ async function subagentTool(
   try {
     const spawned = await deps.spawnSubagent({
       cwd: ctx.cwd,
+      ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }),
       type: args.type,
       task: args.task,
       ...(model.length === 0 ? {} : { model }),
     });
     return ok(
-      `subagent ${spawned.childId} (${args.type}) ${spawned.status}. Poll subagents.list with the parent thread for its summary.`,
+      `subagent ${spawned.childId} (${args.type}) ${spawned.status}. Call subagent with action wait to collect its summary, status to check progress, or message to steer it.`,
     );
   } catch (error) {
     return fail(errorMessage(error));
@@ -585,7 +647,10 @@ async function extraTool(
     return fail('tool arguments must be a JSON object');
   }
   try {
-    const output = await runner(name, args as Record<string, unknown>, { cwd: ctx.cwd });
+    const output = await runner(name, args as Record<string, unknown>, {
+      cwd: ctx.cwd,
+      ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }),
+    });
     return ok(capOutput(output));
   } catch (error) {
     return fail(errorMessage(error));

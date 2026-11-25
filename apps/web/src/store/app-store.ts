@@ -1,5 +1,6 @@
 import type {
   AdapterEvent,
+  InstalledPlugin,
   Message,
   Project,
   ProviderView,
@@ -7,11 +8,13 @@ import type {
   RpcParams,
   RpcResult,
   Settings,
+  SubagentMessage,
   SubagentStatus,
   SubagentType,
   SubagentView,
   Thread,
   ThreadEventRow,
+  TodoPhase,
 } from '@tuffcode/contracts';
 import { create } from 'zustand';
 import type { BootstrapInfo, ConnectionStatus } from '../types';
@@ -48,7 +51,39 @@ export interface SubagentChild {
   events: ThreadEventRow[];
   /** Monotonic per-child cursor for the next appended event row. */
   nextSeq: number;
+  /** Live telemetry; undefined means not measured yet ("usage -"). */
+  toolCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  activity?: string | null;
+  /** Reports from the child the parent has not read. */
+  unread?: number;
+  /** The mailbox both ways, oldest first, bounded. */
+  messages: SubagentMessage[];
+  /**
+   * Set when a follow-up was sent to a settled child: the next started frame reopens
+   * it. Without this flag a late started frame still cannot revive a settled child.
+   */
+  awaitingReopen: boolean;
 }
+
+export interface SubagentTelemetryInput {
+  childId: string;
+  threadId: string;
+  toolCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  activity: string | null;
+}
+
+export interface SubagentMessageInput {
+  childId: string;
+  threadId: string;
+  message: SubagentMessage;
+}
+
+/** Mailbox rows kept per child in the store. */
+export const MAX_MESSAGES_PER_SUBAGENT = 100;
 
 export interface SubagentStartedInput {
   childId: string;
@@ -91,6 +126,18 @@ export function newSubagentChild(input: SubagentStartedInput, now: string): Suba
     finishedAt: null,
     events: [],
     nextSeq: 0,
+    messages: [],
+    awaitingReopen: false,
+  };
+}
+
+function telemetryOfView(view: SubagentView): Partial<SubagentChild> {
+  return {
+    ...(view.toolCount === undefined ? {} : { toolCount: view.toolCount }),
+    ...(view.inputTokens === undefined ? {} : { inputTokens: view.inputTokens }),
+    ...(view.outputTokens === undefined ? {} : { outputTokens: view.outputTokens }),
+    ...(view.activity === undefined ? {} : { activity: view.activity }),
+    ...(view.unread === undefined ? {} : { unread: view.unread }),
   };
 }
 
@@ -115,8 +162,11 @@ export function mergeSubagentView(
       task: view.task,
       summary: view.summary ?? null,
       createdAt: view.createdAt,
-      startedAt: view.createdAt,
-      finishedAt,
+      startedAt: view.startedAt ?? view.createdAt,
+      finishedAt: view.finishedAt ?? finishedAt,
+      ...telemetryOfView(view),
+      messages: [],
+      awaitingReopen: false,
       events: [],
       nextSeq: 0,
     };
@@ -130,8 +180,9 @@ export function mergeSubagentView(
     task: view.task.length > 0 ? view.task : child.task,
     summary: view.summary ?? child.summary,
     createdAt: child.createdAt ?? view.createdAt,
-    startedAt: child.startedAt ?? view.createdAt,
-    finishedAt: child.finishedAt ?? finishedAt,
+    startedAt: child.startedAt ?? view.startedAt ?? view.createdAt,
+    finishedAt: child.finishedAt ?? view.finishedAt ?? finishedAt,
+    ...telemetryOfView(view),
     status,
   };
 }
@@ -153,6 +204,10 @@ export interface AppState {
   /** Every known child across threads, keyed by `childId`. */
   subagents: Record<string, SubagentChild>;
   subagentPane: SubagentPaneState;
+  /** The live todo list per thread, from `todo.updated` and `todos.get`. */
+  todos: Record<string, TodoPhase[]>;
+  /** Installed plugins, refreshed by `plugins.updated`. */
+  plugins: InstalledPlugin[];
 
   setBootstrap(bootstrap: BootstrapInfo): void;
   setConnection(connection: ConnectionStatus): void;
@@ -172,6 +227,10 @@ export interface AppState {
   subagentStarted(input: SubagentStartedInput): void;
   subagentEvent(input: SubagentEventInput): void;
   subagentFinished(input: SubagentFinishedInput): void;
+  subagentTelemetry(input: SubagentTelemetryInput): void;
+  subagentMessage(input: SubagentMessageInput): void;
+  setTodos(threadId: string, phases: TodoPhase[]): void;
+  setPlugins(plugins: InstalledPlugin[]): void;
   mergeSubagentViews(threadId: string, views: readonly SubagentView[]): void;
   openSubagent(childId: string): void;
   closeSubagentPane(): void;
@@ -190,6 +249,8 @@ const initialState = {
   activeThreadId: null,
   subagents: {} as Record<string, SubagentChild>,
   subagentPane: { open: false, activeChildId: null } as SubagentPaneState,
+  todos: {} as Record<string, TodoPhase[]>,
+  plugins: [] as InstalledPlugin[],
 };
 
 export function createAppStore() {
@@ -360,8 +421,10 @@ export function createAppStore() {
                 type: input.type,
                 model: input.model,
                 startedAt: existing.startedAt ?? now,
-                // A late started frame cannot resurrect a settled child.
-                status: isTerminalSubagentStatus(existing.status) ? existing.status : 'running',
+                // A late started frame cannot resurrect a settled child; a follow-up can.
+                ...(isTerminalSubagentStatus(existing.status) && !existing.awaitingReopen
+                  ? { status: existing.status }
+                  : { status: 'running' as const, finishedAt: null, awaitingReopen: false }),
               };
         return { subagents: { ...state.subagents, [input.childId]: child } };
       }),
@@ -428,6 +491,42 @@ export function createAppStore() {
         };
         return { subagents: { ...state.subagents, [input.childId]: child } };
       }),
+
+    subagentTelemetry: (input) =>
+      set((state) => {
+        const existing = state.subagents[input.childId];
+        if (existing === undefined) return {};
+        const child: SubagentChild = {
+          ...existing,
+          toolCount: input.toolCount,
+          inputTokens: input.inputTokens,
+          outputTokens: input.outputTokens,
+          activity: input.activity,
+        };
+        return { subagents: { ...state.subagents, [input.childId]: child } };
+      }),
+
+    subagentMessage: (input) =>
+      set((state) => {
+        const existing = state.subagents[input.childId];
+        if (existing === undefined) return {};
+        if (existing.messages.some((message) => message.id === input.message.id)) return {};
+        const messages = [...existing.messages, input.message].slice(-MAX_MESSAGES_PER_SUBAGENT);
+        const toParent = input.message.direction === 'to-parent';
+        const child: SubagentChild = {
+          ...existing,
+          messages,
+          unread: toParent ? (existing.unread ?? 0) + 1 : existing.unread,
+          awaitingReopen:
+            existing.awaitingReopen ||
+            (!toParent && isTerminalSubagentStatus(existing.status) && existing.status !== 'cancelled'),
+        };
+        return { subagents: { ...state.subagents, [input.childId]: child } };
+      }),
+
+    setTodos: (threadId, phases) => set((state) => ({ todos: { ...state.todos, [threadId]: phases } })),
+
+    setPlugins: (plugins) => set({ plugins }),
 
     mergeSubagentViews: (threadId, views) =>
       set((state) => {

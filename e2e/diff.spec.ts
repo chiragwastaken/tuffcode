@@ -7,6 +7,7 @@ import {
   seedDefaultModel,
   sendMessage,
   setPermissionMode,
+  openDock,
 } from './helpers';
 import { MOCK_FILE_PATH, MOCK_WROTE_TEXT } from './mock-openai';
 
@@ -27,8 +28,7 @@ test('diff panel shows the file the mock provider wrote', async ({
   await sendMessage(page, 'write-file now');
   await expectAssistantText(page, MOCK_WROTE_TEXT);
 
-  await expect(page.getByTestId('inspector-tab-diff')).toBeVisible();
-  await page.getByTestId('inspector-tab-diff').click();
+  await openDock(page, 'diff');
   const panel = page.getByTestId('diff-panel');
   await expect(panel).toBeVisible();
   await panel.getByRole('button', { name: 'Refresh diff' }).click();

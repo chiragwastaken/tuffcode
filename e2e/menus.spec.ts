@@ -7,6 +7,7 @@ import {
   seedDefaultModel,
   sendMessage,
   setPermissionMode,
+  openDock,
 } from './helpers';
 import { MOCK_FILE_PATH, MOCK_TEXT, MOCK_WROTE_TEXT } from './mock-openai';
 
@@ -100,7 +101,7 @@ test('diff file menu offers copy path and open in terminal', async ({
   await sendMessage(page, 'write-file now');
   await expectAssistantText(page, MOCK_WROTE_TEXT);
 
-  await page.getByTestId('inspector-tab-diff').click();
+  await openDock(page, 'diff');
   const panel = page.getByTestId('diff-panel');
   await panel.getByRole('button', { name: 'Refresh diff' }).click();
   const file = panel.getByTestId('diff-file').filter({ hasText: MOCK_FILE_PATH });

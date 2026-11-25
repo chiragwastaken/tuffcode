@@ -12,9 +12,7 @@ export type McpRpcRegister = (handlers: RpcHandlers) => void;
 export function registerMcpRpc(register: McpRpcRegister, service: McpService): void {
   const handlers = new Map<string, RpcHandler>();
   handlers.set('mcp.list', () => service.list());
-  handlers.set('mcp.upsert', (params) =>
-    service.upsert(params as RpcParams<'mcp.upsert'>),
-  );
+  handlers.set('mcp.upsert', (params) => service.save(params as RpcParams<'mcp.upsert'>));
   handlers.set('mcp.remove', (params) => {
     service.remove((params as RpcParams<'mcp.remove'>).id);
     return {};

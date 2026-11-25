@@ -72,9 +72,67 @@ describe('subagents repo', () => {
       providerId: 'prv_1',
       status: 'queued',
       task: 'map the project',
+      startedAt: null,
+      finishedAt: null,
+      unread: 0,
       createdAt: CREATED,
       updatedAt: CREATED,
     });
+  });
+
+  it('starts telemetry at zero when the child runs and records later counters', () => {
+    create();
+    expect(ctx.repos.subagents.get('sub_1')?.toolCount).toBeUndefined();
+    const running = requireRecord(ctx.repos.subagents.setRunning('sub_1', 'thr_child_1', UPDATED));
+    expect(running.toolCount).toBe(0);
+    expect(running.startedAt).toBe(UPDATED);
+    ctx.repos.subagents.recordTelemetry('sub_1', {
+      toolCount: 4,
+      inputTokens: 900,
+      outputTokens: 120,
+      activity: 'bash: pnpm test',
+    });
+    const view = toSubagentView(requireRecord(ctx.repos.subagents.get('sub_1')));
+    expect(view).toMatchObject({
+      toolCount: 4,
+      inputTokens: 900,
+      outputTokens: 120,
+      activity: 'bash: pnpm test',
+    });
+    const done = requireRecord(
+      ctx.repos.subagents.finish('sub_1', { status: 'done', summary: 'ok', updatedAt: UPDATED }),
+    );
+    expect(done.finishedAt).toBe(UPDATED);
+    const reopened = requireRecord(ctx.repos.subagents.reopen('sub_1', UPDATED));
+    expect(reopened.status).toBe('running');
+    expect(reopened.finishedAt).toBeNull();
+    expect(reopened.toolCount).toBe(4);
+  });
+
+  it('keeps a mailbox per child and counts unread reports', () => {
+    create();
+    ctx.repos.subagents.addMessage({
+      id: 'sm_1',
+      childId: 'sub_1',
+      direction: 'to-child',
+      text: 'also read the tests',
+      createdAt: CREATED,
+    });
+    ctx.repos.subagents.addMessage({
+      id: 'sm_2',
+      childId: 'sub_1',
+      direction: 'to-parent',
+      text: 'found the bug',
+      createdAt: UPDATED,
+    });
+    expect(ctx.repos.subagents.listMessages('sub_1').map((m) => m.id)).toEqual(['sm_1', 'sm_2']);
+    expect(ctx.repos.subagents.get('sub_1')?.unread).toBe(1);
+    expect(ctx.repos.subagents.unreadMessages('sub_1').map((m) => m.text)).toEqual([
+      'found the bug',
+    ]);
+    expect(ctx.repos.subagents.markRead('sub_1', UPDATED)).toBe(1);
+    expect(ctx.repos.subagents.get('sub_1')?.unread).toBe(0);
+    expect(ctx.repos.subagents.unreadMessages('sub_1')).toEqual([]);
   });
 
   it('carries the child thread id through setRunning into the view', () => {

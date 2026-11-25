@@ -1,15 +1,34 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  Notification,
+  powerSaveBlocker,
+  shell,
+  type OpenDialogOptions,
+} from 'electron';
 import { dbPath, serverJsonPath, tuffcodeHome } from '@tuffcode/shared';
 import {
   BOOTSTRAP_CHANNEL,
   CHECK_UPDATES_CHANNEL,
+  KEEP_AWAKE_CHANNEL,
+  MENU_ACTION_CHANNEL,
+  NAVIGATE_ACTION_PREFIX,
+  NOTIFY_CHANNEL,
+  OPEN_EXTERNAL_CHANNEL,
+  PICK_FILE_CHANNEL,
   PICK_FOLDER_CHANNEL,
   SET_THEME_CHANNEL,
   attachSecretBridge,
+  isExternalUrl,
   isTheme,
+  parseNotifyRequest,
+  parsePickFileRequest,
   type BootstrapInfo,
   type UpdateCheckOutcome,
 } from './bridge';
@@ -93,6 +112,18 @@ function createWindow(theme: ResolvedTheme): BrowserWindow {
   return window;
 }
 
+/** One blocker for the whole app while any agent runs and the user asked for it. */
+let keepAwakeId: number | null = null;
+
+function setKeepAwake(on: boolean): void {
+  if (on && keepAwakeId === null) {
+    keepAwakeId = powerSaveBlocker.start('prevent-app-suspension');
+  } else if (!on && keepAwakeId !== null) {
+    if (powerSaveBlocker.isStarted(keepAwakeId)) powerSaveBlocker.stop(keepAwakeId);
+    keepAwakeId = null;
+  }
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(BOOTSTRAP_CHANNEL, (): BootstrapInfo => {
     if (bootstrap === null) throw new Error('The Tuffcode server is not ready yet.');
@@ -113,6 +144,54 @@ function registerIpcHandlers(): void {
         : await dialog.showOpenDialog(parent, options);
     const [folder] = result.filePaths;
     return result.canceled || folder === undefined ? null : folder;
+  });
+
+  ipcMain.handle(PICK_FILE_CHANNEL, async (event, raw: unknown): Promise<string | null> => {
+    const request = parsePickFileRequest(raw);
+    if (request === null) return null;
+    const options: OpenDialogOptions = {
+      title: request.title ?? 'Choose a file',
+      properties: ['openFile'],
+      filters: [{ name: request.extensions.join(', '), extensions: request.extensions }],
+    };
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const result =
+      parent === null
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(parent, options);
+    const [file] = result.filePaths;
+    return result.canceled || file === undefined ? null : file;
+  });
+
+  ipcMain.on(NOTIFY_CHANNEL, (_event, raw: unknown) => {
+    const request = parseNotifyRequest(raw);
+    if (request === null || !Notification.isSupported()) return;
+    const notification = new Notification({
+      title: request.title,
+      body: request.body,
+      silent: request.silent === true,
+    });
+    notification.on('click', () => {
+      const window = mainWindow;
+      if (window === null || window.isDestroyed()) return;
+      if (window.isMinimized()) window.restore();
+      window.focus();
+      if (request.route !== undefined) {
+        window.webContents.send(MENU_ACTION_CHANNEL, `${NAVIGATE_ACTION_PREFIX}${request.route}`);
+      }
+    });
+    notification.show();
+  });
+
+  ipcMain.on(KEEP_AWAKE_CHANNEL, (_event, on: unknown) => {
+    setKeepAwake(on === true);
+  });
+
+  ipcMain.on(OPEN_EXTERNAL_CHANNEL, (_event, url: unknown) => {
+    if (!isExternalUrl(url)) return;
+    void shell.openExternal(url).catch((error: unknown) => {
+      logger.warn('open external failed', { reason: error instanceof Error ? error.message : String(error) });
+    });
   });
 
   ipcMain.on(SET_THEME_CHANNEL, (event, theme: unknown) => {

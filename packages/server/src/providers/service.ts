@@ -68,6 +68,8 @@ export interface ProvidersServiceDeps {
   spawnPty?: SpawnLoginPty;
   killTree?: KillLoginTree;
   discovery?: ProviderDiscoveryOverrides;
+  /** Where the model metadata index is cached; unset skips models.dev enrichment. */
+  cacheDir?: string;
 }
 
 const TEST_TIMEOUT_MS = 5_000;
@@ -141,15 +143,29 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
       secret,
       fetchFn,
       resolveCommand: deps.resolveCommand,
+      ...(deps.cacheDir === undefined ? {} : { cacheDir: deps.cacheDir }),
       ...deps.discovery,
     };
   }
 
-  async function discoverFor(providerId: string, refresh: boolean): Promise<ProviderModelsResult> {
+  /**
+   * `registry` allows the weekly models.dev download for metadata. Only an explicit
+   * refresh from the UI sets it; the background refresh after a save does not.
+   */
+  async function discoverFor(
+    providerId: string,
+    refresh: boolean,
+    registry = refresh,
+  ): Promise<ProviderModelsResult> {
     const provider = deps.repos.providers.get(providerId);
     if (provider === undefined) throw notFound('provider not found');
     const secret = await secretFor(provider.secretRef);
-    return providerModels(deps.repos, provider, discoveryFor(secret), refresh);
+    return providerModels(
+      deps.repos,
+      provider,
+      { ...discoveryFor(secret), allowRegistryFetch: registry },
+      refresh,
+    );
   }
 
   /**
@@ -158,7 +174,7 @@ export function createProvidersService(deps: ProvidersServiceDeps): ProvidersSer
    */
   function refreshModelsAfterSave(providerId: string): void {
     void (async () => {
-      const result = await discoverFor(providerId, true);
+      const result = await discoverFor(providerId, true, false);
       if (result.error !== undefined) {
         const provider = deps.repos.providers.get(providerId);
         deps.bus.emit({

@@ -33,6 +33,7 @@ export const COUNCIL_WORKER_BRIEF_TEMPLATE = `TASK
 
 ROLE
 You are one worker on a council goal. You own this task end to end: implement it, verify it, commit it, push the branch, and open the pull request. Do not plan other tasks, do not edit files owned by other tasks, and never commit to main.
+Every tool is available: bash with git and gh, the todo list for your steps, subagents for parallel exploration or an early review, memory for durable facts, skills and MCP connectors.
 
 PROJECT
 {{project_name}} at {{project_path}}. Base branch {{base_branch}}. Issue: {{issue_ref}}.

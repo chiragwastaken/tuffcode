@@ -22,7 +22,7 @@ import type { ProvidersService } from '../providers/service.js';
 export type ExtraToolRunner = (
   name: string,
   args: Record<string, unknown>,
-  ctx: { cwd: string },
+  ctx: { cwd: string; threadId?: string },
 ) => Promise<string>;
 
 /** Settings the agent may change through the `config` tool, D48. */
@@ -35,6 +35,9 @@ export const SETTINGS_ALLOWLIST = [
   'subagentModels',
   'subagentConcurrency',
   'enabledTools',
+  'capabilities',
+  'brainCapture',
+  'responseStyle',
 ] as const;
 
 type AllowedSettingKey = (typeof SETTINGS_ALLOWLIST)[number];
@@ -50,6 +53,12 @@ export interface ExtraToolDeps {
   providers: ProvidersService;
   mcp: McpService;
   brain: ExtraToolBrain;
+  /** The task list behind the `todo` tool; absent leaves the tool unavailable. */
+  todos?: { applyToolCall(threadId: string, args: Record<string, unknown>): string };
+  /** Loads one skill body by name for the project; throws when it is unknown. */
+  skills?: { read(projectId: string, name: string): string };
+  /** Fetches one URL as readable text for `web_fetch`. */
+  webFetch?: (url: string, maxChars: number) => Promise<string>;
 }
 
 const ArgumentsSchema = z.record(z.string(), z.unknown());
@@ -155,7 +164,11 @@ function oneLine(text: string): string {
 
 export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } {
   /** The thread worktree wins over the project root so memory follows the checkout. */
-  function resolveScope(cwd: string): { projectId?: string; threadId?: string } {
+  function resolveScope(cwd: string, threadId?: string): { projectId?: string; threadId?: string } {
+    if (threadId !== undefined) {
+      const known = deps.repos.threads.get(threadId);
+      if (known !== undefined) return { projectId: known.projectId, threadId: known.id };
+    }
     const target = normalizePath(cwd);
     const thread = deps.repos.threads
       .list()
@@ -211,10 +224,10 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     return deps.mcp.callTool(server, tool, toolArgs);
   }
 
-  function memorySearch(args: Record<string, unknown>, cwd: string): string {
+  function memorySearch(args: Record<string, unknown>, cwd: string, threadId?: string): string {
     requireBrain();
     const query = requireString(args, 'query');
-    const scope = resolveScope(cwd);
+    const scope = resolveScope(cwd, threadId);
     const result = deps.brain.search({
       ...(scope.projectId === undefined ? {} : { projectId: scope.projectId }),
       query,
@@ -227,7 +240,7 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
       .join('\n');
   }
 
-  function memoryAdd(args: Record<string, unknown>, cwd: string): string {
+  function memoryAdd(args: Record<string, unknown>, cwd: string, threadId?: string): string {
     requireBrain();
     const text = requireString(args, 'text');
     const kindText = optionalString(args, 'kind') ?? 'memory';
@@ -238,7 +251,7 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
       .map((tag) => tag.trim())
       .filter((tag) => tag.length > 0)
       .join(',');
-    const scope = resolveScope(cwd);
+    const scope = resolveScope(cwd, threadId);
     const entry = deps.brain.add({
       kind: kind.data,
       scope: scope.projectId ?? 'global',
@@ -381,12 +394,35 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
           }
           case 'memory': {
             const action = requireString(args, 'action');
-            if (action === 'search') return memorySearch(args, ctx.cwd);
-            if (action === 'add') return memoryAdd(args, ctx.cwd);
+            if (action === 'search') return memorySearch(args, ctx.cwd, ctx.threadId);
+            if (action === 'add') return memoryAdd(args, ctx.cwd, ctx.threadId);
             throw new Error(`unknown memory action: ${action}`);
           }
           case 'config':
             return await configAction(args);
+          case 'todo': {
+            if (deps.todos === undefined) throw new Error('the todo tool is unavailable');
+            const scope = resolveScope(ctx.cwd, ctx.threadId);
+            if (scope.threadId === undefined) throw new Error('no thread owns this turn');
+            return deps.todos.applyToolCall(scope.threadId, args);
+          }
+          case 'skill': {
+            if (deps.skills === undefined) throw new Error('the skill tool is unavailable');
+            const name = requireString(args, 'name');
+            const scope = resolveScope(ctx.cwd, ctx.threadId);
+            if (scope.projectId === undefined) throw new Error('no project owns this turn');
+            return deps.skills.read(scope.projectId, name);
+          }
+          case 'web_fetch': {
+            if (deps.webFetch === undefined) throw new Error('web_fetch is unavailable');
+            const url = requireString(args, 'url');
+            const requested = args['max_chars'];
+            const maxChars =
+              typeof requested === 'number' && Number.isFinite(requested)
+                ? Math.min(64000, Math.max(500, Math.floor(requested)))
+                : 20000;
+            return await deps.webFetch(url, maxChars);
+          }
           default:
             throw new Error(`unknown tool: ${name}`);
         }

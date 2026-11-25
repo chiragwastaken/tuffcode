@@ -158,10 +158,10 @@ describe('prompt planning', () => {
     expect(ctx.repos.brain.get(entry.id)?.lastUsedAt).toBeNull();
   });
 
-  it('caps custom instructions from settings at 300 tokens on a sentence boundary', () => {
+  it('caps custom instructions from settings at 2000 tokens on a sentence boundary', () => {
     const ctx = setup();
     ctx.repos.settings.patch({
-      customInstructions: 'Keep every answer short and concrete. '.repeat(80),
+      customInstructions: 'Keep every answer short and concrete. '.repeat(400),
     });
     const section = preview(ctx, 'hello').sections.find(
       (entry) => entry.name === 'custom-instructions',
@@ -169,7 +169,8 @@ describe('prompt planning', () => {
     expect(section).toBeDefined();
     expect(section?.text.startsWith(CUSTOM_INSTRUCTIONS_HEADING)).toBe(true);
     const body = (section?.text ?? '').slice(CUSTOM_INSTRUCTIONS_HEADING.length).trim();
-    expect(estimateTokens(body)).toBeLessThanOrEqual(300);
+    expect(estimateTokens(body)).toBeLessThanOrEqual(2000);
+    expect(estimateTokens(body)).toBeGreaterThan(1500);
     expect(body.endsWith('concrete.')).toBe(true);
   });
 

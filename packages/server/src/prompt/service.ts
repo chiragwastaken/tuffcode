@@ -11,6 +11,13 @@ import { assemblePrompt, type AssembledPrompt } from '@tuffcode/prompt';
 import { assembleBrain, type BrainAssembly } from '../brain/service.js';
 import { renderBrainEntries } from '../brain/selector.js';
 import type { Repos } from '../db/repos/index.js';
+import { discoverSkills, readSkillBody, skillRoots } from '../skills/discover.js';
+import {
+  availableSkillsList,
+  expandSkillMentions,
+  renderSkillSections,
+} from '../skills/inject.js';
+import { pluginSkillRoots } from '../skills/roots.js';
 
 export interface PromptPlanInput {
   thread: Thread;
@@ -24,6 +31,41 @@ export interface PromptPlanInput {
 export interface PromptPlan {
   assembly: AssembledPrompt;
   brain: BrainAssembly;
+  /** `$name` mentions that matched no skill, so the caller can warn once. */
+  unknownSkills: string[];
+}
+
+interface SkillPlan {
+  skills: string;
+  availableSkills: string;
+  unknown: string[];
+}
+
+/**
+ * Skills for one message: mentioned bodies plus the list the `skill` tool loads from.
+ * Discovery failures are a skills problem, never a reason to fail the turn.
+ */
+function planSkills(repos: Repos, projectPath: string, message: string, settings: Settings): SkillPlan {
+  if (!settings.capabilities.skills) return { skills: '', availableSkills: '', unknown: [] };
+  try {
+    const plugins = pluginSkillRoots(repos);
+    const discovered = discoverSkills(projectPath, { pluginRoots: plugins, onWarning: () => undefined });
+    if (discovered.length === 0) return { skills: '', availableSkills: '', unknown: [] };
+    const roots = skillRoots(projectPath, plugins);
+    const expansion = expandSkillMentions(message, discovered, (skill) =>
+      readSkillBody(skill.path, roots),
+    );
+    return {
+      skills: renderSkillSections(expansion.sections),
+      availableSkills: availableSkillsList(
+        discovered,
+        expansion.sections.map((section) => section.name),
+      ),
+      unknown: expansion.unknown,
+    };
+  } catch {
+    return { skills: '', availableSkills: '', unknown: [] };
+  }
 }
 
 export function planPrompt(repos: Repos, input: PromptPlanInput): PromptPlan {
@@ -37,8 +79,13 @@ export function planPrompt(repos: Repos, input: PromptPlanInput): PromptPlan {
     now,
   });
 
+  const skillPlan = planSkills(repos, project.path, message, settings);
   const assembly = assemblePrompt({
     customInstructions: settings.customInstructions,
+    profile: settings.profile,
+    responseStyle: settings.responseStyle,
+    skills: skillPlan.skills,
+    availableSkills: skillPlan.availableSkills,
     brainAlways: renderBrainEntries(brain.slice.always),
     retrievedMemory: renderBrainEntries(brain.slice.retrieved),
     turnContext: {
@@ -51,5 +98,5 @@ export function planPrompt(repos: Repos, input: PromptPlanInput): PromptPlan {
     userMessage: message,
   });
 
-  return { assembly, brain };
+  return { assembly, brain, unknownSkills: skillPlan.unknown };
 }

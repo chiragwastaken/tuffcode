@@ -1,6 +1,8 @@
+import type { AdapterDeps, TurnContext, TurnToolOptions } from '@tuffcode/contracts';
 import {
   EXTRA_TOOL_SCHEMAS,
   SUBAGENT_TOOL,
+  SUBAGENT_TOOL_NAME,
   TOOL_SCHEMAS,
   type ToolSchema,
 } from '@tuffcode/prompt';
@@ -10,12 +12,70 @@ export type HarnessToolSchema =
   | ToolSchema
   | { name: string; description: string; parameters: ToolSchema['parameters'] };
 
-export interface ToolListOptions {
-  /** Offer the `subagent` tool. The server sets this when the harness can spawn. */
-  subagent?: boolean;
-  /** Offer `mcp`, `memory` and `config`. The server sets this when a runner is injected. */
-  extra?: boolean;
+/** Which server tools a request offers; every flag defaults to off. */
+export type ToolListOptions = Partial<TurnToolOptions>;
+
+const NO_SERVER_TOOLS: TurnToolOptions = {
+  subagent: false,
+  extra: false,
+  todo: false,
+  skill: false,
+  webFetch: false,
+  mcp: false,
+};
+
+/**
+ * The server tools this turn offers: what the harness can run (deps) narrowed by what
+ * the server enabled for this turn (capabilities, thread kind). A context built without
+ * `toolOptions` keeps the construction-time behaviour: every injected tool is offered.
+ */
+export function resolveToolOptions(ctx: TurnContext, deps: AdapterDeps): TurnToolOptions {
+  const extra = deps.extraTool !== undefined;
+  // Read-only turns still see the tool: status, wait, inbox and report are safe there,
+  // and classifySubagentTool denies spawn, message and stop.
+  const subagent = deps.spawnSubagent !== undefined;
+  const available: TurnToolOptions = {
+    subagent,
+    extra,
+    todo: extra,
+    skill: extra,
+    webFetch: extra,
+    mcp: extra,
+  };
+  const wanted = ctx.toolOptions;
+  if (wanted === undefined) return available;
+  return {
+    subagent: available.subagent && wanted.subagent,
+    extra: available.extra && wanted.extra,
+    todo: available.todo && wanted.todo,
+    skill: available.skill && wanted.skill,
+    webFetch: available.webFetch && wanted.webFetch,
+    mcp: available.mcp && wanted.mcp,
+  };
 }
+
+/** Whether a server tool name was offered this turn; file tools are gated by the allowlist. */
+export function isServerToolOffered(name: string, options: TurnToolOptions): boolean {
+  switch (name) {
+    case SUBAGENT_TOOL_NAME:
+      return options.subagent;
+    case 'mcp':
+      return options.extra && options.mcp;
+    case 'memory':
+    case 'config':
+      return options.extra;
+    case 'todo':
+      return options.todo;
+    case 'skill':
+      return options.skill;
+    case 'web_fetch':
+      return options.webFetch;
+    default:
+      return true;
+  }
+}
+
+export { NO_SERVER_TOOLS };
 
 /**
  * The harness tools a turn may offer. An unset allowlist means every file tool, which
@@ -32,8 +92,12 @@ export function allowedToolSchemas(
     allowlist === undefined
       ? [...TOOL_SCHEMAS]
       : TOOL_SCHEMAS.filter((schema) => allowlist.includes(schema.name));
-  if (options.subagent === true) tools.push(SUBAGENT_TOOL);
-  if (options.extra === true) tools.push(...EXTRA_TOOL_SCHEMAS);
+  // Callers that only say `extra` mean the original three tools, mcp included.
+  const offered = { ...NO_SERVER_TOOLS, ...options, mcp: options.mcp ?? options.extra === true };
+  if (offered.subagent) tools.push(SUBAGENT_TOOL);
+  for (const schema of EXTRA_TOOL_SCHEMAS) {
+    if (isServerToolOffered(schema.name, offered)) tools.push(schema);
+  }
   return tools;
 }
 

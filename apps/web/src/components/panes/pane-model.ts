@@ -1,6 +1,7 @@
 /**
- * Split-pane layout for the main area: one to three panes, each with a strip of
- * surfaces and a width. The first pane always hosts the thread.
+ * Split-pane layout for the main area: one to four panes, each with a strip of
+ * surfaces and a width. The first pane always hosts the route's thread; other panes
+ * may host another chat (`thread:<id>`, a side chat) or a tool surface.
  *
  * Everything here is pure, so the split, collapse and persistence rules are
  * testable without a DOM. Widths are percentages of the row's available width
@@ -11,24 +12,51 @@
 export const PANE_SURFACES = [
   'thread',
   'diff',
+  'files',
   'terminal',
+  'browser',
   'brain',
   'council',
   'subagent',
 ] as const;
 
-export type PaneSurface = (typeof PANE_SURFACES)[number];
+export type FixedPaneSurface = (typeof PANE_SURFACES)[number];
 
-export const PANE_SURFACE_LABEL: Record<PaneSurface, string> = {
+/** A fixed tool surface, or another chat opened beside the route's thread. */
+export type PaneSurface = FixedPaneSurface | `thread:${string}`;
+
+export const PANE_SURFACE_LABEL: Record<FixedPaneSurface, string> = {
   thread: 'Thread',
   diff: 'Diff',
+  files: 'Files',
   terminal: 'Terminal',
+  browser: 'Browser',
   brain: 'Brain',
   council: 'Council',
   subagent: 'Subagent',
 };
 
-export const MAX_PANES = 3;
+const SIDE_THREAD = /^thread:[A-Za-z0-9_-]{1,80}$/;
+
+export function threadSurface(threadId: string): PaneSurface {
+  return `thread:${threadId}`;
+}
+
+/** The thread id of a side-chat surface, or null for a fixed surface. */
+export function sideThreadId(surface: PaneSurface): string | null {
+  return surface.startsWith('thread:') ? surface.slice('thread:'.length) : null;
+}
+
+export function paneSurfaceLabel(
+  surface: PaneSurface,
+  titleOf: (threadId: string) => string | undefined = () => undefined,
+): string {
+  const side = sideThreadId(surface);
+  if (side === null) return PANE_SURFACE_LABEL[surface as FixedPaneSurface];
+  return titleOf(side) ?? 'Chat';
+}
+
+export const MAX_PANES = 4;
 export const MIN_PANE_WIDTH_PX = 280;
 export const MAX_PANE_WIDTH_RATIO = 0.7;
 export const SPLITTER_WIDTH_PX = 6;
@@ -52,7 +80,10 @@ const FIRST_PANE_ID = 'pane-1';
 const STORAGE_VERSION = 1;
 
 export function isPaneSurface(value: unknown): value is PaneSurface {
-  return typeof value === 'string' && (PANE_SURFACES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    ((PANE_SURFACES as readonly string[]).includes(value) || SIDE_THREAD.test(value))
+  );
 }
 
 export function defaultPaneLayout(): PaneLayout {

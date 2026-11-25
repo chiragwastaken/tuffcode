@@ -6,15 +6,20 @@ import {
   BrainKindSchema,
   BrainRelationSchema,
   BrainSliceSchema,
+  CatalogEntrySchema,
   CheckpointSchema,
   CommandSchema,
+  ConnectorEntrySchema,
   DiffFileSchema,
   ExecutionModeSchema,
   GoalAutonomySchema,
   GoalSchema,
   IdSchema,
+  InstalledPluginSchema,
   IsoDateTimeSchema,
+  MarketplaceSchema,
   McpServerSchema,
+  McpTransportSchema,
   McpToolSchema,
   MessageSchema,
   ModelSchema,
@@ -23,15 +28,18 @@ import {
   ProviderConfigSchema,
   ProviderKindSchema,
   ProviderViewSchema,
+  ReasoningLevelSchema,
   ReviewCommentSchema,
   ReviewCommentSideSchema,
   ReviewSchema,
   SeqSchema,
   SkillSchema,
+  SubagentMessageSchema,
   SubagentSpecSchema,
   SubagentViewSchema,
   TaskSchema,
   ThreadSchema,
+  TodoListSchema,
 } from './entities.js';
 import { ServerEventSchema, ThreadEventRowSchema, type ServerEvent } from './events.js';
 import { SettingsPatchSchema, SettingsSchema } from './settings.js';
@@ -100,7 +108,7 @@ export const PromptPreviewSchema = z.object({
 export type PromptPreview = z.infer<typeof PromptPreviewSchema>;
 
 /** Settings sections a slash command may open directly. */
-export const CommandSettingsSectionSchema = z.enum(['instructions', 'agents']);
+export const CommandSettingsSectionSchema = z.enum(['your-tuffcode', 'instructions', 'agents']);
 export type CommandSettingsSection = z.infer<typeof CommandSettingsSectionSchema>;
 
 /**
@@ -192,11 +200,30 @@ export const methods = {
     params: z.object({
       id: IdSchema,
       title: z.string().optional(),
+      /** Moves the thread to another enabled provider; the next turn replays a bounded digest. */
+      providerId: IdSchema.optional(),
       modelId: z.string().optional(),
+      reasoningEffort: ReasoningLevelSchema.nullable().optional(),
       executionMode: ExecutionModeSchema.optional(),
       permissionMode: PermissionModeSchema.optional(),
     }),
     result: ThreadSchema,
+  },
+  /** Title and message search for the sidebar search dialog. */
+  'threads.search': {
+    params: z.object({
+      query: z.string().min(1).max(200),
+      limit: z.number().int().positive().max(50).optional(),
+    }),
+    result: z
+      .object({
+        threadId: IdSchema,
+        projectId: IdSchema,
+        title: z.string(),
+        snippet: z.string(),
+        matchedIn: z.enum(['title', 'message']),
+      })
+      .array(),
   },
   'threads.delete': {
     params: z.object({
@@ -252,6 +279,18 @@ export const methods = {
         })
         .array(),
     }),
+  },
+  'todos.get': {
+    params: threadIdParam,
+    result: TodoListSchema,
+  },
+  'files.tree': {
+    params: threadIdParam,
+    result: z.object({ paths: z.string().array(), truncated: z.boolean() }),
+  },
+  'files.read': {
+    params: z.object({ threadId: IdSchema, path: z.string().min(1) }),
+    result: z.object({ text: z.string(), truncated: z.boolean(), binary: z.boolean() }),
   },
   'messages.list': {
     params: threadIdParam,
@@ -394,15 +433,27 @@ export const methods = {
     result: McpServerSchema.array(),
   },
   'mcp.upsert': {
-    params: z.object({
-      id: IdSchema.optional(),
-      label: z.string().min(1),
-      command: z.string().min(1),
-      args: z.string().array().optional(),
-      env: z.record(z.string(), z.string()).optional(),
-      cwd: z.string().nullable().optional(),
-      enabled: z.boolean().optional(),
-    }),
+    params: z
+      .object({
+        id: IdSchema.optional(),
+        label: z.string().min(1),
+        transport: McpTransportSchema.optional(),
+        command: z.string().optional(),
+        args: z.string().array().optional(),
+        env: z.record(z.string(), z.string()).optional(),
+        cwd: z.string().nullable().optional(),
+        url: z.string().nullable().optional(),
+        /** Bearer token for an http server; sent once, stored in the secret bridge. */
+        secret: z.string().optional(),
+        enabled: z.boolean().optional(),
+      })
+      .refine(
+        (value) =>
+          (value.transport ?? 'stdio') === 'stdio'
+            ? (value.command ?? '').trim().length > 0
+            : (value.url ?? '').trim().length > 0,
+        { message: 'a stdio server needs a command and an http server needs a url' },
+      ),
     result: McpServerSchema,
   },
   'mcp.remove': {
@@ -459,6 +510,11 @@ export const methods = {
   'brain.delete': {
     params: idParam,
     result: EmptyObjectSchema,
+  },
+  /** Deletes every brain entry and edge, or only one project's. */
+  'brain.reset': {
+    params: z.object({ projectId: IdSchema.optional() }),
+    result: z.object({ removed: z.number().int().nonnegative() }),
   },
   'brain.preview': {
     params: z.object({
@@ -564,6 +620,19 @@ export const methods = {
     params: z.object({ threadId: IdSchema }),
     result: SubagentViewSchema.array(),
   },
+  'subagents.get': {
+    params: z.object({ childId: IdSchema }),
+    result: SubagentViewSchema,
+  },
+  /** Sends a follow-up to a child: queued while it runs, a new turn once it settled. */
+  'subagents.message': {
+    params: z.object({ childId: IdSchema, text: z.string().min(1).max(8000) }),
+    result: z.object({ delivered: z.enum(['queued', 'started']) }),
+  },
+  'subagents.messages': {
+    params: z.object({ childId: IdSchema }),
+    result: SubagentMessageSchema.array(),
+  },
   /** Every subagent across threads, so the sidebar can map child thread ids to child ids. */
   'subagents.listAll': {
     params: EmptyObjectSchema,
@@ -583,6 +652,66 @@ export const methods = {
   'skills.list': {
     params: projectIdParam,
     result: SkillSchema.array(),
+  },
+  'skills.read': {
+    params: z.object({ projectId: IdSchema, name: z.string().min(1) }),
+    result: SkillSchema,
+  },
+  'plugins.marketplaces': {
+    params: EmptyObjectSchema,
+    result: MarketplaceSchema.array(),
+  },
+  'plugins.addMarketplace': {
+    params: z.object({ url: z.string().min(3).max(500) }),
+    result: MarketplaceSchema,
+  },
+  'plugins.removeMarketplace': {
+    params: idParam,
+    result: EmptyObjectSchema,
+  },
+  /** A user action: reads the cache, fetching only when it is stale or `refresh` is set. */
+  'plugins.catalog': {
+    params: z.object({
+      marketplaceId: IdSchema.optional(),
+      refresh: z.boolean().optional(),
+    }),
+    result: z.object({
+      entries: CatalogEntrySchema.array(),
+      marketplaces: MarketplaceSchema.array(),
+    }),
+  },
+  'plugins.installed': {
+    params: EmptyObjectSchema,
+    result: InstalledPluginSchema.array(),
+  },
+  'plugins.install': {
+    params: z.object({ entryId: z.string().min(1) }),
+    result: InstalledPluginSchema,
+  },
+  /** Installs a local .zip, .skill or SKILL.md picked by the user. */
+  'plugins.upload': {
+    params: z.object({ path: z.string().min(1) }),
+    result: InstalledPluginSchema,
+  },
+  'plugins.setEnabled': {
+    params: z.object({ id: IdSchema, enabled: z.boolean() }),
+    result: InstalledPluginSchema,
+  },
+  'plugins.remove': {
+    params: idParam,
+    result: EmptyObjectSchema,
+  },
+  'connectors.search': {
+    params: z.object({ query: z.string().max(200) }),
+    result: z.object({ entries: ConnectorEntrySchema.array(), error: z.string().nullable() }),
+  },
+  'connectors.install': {
+    params: z.object({
+      entry: ConnectorEntrySchema,
+      env: z.record(z.string(), z.string()).optional(),
+      secret: z.string().optional(),
+    }),
+    result: McpServerSchema,
   },
   'diagnostics.export': {
     params: EmptyObjectSchema,

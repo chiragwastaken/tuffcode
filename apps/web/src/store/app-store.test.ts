@@ -107,6 +107,7 @@ describe('app store messages', () => {
       branch: 'tuffcode/thread-1',
       baseBranch: 'main',
       prUrl: null,
+      reasoningEffort: null,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
       lastSeq: 0,

@@ -266,10 +266,11 @@ describe('createClaudeAdapter', () => {
     const calls: RecordedCall[] = [];
     const mcpDeps: AdapterDeps = {
       ...deps,
-      mcpServers: {
+      mcpServers: () => ({
         files: { command: 'npx', args: ['-y', 'files-mcp'], env: { ROOT: 'C:/work' } },
         notes: { command: 'node', args: [], env: {} },
-      },
+        remote: { type: 'http', url: 'https://mcp.example.com/mcp', headers: {} },
+      }),
     };
     const adapter = await createClaudeAdapter(provider, mcpDeps, {
       queryFn: recordingQuery([], calls),
@@ -285,12 +286,24 @@ describe('createClaudeAdapter', () => {
         env: { ROOT: 'C:/work' },
       },
       notes: { type: 'stdio', command: 'node', args: [], env: {} },
+      remote: { type: 'http', url: 'https://mcp.example.com/mcp', headers: {} },
     });
+  });
+
+  it('passes the reasoning level as the SDK effort', async () => {
+    const calls: RecordedCall[] = [];
+    const adapter = await createClaudeAdapter(provider, deps, {
+      queryFn: recordingQuery([], calls),
+    });
+    await drain(adapter.send('hi', { ...turnContext(), reasoningEffort: 'xhigh' }));
+    expect(calls.at(-1)?.options.effort).toBe('xhigh');
+    await drain(adapter.send('hi', { ...turnContext(), reasoningEffort: 'none' }));
+    expect(calls.at(-1)?.options.effort).toBeUndefined();
   });
 
   it('omits the mcpServers option when no servers are configured', async () => {
     const calls: RecordedCall[] = [];
-    const emptyDeps: AdapterDeps = { ...deps, mcpServers: {} };
+    const emptyDeps: AdapterDeps = { ...deps, mcpServers: () => ({}) };
     const adapter = await createClaudeAdapter(provider, emptyDeps, {
       queryFn: recordingQuery([], calls),
     });

@@ -3,7 +3,7 @@ import {
   type AdapterLogger,
   type ProviderConfig,
 } from '@tuffcode/contracts';
-import type { HarnessToolSchema } from '../tool-policy.js';
+import type { HarnessToolSchema, ToolListOptions } from '../tool-policy.js';
 import { allowedToolSchemas } from '../tool-policy.js';
 
 export interface AnthropicTextBlock {
@@ -25,7 +25,21 @@ export interface AnthropicToolResultBlock {
   is_error?: boolean;
 }
 
+/** Extended thinking; the signature must travel back unchanged with tool results. */
+export interface AnthropicThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+  signature: string;
+}
+
+export interface AnthropicRedactedThinkingBlock {
+  type: 'redacted_thinking';
+  data: string;
+}
+
 export type AnthropicContentBlock =
+  | AnthropicThinkingBlock
+  | AnthropicRedactedThinkingBlock
   | AnthropicTextBlock
   | AnthropicToolUseBlock
   | AnthropicToolResultBlock;
@@ -47,10 +61,25 @@ export interface AnthropicRequestBody {
   temperature?: number;
   /** Settings allowlist for this turn; unset offers every harness tool. */
   toolAllowlist?: string[];
-  /** Offer the `subagent` delegation tool for this turn. */
-  subagentTool?: boolean;
-  /** Offer the `mcp`, `memory` and `config` server tools for this turn. */
-  extraTools?: boolean;
+  /** Server tools offered this turn; unset offers none. */
+  toolOptions?: ToolListOptions;
+  /** Reasoning level mapped to a thinking budget; `none` or unset leaves thinking off. */
+  reasoningEffort?: string;
+}
+
+/** Thinking budget per reasoning level; unknown levels leave thinking off. */
+export const THINKING_BUDGETS: Readonly<Record<string, number>> = {
+  minimal: 2048,
+  low: 4096,
+  medium: 10000,
+  high: 24000,
+  xhigh: 48000,
+  max: 64000,
+};
+
+export function thinkingBudget(effort: string | undefined): number | null {
+  if (effort === undefined) return null;
+  return THINKING_BUDGETS[effort] ?? null;
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -140,7 +169,7 @@ export function readAnthropicConfig(provider: ProviderConfig): AnthropicClientCo
 
 export function toAnthropicTools(
   allowlist?: readonly string[],
-  options: { subagent?: boolean; extra?: boolean } = {},
+  options: ToolListOptions = {},
 ): unknown[] {
   return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
     name: schema.name,
@@ -162,18 +191,22 @@ function buildBody(
   const system = [request.system?.trim() ?? '', inlineSystem]
     .filter((part) => part.length > 0)
     .join('\n\n');
-  const tools = toAnthropicTools(request.toolAllowlist, {
-    subagent: request.subagentTool === true,
-    extra: request.extraTools === true,
-  });
+  const tools = toAnthropicTools(request.toolAllowlist, request.toolOptions ?? {});
+  const budget = thinkingBudget(request.reasoningEffort);
+  // The API needs max_tokens above the thinking budget and rejects a custom temperature
+  // while thinking is on, so both are adjusted only when a budget applies.
+  const maxTokens = budget === null ? request.max_tokens : Math.max(request.max_tokens, budget + 4096);
   return {
     model: request.model,
-    max_tokens: request.max_tokens,
+    max_tokens: maxTokens,
     messages,
     ...(tools.length > 0 ? { tools } : {}),
     stream: true,
     ...(system.length > 0 ? { system } : {}),
-    ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
+    ...(budget !== null ? { thinking: { type: 'enabled', budget_tokens: budget } } : {}),
+    ...(budget === null && config.temperature !== undefined
+      ? { temperature: config.temperature }
+      : {}),
   };
 }
 
