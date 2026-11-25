@@ -2,9 +2,16 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { glob as fsGlob, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob, relative, resolve } from 'node:path';
-import type { AdapterDeps, PermissionMode, TurnContext } from '@tuffcode/contracts';
+import type {
+  AdapterDeps,
+  ExtraToolName,
+  ExtraToolRunner,
+  PermissionMode,
+  TurnContext,
+} from '@tuffcode/contracts';
 import { SUBAGENT_TOOL_NAME, TOOL_NAMES, isSubagentType, type ToolName } from '@tuffcode/prompt';
 import { applyEol, dominantEol, normalizeEol, resolveWithin, type Eol } from '@tuffcode/shared';
+import { isExtraToolName } from '../extra-tools.js';
 
 const MAX_OUTPUT = 64 * 1024;
 const MAX_READ_LINES = 2000;
@@ -127,11 +134,43 @@ const DESTRUCTIVE_COMMANDS: readonly RegExp[] = [
   /\bshutdown\b/i,
 ];
 
-export function classifyTool(
-  name: ToolName,
+/** Known actions per extra tool; anything else is refused rather than guessed at. */
+const EXTRA_TOOL_ACTIONS: Record<ExtraToolName, readonly string[]> = {
+  mcp: ['list', 'call'],
+  memory: ['search', 'add'],
+  config: ['provider.add', 'provider.model.add', 'mcp.add', 'settings.set'],
+};
+
+/**
+ * Server tools are classified by what they do, not only by mode: a memory search or an
+ * MCP listing changes nothing, so it never needs approval, while the write actions
+ * follow the same ladder as the file tools.
+ */
+export function classifyExtraTool(
+  name: ExtraToolName,
   args: Record<string, unknown>,
   mode: PermissionMode,
 ): PermissionDecision {
+  const action = typeof args.action === 'string' ? args.action : '';
+  if (!EXTRA_TOOL_ACTIONS[name].includes(action)) return 'deny';
+  if (name === 'memory' && action === 'search') return 'allow';
+  if (name === 'mcp' && action === 'list') return 'allow';
+  if (mode === 'read-only') return 'deny';
+  if (mode === 'ask') return 'approve';
+  if (mode === 'accept-edits') {
+    if (name === 'config') return 'allow';
+    if (name === 'memory') return 'allow';
+    return 'approve';
+  }
+  return 'allow';
+}
+
+export function classifyTool(
+  name: ToolName | ExtraToolName,
+  args: Record<string, unknown>,
+  mode: PermissionMode,
+): PermissionDecision {
+  if (isExtraToolName(name)) return classifyExtraTool(name, args, mode);
   if (name === 'read' || name === 'glob' || name === 'grep') return 'allow';
   if (mode === 'read-only') return 'deny';
   if (mode === 'ask') return 'approve';
@@ -530,6 +569,29 @@ async function subagentTool(
   }
 }
 
+/**
+ * Server tools run behind the injected port. The adapter validates only the envelope:
+ * the server owns each tool's own argument rules and returns the text it wants the model
+ * to read.
+ */
+async function extraTool(
+  name: ExtraToolName,
+  args: unknown,
+  ctx: TurnContext,
+  runner: ExtraToolRunner | undefined,
+): Promise<ToolExecResult> {
+  if (runner === undefined) return fail('tool "' + name + '" is not available in this session');
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+    return fail('tool arguments must be a JSON object');
+  }
+  try {
+    const output = await runner(name, args as Record<string, unknown>, { cwd: ctx.cwd });
+    return ok(capOutput(output));
+  } catch (error) {
+    return fail(errorMessage(error));
+  }
+}
+
 export const TOOL_EXECUTORS: Record<ToolName, ToolExecutor> = {
   bash: bashTool,
   read: readTool,
@@ -545,12 +607,14 @@ export async function executeTool(
   ctx: TurnContext,
   state: ToolSessionState,
   deps: AdapterDeps,
+  runner?: ExtraToolRunner,
 ): Promise<ToolExecResult> {
   const parsed =
     typeof args === 'object' && args !== null && !Array.isArray(args)
       ? (args as Record<string, unknown>)
       : {};
   if (name === SUBAGENT_TOOL_NAME) return subagentTool(parsed, ctx, deps);
+  if (isExtraToolName(name)) return extraTool(name, args, ctx, runner);
   if (!(TOOL_NAMES as readonly string[]).includes(name)) {
     return fail(`unknown tool: ${name}`);
   }

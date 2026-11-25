@@ -28,6 +28,8 @@ export interface ChatRequestBody {
   toolAllowlist?: string[];
   /** Offer the `subagent` delegation tool for this turn. */
   subagentTool?: boolean;
+  /** Offer the `mcp`, `memory` and `config` server tools for this turn. */
+  extraTools?: boolean;
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -105,7 +107,7 @@ export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
 
 export function toOpenAITools(
   allowlist?: readonly string[],
-  options: { subagent?: boolean } = {},
+  options: { subagent?: boolean; extra?: boolean } = {},
 ): unknown[] {
   return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
     type: 'function',
@@ -118,7 +120,10 @@ export function toOpenAITools(
 }
 
 function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record<string, unknown> {
-  const tools = toOpenAITools(request.toolAllowlist, { subagent: request.subagentTool === true });
+  const tools = toOpenAITools(request.toolAllowlist, {
+    subagent: request.subagentTool === true,
+    extra: request.extraTools === true,
+  });
   const maxTokens = request.maxTokens ?? config.maxTokens;
   return {
     model: request.model,

@@ -1,6 +1,11 @@
-import { SUBAGENT_TOOL, TOOL_SCHEMAS, type ToolSchema } from '@tuffcode/prompt';
+import {
+  EXTRA_TOOL_SCHEMAS,
+  SUBAGENT_TOOL,
+  TOOL_SCHEMAS,
+  type ToolSchema,
+} from '@tuffcode/prompt';
 
-/** A file tool or the delegation tool; both serialize to the same request shape. */
+/** A file tool, the delegation tool, or a server-owned extra tool. */
 export type HarnessToolSchema =
   | ToolSchema
   | { name: string; description: string; parameters: ToolSchema['parameters'] };
@@ -8,13 +13,16 @@ export type HarnessToolSchema =
 export interface ToolListOptions {
   /** Offer the `subagent` tool. The server sets this when the harness can spawn. */
   subagent?: boolean;
+  /** Offer `mcp`, `memory` and `config`. The server sets this when a runner is injected. */
+  extra?: boolean;
 }
 
 /**
  * The harness tools a turn may offer. An unset allowlist means every file tool, which
  * keeps a context built without settings on the pre-settings behaviour. The subagent
- * tool is separate from the allowlist on purpose: `enabledTools` lists file tools, and
- * delegation must not disappear because the user narrowed that list.
+ * and extra tools are separate from the allowlist on purpose: `enabledTools` lists file
+ * tools, and delegation or server tools must not disappear because the user narrowed
+ * that list.
  */
 export function allowedToolSchemas(
   allowlist?: readonly string[],
@@ -25,6 +33,7 @@ export function allowedToolSchemas(
       ? [...TOOL_SCHEMAS]
       : TOOL_SCHEMAS.filter((schema) => allowlist.includes(schema.name));
   if (options.subagent === true) tools.push(SUBAGENT_TOOL);
+  if (options.extra === true) tools.push(...EXTRA_TOOL_SCHEMAS);
   return tools;
 }
 

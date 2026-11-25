@@ -9,4 +9,5 @@ export {
   type ClaudeModelRow,
 } from './claude/index.js';
 export { createCodexAdapter } from './codex/index.js';
+export type { ExtraToolName, ExtraToolRunner } from './extra-tools.js';
 export { createOpenAIChatAdapter, type OpenAIChatAdapterOverrides } from './openai/index.js';

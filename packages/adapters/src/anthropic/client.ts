@@ -49,6 +49,8 @@ export interface AnthropicRequestBody {
   toolAllowlist?: string[];
   /** Offer the `subagent` delegation tool for this turn. */
   subagentTool?: boolean;
+  /** Offer the `mcp`, `memory` and `config` server tools for this turn. */
+  extraTools?: boolean;
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -138,7 +140,7 @@ export function readAnthropicConfig(provider: ProviderConfig): AnthropicClientCo
 
 export function toAnthropicTools(
   allowlist?: readonly string[],
-  options: { subagent?: boolean } = {},
+  options: { subagent?: boolean; extra?: boolean } = {},
 ): unknown[] {
   return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
     name: schema.name,
@@ -162,6 +164,7 @@ function buildBody(
     .join('\n\n');
   const tools = toAnthropicTools(request.toolAllowlist, {
     subagent: request.subagentTool === true,
+    extra: request.extraTools === true,
   });
   return {
     model: request.model,

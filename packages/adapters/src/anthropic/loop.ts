@@ -11,13 +11,16 @@ import {
   streamAnthropicSse,
 } from './client.js';
 import {
+  classifyExtraTool,
   classifySubagentTool,
   classifyTool,
   executeTool,
+  type PermissionDecision,
   type ToolExecResult,
   type ToolSessionState,
 } from '../openai/tools.js';
 import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
+import { isExtraToolName } from '../extra-tools.js';
 
 /** Mirrors the `maxToolIterations` setting default. */
 export const DEFAULT_MAX_TOOL_ITERATIONS = 40;
@@ -121,6 +124,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             ...(deps.spawnSubagent !== undefined && ctx.permissionMode !== 'read-only'
               ? { subagentTool: true }
               : {}),
+            ...(deps.extraTool !== undefined ? { extraTools: true } : {}),
           },
           signal,
         );
@@ -326,71 +330,47 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           input: args ?? call.json,
         };
 
-        let result: ToolExecResult;
+        let result: ToolExecResult | null = null;
+        let decision: PermissionDecision | null = null;
         if (parseError !== null) {
           result = { output: parseError, isError: true };
         } else if (call.name === SUBAGENT_TOOL_NAME) {
-          const decision = classifySubagentTool(ctx.permissionMode);
-          if (decision === 'deny') {
-            result = {
-              output: 'tool is not allowed in ' + ctx.permissionMode + ' mode',
-              isError: true,
-            };
-          } else if (decision === 'approve') {
-            const approvalId = newId('apr');
-            const pending = options.requestApproval(approvalId);
-            yield {
-              type: 'approval.requested',
-              turnId,
-              approvalId,
-              toolCallId,
-              name: call.name,
-              input: args,
-            };
-            const choice = await pending;
-            if (signal.aborted) {
-              result = { output: '[interrupted]', isError: true };
-            } else if (choice === 'deny') {
-              result = { output: 'denied by user', isError: true };
-            } else {
-              result = await executeTool(call.name, args ?? {}, ctx, state, deps);
-            }
-          } else {
-            result = await executeTool(call.name, args ?? {}, ctx, state, deps);
-          }
+          decision = classifySubagentTool(ctx.permissionMode);
+        } else if (isExtraToolName(call.name)) {
+          decision = classifyExtraTool(call.name, args ?? {}, ctx.permissionMode);
         } else if (!isToolName(call.name)) {
           result = { output: 'unknown tool: ' + call.name, isError: true };
         } else if (isToolDisabled(call.name, ctx.toolAllowlist)) {
           result = { output: 'tool "' + call.name + '" is disabled in settings', isError: true };
         } else {
-          const decision = classifyTool(call.name, args ?? {}, ctx.permissionMode);
-          if (decision === 'deny') {
-            result = {
-              output: 'tool is not allowed in ' + ctx.permissionMode + ' mode',
-              isError: true,
-            };
-          } else if (decision === 'approve') {
-            const approvalId = newId('apr');
-            const pending = options.requestApproval(approvalId);
-            yield {
-              type: 'approval.requested',
-              turnId,
-              approvalId,
-              toolCallId,
-              name: call.name,
-              input: args,
-            };
-            const choice = await pending;
-            if (signal.aborted) {
-              result = { output: '[interrupted]', isError: true };
-            } else if (choice === 'deny') {
-              result = { output: 'denied by user', isError: true };
-            } else {
-              result = await executeTool(call.name, args ?? {}, ctx, state, deps);
-            }
-          } else {
-            result = await executeTool(call.name, args ?? {}, ctx, state, deps);
+          decision = classifyTool(call.name, args ?? {}, ctx.permissionMode);
+        }
+
+        if (decision === 'deny') {
+          result = {
+            output: 'tool is not allowed in ' + ctx.permissionMode + ' mode',
+            isError: true,
+          };
+        } else if (decision === 'approve') {
+          const approvalId = newId('apr');
+          const pending = options.requestApproval(approvalId);
+          yield {
+            type: 'approval.requested',
+            turnId,
+            approvalId,
+            toolCallId,
+            name: call.name,
+            input: args,
+          };
+          const choice = await pending;
+          if (signal.aborted) {
+            result = { output: '[interrupted]', isError: true };
+          } else if (choice === 'deny') {
+            result = { output: 'denied by user', isError: true };
           }
+        }
+        if (result === null) {
+          result = await executeTool(call.name, args ?? {}, ctx, state, deps, deps.extraTool);
         }
 
         yield {
