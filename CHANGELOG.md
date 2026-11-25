@@ -29,8 +29,14 @@ the project uses semantic versioning.
 
 ### MCP and self-configuration
 - Local stdio MCP servers can be added, tested and removed in Settings > MCP.
-- The agent can list and call MCP tools, search and add memory, and change providers, models,
-  MCP servers and allowlisted settings through tools.
+- The built-in harness can list and call MCP tools, search and add memory, and change providers,
+  models, MCP servers and allowlisted settings through tools.
+- Claude subscription threads receive the enabled MCP servers through the Agent SDK. Codex uses
+  its own MCP configuration. The memory and config tools are harness-only.
+
+### Known issues
+- The installer artifact reports `0.0.0` until the release workflow stamps the tag.
+- Codex remains fixture-tested only; its CLI is not installed on this host.
 
 ### Brain and prompts
 - Brain injection has a real kill switch, standing-rule capture, typed edges and preview ids.

@@ -101,7 +101,10 @@ client speaks initialize, tools/list and tools/call with a 10s timeout, a 60s to
 (search, add) and `config` (provider.add, provider.model.add, mcp.add, settings.set with an
 allowlist). They are outside `enabledTools`, classified by permission mode, and reach the server
 through one extra-tool port injected into the adapter dependencies. Tool input is redacted before
-it is persisted or broadcast.
+it is persisted or broadcast. The port exists only in the two harness adapters
+(openai-compatible and anthropic), so the `mcp`, `memory` and `config` tools are harness-only. The
+Claude subscription adapter instead receives the enabled stdio servers through the Agent SDK
+`mcpServers` option, so Claude threads get native MCP tools. Codex keeps its own MCP config.
 
 ## Council
 

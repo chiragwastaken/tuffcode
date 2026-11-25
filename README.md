@@ -33,10 +33,12 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
 - **Brain.** Typed memory entries selected per turn, a kill switch, standing-rule capture, typed
   links, a live prompt preview with injected entry ids, an interactive node graph, and memory
   search and add tools for the agent.
-- **MCP.** Local stdio MCP servers are managed in Settings > MCP and exposed to the agent through
-  one `mcp` tool that lists and calls their tools.
-- **Self-configuration.** The agent can add a provider or model, add an MCP server, and change an
-  allowlisted setting through a `config` tool, with the same validation as the UI.
+- **MCP.** Local stdio MCP servers are managed in Settings > MCP. The built-in harness reaches
+  them through one `mcp` tool, and Claude subscription threads receive the same servers through
+  the Agent SDK. Codex keeps its own MCP configuration.
+- **Self-configuration.** The built-in harness can add a provider or model, add an MCP server, and
+  change an allowlisted setting through a `config` tool, with the same validation as the UI. The
+  memory and config tools are harness-only; subscription CLIs keep their own toolset.
 - **Diff review.** Changed files grouped by directory, real file line numbers, inline review
   comments, checkpoint comparison, and a collapsible file tree.
 - **Timeline.** Reasoning, prose, grouped tool calls with results and diffs, and a final answer,
