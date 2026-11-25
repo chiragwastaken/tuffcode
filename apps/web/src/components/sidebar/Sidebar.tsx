@@ -15,6 +15,7 @@ import { useAddProject } from '../../hooks/use-add-project';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { requestInspectorTab } from '../inspector/panel-requests';
+import { childForThread } from '../subagents/subagent-model';
 import { requestThreadDelete, requestThreadRename } from '../thread/thread-dialogs';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
 import { SidebarList, type SidebarItemActions } from './SidebarList';
@@ -149,9 +150,7 @@ export function Sidebar() {
 
       // Read the live children without subscribing: child frames mutate the map
       // on every token and the sidebar must not re-render for them.
-      const live = Object.values(useAppStore.getState().subagents).find(
-        (child) => child.threadId === thread.id,
-      );
+      const live = childForThread(useAppStore.getState().subagents, thread.id);
       if (live !== undefined) {
         openSubagent(live.childId);
         return;

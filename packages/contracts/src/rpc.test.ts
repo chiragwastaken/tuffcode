@@ -148,6 +148,7 @@ const mcpTool: McpTool = {
 const subagentView: SubagentView = {
   childId: 'child-1',
   threadId: 't1',
+  childThreadId: 't2',
   type: 'explorer',
   model: 'claude-opus-4-5',
   providerId: 'prov-claude',

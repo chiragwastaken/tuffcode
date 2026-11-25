@@ -43,6 +43,7 @@ function child(
   overrides: Partial<SubagentChild> & { childId: string; threadId: string },
 ): SubagentChild {
   return {
+    childThreadId: null,
     type: 'explorer',
     model: 'model-1',
     status: 'running',

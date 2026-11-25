@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SubagentChild } from '../../store/app-store';
 import {
   SUBAGENT_CHIP_LIMIT,
+  childForThread,
   selectActiveSubagent,
   subagentElapsedMs,
   subagentFinishedLabel,
@@ -15,6 +16,7 @@ const T0 = '2026-01-01T00:00:00.000Z';
 function child(overrides: Partial<SubagentChild> & { childId: string }): SubagentChild {
   return {
     threadId: 'thread-1',
+    childThreadId: null,
     type: 'explorer',
     model: 'mock-model',
     status: 'running',
@@ -64,6 +66,30 @@ describe('subagentsOfThread', () => {
       'c1',
       'c3',
     ]);
+  });
+});
+
+describe('childForThread', () => {
+  it('matches a child row thread id against the child thread, not the parent', () => {
+    const running = child({
+      childId: 'c1',
+      threadId: 'thread-1',
+      childThreadId: 'child-thread-1',
+    });
+    const registry = { c1: running };
+
+    expect(childForThread(registry, 'child-thread-1')?.childId).toBe('c1');
+    expect(childForThread(registry, 'thread-1')).toBeUndefined();
+  });
+
+  it('finds the one child per child thread and misses unknown threads', () => {
+    const first = child({ childId: 'c1', childThreadId: 'child-thread-1' });
+    const second = child({ childId: 'c2', childThreadId: 'child-thread-2' });
+    const pending = child({ childId: 'c3', childThreadId: null });
+    const registry = { c1: first, c2: second, c3: pending };
+
+    expect(childForThread(registry, 'child-thread-2')?.childId).toBe('c2');
+    expect(childForThread(registry, 'child-thread-3')).toBeUndefined();
   });
 });
 

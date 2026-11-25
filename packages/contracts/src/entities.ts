@@ -267,6 +267,7 @@ export type SubagentSpec = z.infer<typeof SubagentSpecSchema>;
 export const SubagentViewSchema = z.object({
   childId: IdSchema,
   threadId: IdSchema,
+  childThreadId: IdSchema.nullable(),
   type: SubagentTypeSchema,
   model: z.string(),
   providerId: IdSchema,

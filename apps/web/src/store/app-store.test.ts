@@ -215,11 +215,13 @@ describe('app store subagents', () => {
     const store = createAppStore();
     startChild(store);
     store.getState().subagentFinished({ childId: 'child-1', threadId: 'thread-1', status: 'done' });
+    expect(store.getState().subagents['child-1']?.childThreadId).toBeNull();
 
     store.getState().mergeSubagentViews('thread-1', [
       {
         childId: 'child-1',
         threadId: 'thread-1',
+        childThreadId: 'child-thread-1',
         type: 'explorer',
         model: 'mock-model',
         providerId: 'provider-1',
@@ -233,6 +235,7 @@ describe('app store subagents', () => {
     const child = store.getState().subagents['child-1'];
     expect(child?.status).toBe('done');
     expect(child?.task).toBe('map the project');
+    expect(child?.childThreadId).toBe('child-thread-1');
   });
 
   it('drops list rows from another thread', () => {
@@ -242,6 +245,7 @@ describe('app store subagents', () => {
       {
         childId: 'child-9',
         threadId: 'thread-2',
+        childThreadId: 'child-thread-9',
         type: 'worker',
         model: 'mock-model',
         providerId: 'provider-1',
@@ -289,6 +293,7 @@ describe('mergeSubagentView', () => {
   const view = {
     childId: 'child-1',
     threadId: 'thread-1',
+    childThreadId: 'child-thread-1',
     type: 'reviewer' as const,
     model: 'other-model',
     providerId: 'provider-1',
@@ -303,7 +308,14 @@ describe('mergeSubagentView', () => {
     const child: SubagentChild = mergeSubagentView(undefined, view);
     expect(child.status).toBe('done');
     expect(child.summary).toBe('one blocker');
+    expect(child.childThreadId).toBe('child-thread-1');
     expect(child.finishedAt).toBe('2026-01-01T00:00:09.000Z');
     expect(child.events).toEqual([]);
+  });
+
+  it('keeps a known child thread when a stale row has not seen one yet', () => {
+    const live = mergeSubagentView(undefined, view);
+    const stale = mergeSubagentView(live, { ...view, childThreadId: null });
+    expect(stale.childThreadId).toBe('child-thread-1');
   });
 });

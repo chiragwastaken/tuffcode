@@ -33,6 +33,8 @@ export interface SubagentChild {
   childId: string;
   /** The parent thread that spawned it. */
   threadId: string;
+  /** The child thread it runs in, known only once a list row arrives. */
+  childThreadId: string | null;
   type: SubagentType;
   model: string;
   status: SubagentStatus;
@@ -78,6 +80,7 @@ export function newSubagentChild(input: SubagentStartedInput, now: string): Suba
   return {
     childId: input.childId,
     threadId: input.threadId,
+    childThreadId: null,
     type: input.type,
     model: input.model,
     status: 'running',
@@ -105,6 +108,7 @@ export function mergeSubagentView(
     return {
       childId: view.childId,
       threadId: view.threadId,
+      childThreadId: view.childThreadId,
       type: view.type,
       model: view.model,
       status: view.status,
@@ -120,6 +124,7 @@ export function mergeSubagentView(
   const status = isTerminalSubagentStatus(child.status) ? child.status : view.status;
   return {
     ...child,
+    childThreadId: view.childThreadId ?? child.childThreadId,
     type: view.type,
     model: view.model,
     task: view.task.length > 0 ? view.task : child.task,
