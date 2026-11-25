@@ -203,7 +203,7 @@ describe('brain assembly', () => {
     );
   });
 
-  it('skips retrieval when the brain is disabled but keeps the always block', () => {
+  it('returns an empty slice and zero tokens when the brain is disabled', () => {
     ctx.repos.brain.upsert({ kind: 'rule', scope: 'global', text: 'always run pnpm', appliesTo: 'all' });
     ctx.repos.brain.upsert({ kind: 'memory', scope: 'global', text: 'sharedtoken memory' });
 
@@ -214,8 +214,38 @@ describe('brain assembly', () => {
       now: NOW,
     });
 
-    expect(assembly.slice.retrieved).toEqual([]);
-    expect(assembly.slice.always).toHaveLength(1);
+    expect(assembly.slice).toEqual({ always: [], retrieved: [], tokens: 0 });
+    expect(assembly.injectedIds).toEqual([]);
+    expect(assembly.tokens).toBe(0);
+    expect(assembly.reasons).toEqual({});
+  });
+
+  it('explains every injected id', () => {
+    const rule = ctx.repos.brain.upsert({
+      kind: 'rule',
+      scope: 'global',
+      text: 'always run pnpm',
+      appliesTo: 'all',
+    });
+    const memory = ctx.repos.brain.upsert({
+      kind: 'memory',
+      scope: 'global',
+      text: 'sharedtoken memory',
+    });
+
+    const assembly = assembleBrain(ctx.repos, settings(), {
+      projectId: 'prj_a',
+      mode: 'work',
+      message: 'sharedtoken',
+      now: NOW,
+    });
+
+    expect(Object.keys(assembly.reasons).sort()).toEqual([...assembly.injectedIds].sort());
+    expect(assembly.reasons[rule.id]).toContain('rule');
+    expect(assembly.reasons[memory.id]).toContain('retrieved');
+    for (const id of assembly.injectedIds) {
+      expect(assembly.reasons[id]?.length ?? 0).toBeGreaterThan(0);
+    }
   });
 
   it('renders non-rule entries with tags and leaves rules out', () => {
