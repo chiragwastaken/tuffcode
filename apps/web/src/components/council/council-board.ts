@@ -290,6 +290,26 @@ function anchorBottom(node: BoardNode): BoardPoint {
 }
 
 /**
+ * Report node state. The report only exists once the goal reaches reporting, so
+ * every earlier goal state reads as queued instead of advertising a report that
+ * has not been written. Terminal goals keep their own state, so a failed or
+ * cancelled run never reads as a finished report.
+ */
+export function reportState(goal: Goal | null): GoalState | TaskState {
+  if (goal === null) return 'intake';
+  switch (goal.state) {
+    case 'reporting':
+      return 'reporting';
+    case 'done':
+    case 'failed':
+    case 'cancelled':
+      return goal.state;
+    default:
+      return 'queued';
+  }
+}
+
+/**
  * Lays the board out from one `council.status` snapshot: the planner on top, task
  * columns by dependency depth, a reviewer chip under every task, and the report in
  * the last column. A column with more than `COLUMN_ROW_LIMIT` tasks wraps the rest
@@ -415,7 +435,7 @@ export function layoutCouncilBoard(
     height: REPORT_HEIGHT,
     taskId: null,
     title: 'Report',
-    state: goal?.state ?? 'intake',
+    state: reportState(goal),
     model: null,
     verdict: null,
     round: 0,

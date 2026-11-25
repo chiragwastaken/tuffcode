@@ -160,6 +160,24 @@ describe('layoutCouncilBoard', () => {
     );
   });
 
+  it('queues the report until the goal reaches reporting', () => {
+    const running = layoutCouncilBoard(goal('running'), [task('A'), task('B')], []);
+    expect(nodeById(running.nodes, 'report').state).toBe('queued');
+
+    const reporting = layoutCouncilBoard(goal('reporting'), [task('A'), task('B')], []);
+    expect(nodeById(reporting.nodes, 'report').state).toBe('reporting');
+
+    const done = layoutCouncilBoard(goal('done'), [task('A'), task('B')], []);
+    expect(nodeById(done.nodes, 'report').state).toBe('done');
+  });
+
+  it('keeps a terminal goal state on the report node', () => {
+    for (const state of ['failed', 'cancelled'] as const) {
+      const layout = layoutCouncilBoard(goal(state), [task('A')], []);
+      expect(nodeById(layout.nodes, 'report').state).toBe(state);
+    }
+  });
+
   it('lays out the empty board with planner, report and one edge', () => {
     const layout = boardLayoutFromStatus(null);
     expect(layout.nodes.map((node) => node.kind)).toEqual(['planner', 'report']);

@@ -63,6 +63,12 @@ describe('base system prompt', () => {
     expect(BASE_SYSTEM_PROMPT).toMatch(/^[\x20-\x7e\n]*$/);
   });
 
+  it('scopes reviewer independence to delegated review', () => {
+    expect(BASE_SYSTEM_PROMPT).toContain('use a reviewer on a different model family');
+    expect(BASE_SYSTEM_PROMPT).toContain('Verifying your own change in the same turn is normal');
+    expect(BASE_SYSTEM_PROMPT).toContain('the independence rule applies to delegated review');
+  });
+
   it('covers the required rules', () => {
     for (const phrase of [
       'Tuffcode',
