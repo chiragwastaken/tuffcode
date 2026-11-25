@@ -1,13 +1,12 @@
 import { cn, type MarkdownTheme } from '@tuffcode/ui';
 import { Badge, IconButton, StatusDot, TabsList, TabsPanel, TabsRoot, TabsTab } from '@tuffcode/ui';
 import { CircleStop, PanelRightClose } from 'lucide-react';
-import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { useEffect, useState, type CSSProperties, type RefObject } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { formatDuration } from '../thread/turn-blocks';
-import { useConnectorGeometry } from './connector';
 import {
   SUBAGENT_PANE_WIDTH_PERCENT,
   SUBAGENT_STATUS_LABEL,
@@ -24,7 +23,7 @@ import { useSubagentClock } from './use-subagents';
 
 export interface SubagentPaneProps {
   threadId: string;
-  /** The row that holds the cards and this pane; the connector is measured in it. */
+  /** The thread row that hosts this pane; split-pane hosts pass the same ref. */
   stageRef: RefObject<HTMLElement | null>;
   theme: MarkdownTheme;
   onSelect(childId: string): void;
@@ -34,12 +33,12 @@ export interface SubagentPaneProps {
 }
 
 /**
- * Right-hand child pane: one tab per child, the selected child's timeline, and a
- * 1px connector back to that child's card in the parent timeline.
+ * Right-hand child pane: one tab per child and the selected child's timeline. The
+ * header names the child type, model, status and elapsed time, never its task; the
+ * task itself sits behind a collapsed disclosure in the timeline.
  */
 export function SubagentPane({
   threadId,
-  stageRef,
   theme,
   onSelect,
   onClose,
@@ -53,16 +52,7 @@ export function SubagentPane({
   const active = selectActiveSubagent(subagents, activeChildId);
   const now = useSubagentClock(subagents);
 
-  const paneRef = useRef<HTMLDivElement>(null);
-  const headerRef = useRef<HTMLDivElement>(null);
   const [cancelling, setCancelling] = useState(false);
-
-  const geometry = useConnectorGeometry({
-    rootRef: stageRef,
-    originRef: paneRef,
-    headerRef,
-    revision: `${active?.childId ?? 'none'}:${subagents.length}`,
-  });
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -91,7 +81,6 @@ export function SubagentPane({
 
   return (
     <div
-      ref={paneRef}
       data-testid="subagent-pane"
       data-slot="right-panel"
       aria-label="Subagent"
@@ -110,26 +99,6 @@ export function SubagentPane({
             ),
       )}
     >
-      {geometry ? (
-        <svg
-          aria-hidden="true"
-          data-testid="subagent-connector"
-          data-connector-d={geometry.d}
-          width="1"
-          height="1"
-          className="pointer-events-none absolute top-0 left-0 z-10 overflow-visible"
-        >
-          <path
-            d={geometry.d}
-            fill="none"
-            stroke="var(--primary)"
-            strokeOpacity="0.55"
-            strokeWidth="1"
-          />
-          <circle cx={geometry.x1} cy={geometry.y1} r="2.5" fill="var(--primary)" />
-        </svg>
-      ) : null}
-
       <TabsRoot
         value={active.childId}
         onValueChange={(value) => {
@@ -138,7 +107,6 @@ export function SubagentPane({
         className="flex min-h-0 flex-1 flex-col"
       >
         <div
-          ref={headerRef}
           data-testid="subagent-pane-header"
           className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-3"
         >

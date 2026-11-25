@@ -43,9 +43,36 @@ const PADDING = 24;
 /** The planner row sits this far above the first task row. */
 const PLANNER_GAP = ROW_GAP * 2;
 
+/**
+ * A column stacks this many rows before the rest wrap into a second band, so a
+ * plan with many independent tasks still reads as a column of columns instead of
+ * one endless strip. The wrap gap keeps the two bands visually apart.
+ */
+export const COLUMN_ROW_LIMIT = 5;
+export const COLUMN_WRAP_GAP = 24;
+
 const COLUMN_STEP = TASK_WIDTH + COLUMN_GAP;
 const ROW_STEP = TASK_HEIGHT + REVIEWER_GAP + REVIEWER_HEIGHT + ROW_GAP;
 const TASK_AREA_TOP = PADDING + PLANNER_HEIGHT + PLANNER_GAP;
+
+/** Height of `rows` stacked rows, reviewer chips included, without a trailing gap. */
+function bandHeight(rows: number): number {
+  return rows === 0 ? 0 : rows * ROW_STEP - ROW_GAP;
+}
+
+/** Total height of a column, with the wrap gap between its two bands. */
+function columnHeight(rows: number): number {
+  if (rows <= COLUMN_ROW_LIMIT) return bandHeight(rows);
+  return bandHeight(COLUMN_ROW_LIMIT) + COLUMN_WRAP_GAP + bandHeight(rows - COLUMN_ROW_LIMIT);
+}
+
+/** Distance from the top of the task area to the row at `row` in a column. */
+function rowOffset(row: number): number {
+  if (row < COLUMN_ROW_LIMIT) return row * ROW_STEP;
+  return (
+    bandHeight(COLUMN_ROW_LIMIT) + COLUMN_WRAP_GAP + (row - COLUMN_ROW_LIMIT) * ROW_STEP
+  );
+}
 
 export const MIN_BOARD_ZOOM = 0.35;
 export const MAX_BOARD_ZOOM = 2;
@@ -164,6 +191,66 @@ export function latestReviews(reviews: readonly Review[]): Map<string, Review> {
   return latest;
 }
 
+/** The legend's buckets: every task state lands in exactly one of them. */
+const QUEUED_TASK_STATES: Partial<Record<TaskState, true>> = {
+  queued: true,
+  provisioning: true,
+};
+
+const RUNNING_TASK_STATES: Partial<Record<TaskState, true>> = {
+  running: true,
+  'pr-open': true,
+  reviewing: true,
+  'changes-requested': true,
+};
+
+const PASSED_TASK_STATES: Partial<Record<TaskState, true>> = {
+  passed: true,
+  merged: true,
+};
+
+const FAILED_TASK_STATES: Partial<Record<TaskState, true>> = {
+  failed: true,
+  cancelled: true,
+};
+
+const BLOCKED_TASK_STATES: Partial<Record<TaskState, true>> = {
+  blocked: true,
+  'awaiting-captain': true,
+};
+
+export interface CouncilBoardCounts {
+  planner: number;
+  queued: number;
+  running: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+}
+
+function countStates(tasks: readonly Task[], states: Partial<Record<TaskState, true>>): number {
+  return tasks.filter((task) => states[task.state] === true).length;
+}
+
+/**
+ * The legend row's numbers for one snapshot. The buckets partition the plan, so
+ * queued, running, passed, failed and blocked add up to the task count; the planner
+ * is one node once a goal exists.
+ */
+export function councilBoardCounts(
+  goal: Goal | null,
+  tasks: readonly Task[],
+): CouncilBoardCounts {
+  return {
+    planner: goal === null ? 0 : 1,
+    queued: countStates(tasks, QUEUED_TASK_STATES),
+    running: countStates(tasks, RUNNING_TASK_STATES),
+    passed: countStates(tasks, PASSED_TASK_STATES),
+    failed: countStates(tasks, FAILED_TASK_STATES),
+    blocked: countStates(tasks, BLOCKED_TASK_STATES),
+  };
+}
+
 function compareTasks(left: Task, right: Task): number {
   const byTitle = left.title.toLowerCase().localeCompare(right.title.toLowerCase());
   if (byTitle !== 0) return byTitle;
@@ -205,7 +292,9 @@ function anchorBottom(node: BoardNode): BoardPoint {
 /**
  * Lays the board out from one `council.status` snapshot: the planner on top, task
  * columns by dependency depth, a reviewer chip under every task, and the report in
- * the last column.
+ * the last column. A column with more than `COLUMN_ROW_LIMIT` tasks wraps the rest
+ * into a second band below it, so a wide plan stays readable instead of running off
+ * one edge of the surface.
  */
 export function layoutCouncilBoard(
   goal: Goal | null,
@@ -231,8 +320,10 @@ export function layoutCouncilBoard(
   }
   for (const bucket of byColumn.values()) bucket.sort(compareTasks);
 
-  const maxRows = Math.max(1, ...[...byColumn.values()].map((bucket) => bucket.length));
-  const taskAreaHeight = maxRows * ROW_STEP - ROW_GAP;
+  const taskAreaHeight = Math.max(
+    0,
+    ...[...byColumn.values()].map((bucket) => columnHeight(bucket.length)),
+  );
   const height = TASK_AREA_TOP + taskAreaHeight + PADDING;
 
   const planner: BoardNode = {
@@ -261,7 +352,7 @@ export function layoutCouncilBoard(
     const bucket = byColumn.get(column) ?? [];
     bucket.forEach((task, row) => {
       const x = PADDING + column * COLUMN_STEP;
-      const y = TASK_AREA_TOP + row * ROW_STEP;
+      const y = TASK_AREA_TOP + rowOffset(row);
       const taskNode: BoardNode = {
         id: `task:${task.id}`,
         kind: 'task',

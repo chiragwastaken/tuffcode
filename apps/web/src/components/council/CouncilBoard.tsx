@@ -25,9 +25,11 @@ import {
   TASK_STATE_LABEL,
 } from '../inspector/council-model';
 import {
+  COUNCIL_TONE_COLOR,
   MAX_BOARD_ZOOM,
   MIN_BOARD_ZOOM,
   clampZoom,
+  councilBoardCounts,
   fitViewport,
   goalStateColor,
   layoutCouncilBoard,
@@ -37,6 +39,7 @@ import {
   taskStateColor,
   type BoardNode,
   type BoardViewport,
+  type CouncilBoardCounts,
 } from './council-board';
 
 export interface CouncilBoardProps {
@@ -61,6 +64,16 @@ const NODE_ICON = {
 } as const;
 
 const ZOOM_STEP = 1.25;
+
+/** The legend reads left to right in plan order: the planner, then task states. */
+const LEGEND_ENTRIES: readonly { key: keyof CouncilBoardCounts; label: string; color: string }[] = [
+  { key: 'planner', label: 'Planner', color: COUNCIL_TONE_COLOR.info },
+  { key: 'queued', label: 'Queued', color: COUNCIL_TONE_COLOR.neutral },
+  { key: 'running', label: 'Running', color: COUNCIL_TONE_COLOR.primary },
+  { key: 'passed', label: 'Passed', color: COUNCIL_TONE_COLOR.success },
+  { key: 'failed', label: 'Failed', color: COUNCIL_TONE_COLOR.error },
+  { key: 'blocked', label: 'Blocked', color: COUNCIL_TONE_COLOR.warning },
+];
 
 function nodeStateLabel(node: BoardNode): string {
   if (node.kind === 'planner' || node.kind === 'report') {
@@ -117,17 +130,18 @@ export function CouncilBoard({
   );
 
   const activeId = hoveredId ?? selectedNodeId;
+  const legend = councilBoardCounts(status?.goal ?? null, status?.tasks ?? []);
 
   const fit = useCallback(() => {
     if (size.width === 0 || size.height === 0) return;
     setViewport(fitViewport({ width: layout.width, height: layout.height }, size));
   }, [layout.width, layout.height, size]);
 
-  // A new goal, or a plan that grew, reframes itself. A user's zoom survives while
-  // the board's content keeps the same size.
+  // A new goal, a plan that grew, or a column that wrapped reframes the board. A
+  // user's zoom survives while the plan keeps the same shape and the surface size.
   useEffect(() => {
     fit();
-  }, [fit]);
+  }, [fit, layout.nodes.length]);
 
   const zoomAt = useCallback((factor: number, pointX: number, pointY: number) => {
     setViewport((current) => {
@@ -455,9 +469,29 @@ export function CouncilBoard({
             </Button>
           </div>
 
-          <p className="pointer-events-none absolute bottom-2 left-2 text-2xs tabular-nums text-muted-foreground">
-            {layout.nodes.length} nodes · {layout.edges.length} edges
-          </p>
+          <div
+            data-testid="council-board-legend"
+            className="pointer-events-none absolute bottom-1.5 left-1.5 flex max-w-[calc(100%-9rem)] flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-muted-foreground"
+          >
+            {LEGEND_ENTRIES.map((entry) => (
+              <span
+                key={entry.key}
+                data-legend={entry.key}
+                className="flex items-center gap-1 whitespace-nowrap"
+              >
+                <span
+                  aria-hidden="true"
+                  className="size-1.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: entry.color }}
+                />
+                <span>{entry.label}</span>
+                <span className="tabular-nums text-foreground">{legend[entry.key]}</span>
+              </span>
+            ))}
+            <span className="whitespace-nowrap tabular-nums text-muted-foreground/60">
+              {layout.nodes.length} nodes · {layout.edges.length} edges
+            </span>
+          </div>
         </>
       )}
     </div>
