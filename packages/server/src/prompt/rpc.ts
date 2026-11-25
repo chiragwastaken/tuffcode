@@ -20,13 +20,18 @@ export function createPromptHandlers(deps: PromptHandlerDeps): RpcHandlers {
     const thread = getThread(deps.repos, threadId);
     const project = deps.repos.projects.get(thread.projectId);
     if (project === undefined) throw notFound('project not found');
-    const { assembly } = planPrompt(deps.repos, {
+    const { assembly, brain } = planPrompt(deps.repos, {
       thread,
       project,
       message,
       settings: deps.repos.settings.get(),
     });
-    return { sections: assembly.sections, total: assembly.total };
+    return {
+      sections: assembly.sections,
+      total: assembly.total,
+      injectedIds: brain.injectedIds,
+      injectionReasons: brain.reasons,
+    };
   });
   return handlers;
 }

@@ -480,6 +480,8 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
         { name: 'user', text: 'how do I run tests', tokens: 8 },
       ],
       total: 660,
+      injectedIds: ['b1'],
+      injectionReasons: { b1: 'standing rule for every turn' },
     },
   },
   'brain.list': {
@@ -762,6 +764,14 @@ describe('rpc methods', () => {
       true,
     );
     expect(
+      methods['prompt.preview'].result.safeParse({
+        sections: [],
+        total: 0,
+        injectedIds: ['b1', 'b2'],
+        injectionReasons: { b1: 'standing rule for every turn' },
+      }).success,
+    ).toBe(true);
+    expect(
       methods['subagents.spawn'].params.safeParse({
         threadId: 't1',
         spec: { type: 'notetaker', task: 'Distill the thread' },
@@ -998,6 +1008,12 @@ describe('rpc methods', () => {
         { sections: [{ name: 'base', text: 'x', tokens: -1 }], total: 0 },
       ],
       ['prompt.preview', 'result', { sections: [], total: 1.5 }],
+      ['prompt.preview', 'result', { sections: [], total: 0, injectedIds: [''] }],
+      [
+        'prompt.preview',
+        'result',
+        { sections: [], total: 0, injectionReasons: { b1: 2 } },
+      ],
       ['subagents.spawn', 'params', { threadId: 't1', spec: { type: 'janitor', task: 'x' } }],
       ['subagents.spawn', 'params', { threadId: 't1', spec: { type: 'worker', task: '' } }],
       [

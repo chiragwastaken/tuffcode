@@ -15,6 +15,7 @@ const IMPLEMENTED = [
   'app.health',
   'brain.delete',
   'brain.graph',
+  'brain.link',
   'brain.list',
   'brain.preview',
   'brain.upsert',

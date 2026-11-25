@@ -4,6 +4,7 @@ import { serverJsonPath } from '@tuffcode/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeDb, migrate, openDb } from './db/index.js';
 import { createRepos } from './db/repos/index.js';
+import { dispatch } from './rpc.js';
 import { startServer, type RunningServer } from './server.js';
 import type { SecretPort } from './secrets/bridge.js';
 import { createTempEnv, type TempEnv } from './test-support.js';
@@ -140,6 +141,19 @@ describe('server bootstrap', () => {
     for (const method of ['council.start', 'council.cancel', 'council.status']) {
       expect(running.handlers.has(method)).toBe(true);
     }
+  });
+
+  it('exposes the MCP service and answers mcp.list with no servers', async () => {
+    env = createTempEnv();
+    running = await startServer({
+      dbFile: join(env.root, 'server.db'),
+      writeServerJson: false,
+    });
+
+    expect(running.mcp.list()).toEqual([]);
+    await expect(
+      dispatch(running.handlers, { id: 'mcp-list', method: 'mcp.list', params: {} }),
+    ).resolves.toEqual({ id: 'mcp-list', ok: true, result: [] });
   });
 
   it('wires the secret bridge and the runner from a parent port', async () => {
