@@ -15,11 +15,12 @@ import { SaveBar } from '../../components/settings/save-bar';
 import { SettingsRow } from '../../components/settings/settings-row';
 import { SettingsSectionHeader } from '../../components/settings/settings-section-header';
 import {
-  packagedUpdateCheck,
-  type UpdateCheckResult,
+  checkForUpdatesNow,
+  describeUpdateOutcome,
 } from '../../components/settings/updates-check';
 import { useSettingsDraft } from '../../components/settings/use-settings-draft';
 import { useAppStore } from '../../store/app-store';
+import type { UpdateCheckOutcome } from '../../types';
 
 const KEYS = ['updateChannel', 'checkUpdatesOnStart'] as const;
 
@@ -37,7 +38,8 @@ function formatCheckedAt(iso: string): string {
 export function UpdatesSection() {
   const version = useAppStore((state) => state.bootstrap?.version);
   const { draft, dirty, saving, error, update, reset, submit } = useSettingsDraft(KEYS);
-  const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [result, setResult] = useState<UpdateCheckOutcome | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const channel: UpdateChannel = draft?.updateChannel ?? 'stable';
 
@@ -46,11 +48,20 @@ export function UpdatesSection() {
     void submit();
   }
 
+  async function handleCheck(): Promise<void> {
+    setChecking(true);
+    try {
+      setResult(await checkForUpdatesNow({ bridge: window.tuffcode }));
+    } finally {
+      setChecking(false);
+    }
+  }
+
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
       <SettingsSectionHeader
         title="Updates"
-        description="Which release channel this install follows and whether it checks at launch. Update checks never download in the background."
+        description="Which release channel this install follows and whether it checks at launch."
       />
 
       <Card>
@@ -108,7 +119,8 @@ export function UpdatesSection() {
         <CardHeader>
           <CardTitle>Check now</CardTitle>
           <CardDescription>
-            A check reports the packaged result for this build; it does not install anything.
+            Packaged builds check on launch, download in the background, and ask you to restart
+            when the update is ready.
           </CardDescription>
         </CardHeader>
 
@@ -118,12 +130,11 @@ export function UpdatesSection() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() =>
-                setResult(packagedUpdateCheck({ version: version ?? 'unknown', channel }))
-              }
+              disabled={checking}
+              onClick={() => void handleCheck()}
             >
-              <RefreshCw strokeWidth={1.75} />
-              Check for updates
+              <RefreshCw strokeWidth={1.75} className={checking ? 'animate-spin' : undefined} />
+              {checking ? 'Checking...' : 'Check for updates'}
             </Button>
             <a
               href={RELEASE_NOTES_URL}
@@ -138,7 +149,7 @@ export function UpdatesSection() {
 
           {result ? (
             <p role="status" className="text-xs leading-5 text-muted-foreground">
-              Checked at {formatCheckedAt(result.checkedAt)}: {result.detail}
+              Checked at {formatCheckedAt(result.checkedAt)}: {describeUpdateOutcome(result)}
             </p>
           ) : null}
         </div>
