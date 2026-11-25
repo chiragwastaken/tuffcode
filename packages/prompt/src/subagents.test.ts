@@ -8,17 +8,35 @@ import {
 } from './subagents';
 
 describe('subagent prompts', () => {
-  it('has one compact prompt per type', () => {
+  it('has one expanded prompt per type', () => {
     for (const type of SUBAGENT_TYPES) {
       const prompt = SUBAGENT_PROMPTS[type];
-      expect(prompt.length).toBeGreaterThan(200);
-      expect(prompt.length).toBeLessThan(4000);
+      expect(prompt.length).toBeGreaterThan(600);
+      expect(prompt.length).toBeLessThan(6000);
     }
     expect(SUBAGENT_PROMPTS.explorer).toContain('file:line');
     expect(SUBAGENT_PROMPTS.reviewer).toContain('VERDICT:');
     expect(SUBAGENT_PROMPTS.notetaker).toContain('"facts"');
     expect(SUBAGENT_PROMPTS.worker).toContain('worktree');
     expect(SUBAGENT_PROMPTS.planner).toContain('"tasks"');
+  });
+
+  it('gives every prompt an operating loop, an evidence contract, and a failure contract', () => {
+    for (const type of SUBAGENT_TYPES) {
+      const prompt = SUBAGENT_PROMPTS[type];
+      expect(prompt, type).toContain('Operating loop');
+      expect(prompt, type).toContain('Evidence');
+      expect(prompt, type).toContain('Blocker');
+      expect(prompt, type).toContain('file:line');
+      expect(prompt, type).toMatch(/stop and report|Stop and report/);
+    }
+  });
+
+  it('keeps the explorer read-only and the reviewer non-editing', () => {
+    expect(SUBAGENT_PROMPTS.explorer).toContain('never edit files');
+    expect(SUBAGENT_PROMPTS.explorer).toContain('never run a command that writes to disk');
+    expect(SUBAGENT_PROMPTS.reviewer).toContain('do not edit files');
+    expect(SUBAGENT_PROMPTS.reviewer).toContain('nine points');
   });
 
   it('puts the role prompt before the task and a bounded context block', () => {

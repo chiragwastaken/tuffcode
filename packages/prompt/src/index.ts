@@ -1,6 +1,15 @@
 export { BASE_SYSTEM_PROMPT } from './base';
 export { TOOL_NAMES, TOOL_SCHEMAS } from './tools';
+export {
+  CONFIG_TOOL,
+  EXTRA_TOOL_NAMES,
+  EXTRA_TOOL_SCHEMAS,
+  MCP_TOOL,
+  MEMORY_TOOL,
+} from './tools';
 export type {
+  ExtraToolName,
+  ExtraToolSchema,
   ToolName,
   ToolParameterSchema,
   ToolParameterType,
