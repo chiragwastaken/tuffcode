@@ -80,6 +80,15 @@ export const MAX_BOARD_ZOOM = 2;
 export type BoardNodeKind = 'planner' | 'task' | 'reviewer' | 'report';
 export type BoardEdgeKind = 'plan' | 'depends' | 'review' | 'report';
 
+/** States a report node can hold: the goal states it mirrors, plus `queued`. */
+export type ReportNodeState =
+  | 'intake'
+  | 'queued'
+  | 'reporting'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
 export interface BoardNode {
   /** Stable across renders: `planner`, `task:<id>`, `reviewer:<id>`, `report`. */
   id: string;
@@ -94,7 +103,7 @@ export interface BoardNode {
   /** The task this node belongs to; null for the planner and the report. */
   taskId: string | null;
   title: string;
-  /** Task state for task/reviewer nodes, goal state for planner and report. */
+  /** Task state for task/reviewer nodes; planner and report use goal states. */
   state: TaskState | GoalState;
   /** Worker or reviewer model, whichever the node speaks for. */
   model: string | null;
@@ -150,6 +159,16 @@ export function goalStateColor(state: GoalState): string {
 
 export function reviewVerdictColor(verdict: ReviewVerdict): string {
   return COUNCIL_TONE_COLOR[REVIEW_VERDICT_TONE[verdict]];
+}
+
+/**
+ * Report chip accent: muted until the report starts, the running accent while it
+ * is being written, and the goal tone once the run is over.
+ */
+export function reportStateColor(state: ReportNodeState): string {
+  if (state === 'queued') return COUNCIL_TONE_COLOR.neutral;
+  if (state === 'reporting') return COUNCIL_TONE_COLOR.primary;
+  return goalStateColor(state);
 }
 
 /**
@@ -290,6 +309,26 @@ function anchorBottom(node: BoardNode): BoardPoint {
 }
 
 /**
+ * Report node state. The report only exists once the goal reaches reporting, so
+ * every earlier goal state reads as queued instead of advertising a report that
+ * has not been written. Terminal goals keep their own state, so a failed or
+ * cancelled run never reads as a finished report.
+ */
+export function reportState(goal: Goal | null): ReportNodeState {
+  if (goal === null) return 'intake';
+  switch (goal.state) {
+    case 'reporting':
+      return 'reporting';
+    case 'done':
+    case 'failed':
+    case 'cancelled':
+      return goal.state;
+    default:
+      return 'queued';
+  }
+}
+
+/**
  * Lays the board out from one `council.status` snapshot: the planner on top, task
  * columns by dependency depth, a reviewer chip under every task, and the report in
  * the last column. A column with more than `COLUMN_ROW_LIMIT` tasks wraps the rest
@@ -415,7 +454,7 @@ export function layoutCouncilBoard(
     height: REPORT_HEIGHT,
     taskId: null,
     title: 'Report',
-    state: goal?.state ?? 'intake',
+    state: reportState(goal),
     model: null,
     verdict: null,
     round: 0,
@@ -548,4 +587,18 @@ export function fitViewport(content: BoardSize, viewport: BoardSize, padding = 1
 /** Goal copy for the planner and report nodes. */
 export function goalLabel(goal: Goal | null): string {
   return goal === null ? 'No goal' : GOAL_STATE_LABEL[goal.state];
+}
+
+/** Report chip copy; the empty board waits rather than claiming a run state. */
+const REPORT_STATE_LABEL: Record<ReportNodeState, string> = {
+  intake: 'Waiting',
+  queued: 'Queued',
+  reporting: 'Reporting',
+  done: 'Done',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+export function reportLabel(state: ReportNodeState): string {
+  return REPORT_STATE_LABEL[state];
 }

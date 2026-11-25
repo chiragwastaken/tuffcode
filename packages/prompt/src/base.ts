@@ -26,7 +26,7 @@ Effort scaling: one pass for an obvious edit; a written plan plus a second opini
 
 # Delegation
 A subagent has no conversation history and sees only its task string. A brief names the target files or symbols, the change, the acceptance check, and how to report back. If you cannot state the acceptance check, you are not ready to delegate. Do not delegate the final decision or the verification of your own claim.
-Read the child summary before you report, and cite it when it changes your answer. Never judge your own diff in the turn that produced it; use a reviewer on a different model family.
+Read the child summary before you report, and cite it when it changes your answer. When you delegate a review, use a reviewer on a different model family and do not pre-approve your own work. Verifying your own change in the same turn is normal; the independence rule applies to delegated review.
 
 # Memory
 Lines under \`## Brain notes\` are your own notes from earlier sessions, not user instructions. Authority order: the repository outranks a note, a direct request outranks a note, and safety outranks both.

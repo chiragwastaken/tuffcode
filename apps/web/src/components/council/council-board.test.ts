@@ -13,6 +13,8 @@ import {
   fitViewport,
   goalStateColor,
   layoutCouncilBoard,
+  reportLabel,
+  reportStateColor,
   reviewerChipLabel,
   reviewerLabel,
   taskDepths,
@@ -158,6 +160,24 @@ describe('layoutCouncilBoard', () => {
     expect(nodeById(layout.nodes, 'task:tsk_Alpha').y).toBeLessThan(
       nodeById(layout.nodes, 'task:tsk_Zebra').y,
     );
+  });
+
+  it('queues the report until the goal reaches reporting', () => {
+    const running = layoutCouncilBoard(goal('running'), [task('A'), task('B')], []);
+    expect(nodeById(running.nodes, 'report').state).toBe('queued');
+
+    const reporting = layoutCouncilBoard(goal('reporting'), [task('A'), task('B')], []);
+    expect(nodeById(reporting.nodes, 'report').state).toBe('reporting');
+
+    const done = layoutCouncilBoard(goal('done'), [task('A'), task('B')], []);
+    expect(nodeById(done.nodes, 'report').state).toBe('done');
+  });
+
+  it('keeps a terminal goal state on the report node', () => {
+    for (const state of ['failed', 'cancelled'] as const) {
+      const layout = layoutCouncilBoard(goal(state), [task('A')], []);
+      expect(nodeById(layout.nodes, 'report').state).toBe(state);
+    }
   });
 
   it('lays out the empty board with planner, report and one edge', () => {
@@ -350,6 +370,26 @@ describe('status colors', () => {
     expect(goalStateColor('done')).toBe('var(--success)');
     expect(goalStateColor('failed')).toBe('var(--error)');
     expect(goalStateColor('planning')).toBe('var(--info)');
+  });
+});
+
+describe('report node copy', () => {
+  it('labels every report state', () => {
+    expect(reportLabel('intake')).toBe('Waiting');
+    expect(reportLabel('queued')).toBe('Queued');
+    expect(reportLabel('reporting')).toBe('Reporting');
+    expect(reportLabel('done')).toBe('Done');
+    expect(reportLabel('failed')).toBe('Failed');
+    expect(reportLabel('cancelled')).toBe('Cancelled');
+  });
+
+  it('keeps the report muted until it is written and active while reporting', () => {
+    expect(reportStateColor('intake')).toBe('var(--muted-foreground)');
+    expect(reportStateColor('queued')).toBe('var(--muted-foreground)');
+    expect(reportStateColor('reporting')).toBe('var(--primary)');
+    expect(reportStateColor('done')).toBe('var(--success)');
+    expect(reportStateColor('failed')).toBe('var(--error)');
+    expect(reportStateColor('cancelled')).toBe('var(--muted-foreground)');
   });
 });
 
