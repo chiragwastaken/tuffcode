@@ -22,6 +22,29 @@ export const MOCK_TIMELINE_FILE_CONTENT = 'alpha\nbeta';
 export const MOCK_SUBAGENT_TASK = 'map the project structure';
 export const MOCK_SUBAGENT_FINAL = 'Spawned an explorer to map the project.';
 export const MOCK_SUBAGENT_TWO_TASK = 'review the project';
+/** The planner answer: two tasks, disjoint files, one dependency edge. */
+export const MOCK_COUNCIL_PLAN = {
+  tasks: [
+    {
+      title: 'Document the answer',
+      files: ['docs/answer.md'],
+      dependsOn: [],
+      critical: false,
+      brief: 'Write docs/answer.md for the answer constant. Verify with node -e "console.log(1)".',
+    },
+    {
+      title: 'Export the answer',
+      files: ['src/index.ts'],
+      dependsOn: ['Document the answer'],
+      critical: false,
+      brief: 'Re-export the answer from src/index.ts. Verify with node -e "console.log(1)".',
+    },
+  ],
+  question: null,
+};
+
+/** First line of the planner prompt; no worker or reviewer prompt carries it. */
+const PLANNER_MARKER = 'You are the planner for a council of coding agents';
 
 const LF = String.fromCharCode(10);
 const DONE = String.fromCharCode(91, 68, 79, 78, 69, 93);
@@ -212,6 +235,12 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
 
   const messages = messagesOf(body);
   const prompt = lastRole(messages, 'user');
+  // Council mode asks its planner for one JSON object; the plan is the whole answer.
+  if (prompt.includes(PLANNER_MARKER)) {
+    await streamText(response, JSON.stringify(MOCK_COUNCIL_PLAN));
+    response.end();
+    return;
+  }
   const last = messages.at(-1);
   if (last?.role === 'tool') {
     const output = contentOf(last);
