@@ -662,9 +662,11 @@ export function ProviderDialog({ open, onOpenChange, provider }: ProviderDialogP
                       detection={detection}
                       serverError={serverError}
                       detecting={detecting}
+                      advancedOpen={advancedOpen}
                       onUpdate={update}
                       onCustomize={handleCustomize}
                       onDetect={() => void handleDetect()}
+                      onToggleAdvanced={() => setAdvancedOpen((previous) => !previous)}
                     />
                   )}
                 </div>
