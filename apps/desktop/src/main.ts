@@ -5,11 +5,13 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOption
 import { dbPath, serverJsonPath, tuffcodeHome } from '@tuffcode/shared';
 import {
   BOOTSTRAP_CHANNEL,
+  CHECK_UPDATES_CHANNEL,
   PICK_FOLDER_CHANNEL,
   SET_THEME_CHANNEL,
   attachSecretBridge,
   isTheme,
   type BootstrapInfo,
+  type UpdateCheckOutcome,
 } from './bridge';
 import { createMainLogger } from './logger';
 import { createApplicationMenu } from './menu';
@@ -29,7 +31,7 @@ import {
   windowChromeOptions,
   type ResolvedTheme,
 } from './theme';
-import { setupUpdater } from './updater';
+import { checkNow, setupUpdater } from './updater';
 import { resolveUserDataPath } from './user-data';
 
 const currentDir = fileURLToPath(new URL('.', import.meta.url));
@@ -96,6 +98,8 @@ function registerIpcHandlers(): void {
     if (bootstrap === null) throw new Error('The Tuffcode server is not ready yet.');
     return bootstrap;
   });
+
+  ipcMain.handle(CHECK_UPDATES_CHANNEL, (): Promise<UpdateCheckOutcome> => checkNow());
 
   ipcMain.handle(PICK_FOLDER_CHANNEL, async (event): Promise<string | null> => {
     const options: OpenDialogOptions = {
@@ -241,7 +245,7 @@ async function bootstrapApplication(): Promise<void> {
     logger.warn('server exited unexpectedly', { code });
   });
 
-  setupUpdater(logger);
+  setupUpdater(logger, { getWindow: () => mainWindow });
   logger.info('main process ready', { port: running.port });
 }
 
