@@ -320,7 +320,14 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
         } else if (decision === 'approve') {
           const approvalId = newId('apr');
           const pending = options.requestApproval(approvalId);
-          yield { type: 'approval.requested', turnId, approvalId, toolCallId, name, input: args };
+          yield {
+            type: 'approval.requested',
+            turnId,
+            approvalId,
+            toolCallId,
+            name,
+            input: redactToolInput(args),
+          };
           const choice = await pending;
           if (signal.aborted) {
             result = { output: '[interrupted]', isError: true };

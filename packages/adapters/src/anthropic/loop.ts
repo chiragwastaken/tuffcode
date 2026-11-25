@@ -361,7 +361,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             approvalId,
             toolCallId,
             name: call.name,
-            input: args,
+            input: redactToolInput(args),
           };
           const choice = await pending;
           if (signal.aborted) {
