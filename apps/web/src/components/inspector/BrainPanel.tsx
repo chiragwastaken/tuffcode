@@ -1,6 +1,13 @@
-import type { BrainEntry, BrainKind, BrainSlice, RpcParams, RpcResult } from '@tuffcode/contracts';
+import type {
+  BrainEntry,
+  BrainKind,
+  BrainRelation,
+  BrainSlice,
+  RpcParams,
+  RpcResult,
+} from '@tuffcode/contracts';
 import { Button, IconButton, Input, ScrollArea, Select, Spinner } from '@tuffcode/ui';
-import { Plus, RefreshCw } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Plus, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { BrainAddForm, BrainList, type BrainListRow } from '../brain/BrainList';
@@ -16,8 +23,15 @@ import type { BrainGraphEdge, BrainGraphNode } from '../brain/graph-layout';
 import {
   BRAIN_KIND_LABEL,
   BRAIN_KINDS,
+  BRAIN_RELATION_LABEL,
+  BRAIN_RELATIONS,
+  edgesForNode,
+  isBrainRelation,
+  linkTargetOptions,
+  relationLabel,
   toggleBrainEntryParams,
   updateBrainEntryParams,
+  type BrainNodeLink,
 } from './brain-model';
 
 export interface BrainPanelProps {
@@ -40,6 +54,11 @@ const KIND_FILTER_OPTIONS = [
   ...BRAIN_KINDS.map((kind) => ({ value: kind, label: BRAIN_KIND_LABEL[kind] })),
 ];
 
+const RELATION_OPTIONS = BRAIN_RELATIONS.map((relation) => ({
+  value: relation,
+  label: BRAIN_RELATION_LABEL[relation],
+}));
+
 function isBrainKind(value: string): value is BrainKind {
   return (BRAIN_KINDS as readonly string[]).includes(value);
 }
@@ -55,6 +74,33 @@ function mergeEntries(groups: readonly BrainEntry[][]): Map<string, BrainEntry> 
     for (const entry of group) byId.set(entry.id, entry);
   }
   return byId;
+}
+
+interface BrainLinkRowProps {
+  direction: 'incoming' | 'outgoing';
+  link: BrainNodeLink;
+  onSelect: (id: string) => void;
+}
+
+function BrainLinkRow({ direction, link, onSelect }: BrainLinkRowProps) {
+  const Icon = direction === 'incoming' ? ArrowDownLeft : ArrowUpRight;
+  const relation = relationLabel(link.relation);
+  return (
+    <button
+      type="button"
+      aria-label={`${direction === 'incoming' ? 'Incoming' : 'Outgoing'} ${relation}: ${link.node.label}`}
+      className="flex h-5 w-full items-center gap-1 rounded px-1 text-left text-xs text-foreground hover:bg-accent"
+      onClick={() => onSelect(link.node.id)}
+    >
+      <Icon
+        strokeWidth={1.75}
+        aria-hidden="true"
+        className="size-3 shrink-0 text-muted-foreground"
+      />
+      <span className="shrink-0 text-xs text-muted-foreground">{relation}</span>
+      <span className="truncate">{link.node.label}</span>
+    </button>
+  );
 }
 
 /**
@@ -93,6 +139,11 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
   const [addText, setAddText] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+
+  const [linkTargetId, setLinkTargetId] = useState<string | null>(null);
+  const [linkRelation, setLinkRelation] = useState<BrainRelation>('about');
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -200,6 +251,14 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
       selectedId === null ? null : (graphNodes.find((node) => node.id === selectedId) ?? null),
     [graphNodes, selectedId],
   );
+  const selectedLinks = useMemo(
+    () => (selectedId === null ? null : edgesForNode(graphNodes, graphEdges, selectedId)),
+    [graphNodes, graphEdges, selectedId],
+  );
+  const linkTargets = useMemo(
+    () => (selectedId === null ? [] : linkTargetOptions(graphNodes, selectedId)),
+    [graphNodes, selectedId],
+  );
 
   const previewMessage = useMemo(() => {
     const typed = query.trim();
@@ -247,6 +306,8 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
   const handleSelect = useCallback((id: string | null) => {
     setSelectedId(id);
     setActionError(null);
+    setLinkTargetId(null);
+    setLinkError(null);
   }, []);
 
   async function addEntry(): Promise<void> {
@@ -326,6 +387,26 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
       if (mountedRef.current) setActionError(brainErrorMessage(cause));
     } finally {
       if (mountedRef.current) setBusy(false);
+    }
+  }
+
+  async function linkNodes(): Promise<void> {
+    if (selectedId === null || linkTargetId === null || linking) return;
+    setLinking(true);
+    setLinkError(null);
+    try {
+      await rpc.request('brain.link', {
+        fromId: selectedId,
+        toId: linkTargetId,
+        relation: linkRelation,
+      });
+      if (!mountedRef.current) return;
+      setLinkTargetId(null);
+      refresh();
+    } catch (cause) {
+      if (mountedRef.current) setLinkError(brainErrorMessage(cause));
+    } finally {
+      if (mountedRef.current) setLinking(false);
     }
   }
 
@@ -490,25 +571,104 @@ export function BrainPanel({ threadId, projectId }: BrainPanelProps) {
           />
         </div>
 
-        {selectedId === null ? null : (
-          <BrainDetails
-            entry={selectedEntry}
-            node={selectedNode}
-            slice={slice}
-            previewMessage={previewMessage}
-            previewLoading={previewLoading}
-            previewError={previewError}
-            searchHit={
-              searchHit === null ? null : { score: searchHit.score, reason: searchHit.reason }
-            }
-            busy={busy}
-            actionError={actionError}
-            onRefresh={refresh}
-            onClose={() => handleSelect(null)}
-            onSave={(patch) => void saveEntry(patch)}
-            onToggle={() => void toggleSelected()}
-            onDelete={() => void deleteSelected()}
-          />
+        {selectedLinks === null ? null : (
+          <div className="flex w-60 shrink-0 flex-col @max-[480px]:absolute @max-[480px]:inset-y-0 @max-[480px]:right-0 @max-[480px]:z-10 @max-[480px]:w-full [&>aside]:min-h-0 [&>aside]:flex-1 @max-[480px]:[&>aside]:static">
+            <BrainDetails
+              entry={selectedEntry}
+              node={selectedNode}
+              slice={slice}
+              previewMessage={previewMessage}
+              previewLoading={previewLoading}
+              previewError={previewError}
+              searchHit={
+                searchHit === null ? null : { score: searchHit.score, reason: searchHit.reason }
+              }
+              busy={busy}
+              actionError={actionError}
+              onRefresh={refresh}
+              onClose={() => handleSelect(null)}
+              onSave={(patch) => void saveEntry(patch)}
+              onToggle={() => void toggleSelected()}
+              onDelete={() => void deleteSelected()}
+            />
+            <section
+              aria-label="Brain links"
+              className="w-full shrink-0 border-t border-l border-border bg-background p-2"
+            >
+              <div className="flex items-baseline justify-between">
+                <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Links
+                </span>
+                <span className="text-2xs tabular-nums text-muted-foreground">
+                  {selectedLinks.incoming.length + selectedLinks.outgoing.length}
+                </span>
+              </div>
+
+              {selectedLinks.incoming.length === 0 && selectedLinks.outgoing.length === 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">No links yet</p>
+              ) : (
+                <div className="mt-1 flex max-h-28 flex-col overflow-y-auto">
+                  {selectedLinks.incoming.map((link) => (
+                    <BrainLinkRow
+                      key={`in-${link.relation}-${link.node.id}`}
+                      direction="incoming"
+                      link={link}
+                      onSelect={handleSelect}
+                    />
+                  ))}
+                  {selectedLinks.outgoing.map((link) => (
+                    <BrainLinkRow
+                      key={`out-${link.relation}-${link.node.id}`}
+                      direction="outgoing"
+                      link={link}
+                      onSelect={handleSelect}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-1.5 flex items-center gap-1">
+                <div className="min-w-0 flex-1">
+                  <Select
+                    aria-label="Link to node"
+                    className="h-7 px-1.5 text-2xs"
+                    placeholder="Link to..."
+                    options={linkTargets}
+                    value={linkTargetId}
+                    disabled={linking || linkTargets.length === 0}
+                    onValueChange={setLinkTargetId}
+                  />
+                </div>
+                <div className="w-[84px] shrink-0">
+                  <Select
+                    aria-label="Relation"
+                    className="h-7 px-1.5 text-2xs"
+                    options={RELATION_OPTIONS}
+                    value={linkRelation}
+                    disabled={linking}
+                    onValueChange={(value) => {
+                      if (value !== null && isBrainRelation(value)) setLinkRelation(value);
+                    }}
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-2xs"
+                  disabled={linkTargetId === null || linking}
+                  onClick={() => void linkNodes()}
+                >
+                  Link
+                </Button>
+              </div>
+
+              {linkError === null ? null : (
+                <p role="alert" className="mt-1 text-2xs leading-4 text-error">
+                  {linkError}
+                </p>
+              )}
+            </section>
+          </div>
         )}
       </div>
     </section>

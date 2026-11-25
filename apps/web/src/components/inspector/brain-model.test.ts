@@ -1,12 +1,18 @@
 import type { BrainEntry } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
+import type { BrainGraphEdge, BrainGraphNode } from '../brain/graph-layout';
 import {
   BRAIN_KINDS,
   BRAIN_KIND_LABEL,
+  BRAIN_RELATIONS,
   CREATABLE_BRAIN_KINDS,
   brainEntryMeta,
+  edgesForNode,
   formatTokenCount,
+  isBrainRelation,
   isBrainSliceEmpty,
+  linkTargetOptions,
+  relationLabel,
   sortBrainEntries,
   summarizeBrainSlice,
   toggleBrainEntryParams,
@@ -30,6 +36,14 @@ function makeEntry(overrides: Partial<BrainEntry> = {}): BrainEntry {
     lastUsedAt: null,
     ...overrides,
   };
+}
+
+function makeNode(id: string, overrides: Partial<BrainGraphNode> = {}): BrainGraphNode {
+  return { id, kind: 'memory', label: id, importance: 0.5, degree: 0, ...overrides };
+}
+
+function makeEdge(from: string, to: string, relation = 'about'): BrainGraphEdge {
+  return { from, to, relation };
 }
 
 describe('brain preview formatting', () => {
@@ -120,5 +134,88 @@ describe('brain entry helpers', () => {
       'Working note',
     ]);
     expect(CREATABLE_BRAIN_KINDS).toEqual(['rule', 'preference']);
+  });
+});
+
+describe('brain node links', () => {
+  const nodes = [
+    makeNode('a', { label: 'Alpha' }),
+    makeNode('b', { label: 'Beta' }),
+    makeNode('c', { label: 'Gamma' }),
+  ];
+
+  it('lists outgoing links with the other endpoint', () => {
+    const links = edgesForNode(
+      nodes,
+      [makeEdge('a', 'b', 'about'), makeEdge('a', 'c', 'caused')],
+      'a',
+    );
+
+    expect(links.outgoing.map((link) => [link.relation, link.node.id])).toEqual([
+      ['about', 'b'],
+      ['caused', 'c'],
+    ]);
+    expect(links.incoming).toEqual([]);
+  });
+
+  it('lists incoming links with the other endpoint', () => {
+    const links = edgesForNode(nodes, [makeEdge('b', 'a', 'part-of')], 'a');
+
+    expect(links.incoming.map((link) => [link.relation, link.node.id])).toEqual([['part-of', 'b']]);
+    expect(links.outgoing).toEqual([]);
+  });
+
+  it('splits both directions and keeps a reciprocal edge on each side', () => {
+    const links = edgesForNode(
+      nodes,
+      [makeEdge('a', 'b', 'about'), makeEdge('b', 'a', 'about'), makeEdge('c', 'a', 'supersedes')],
+      'a',
+    );
+
+    expect(links.outgoing.map((link) => link.node.id)).toEqual(['b']);
+    expect(links.incoming.map((link) => link.node.id)).toEqual(['b', 'c']);
+  });
+
+  it('skips an edge whose other endpoint is missing from the graph', () => {
+    const links = edgesForNode(nodes, [makeEdge('a', 'gone'), makeEdge('a', 'b')], 'a');
+
+    expect(links.outgoing.map((link) => link.node.id)).toEqual(['b']);
+    expect(edgesForNode(nodes, [makeEdge('gone', 'a')], 'a')).toEqual({
+      incoming: [],
+      outgoing: [],
+    });
+  });
+
+  it('returns empty lists without edges or when no edge touches the node', () => {
+    expect(edgesForNode(nodes, [], 'a')).toEqual({ incoming: [], outgoing: [] });
+    expect(edgesForNode(nodes, [makeEdge('b', 'c')], 'a')).toEqual({ incoming: [], outgoing: [] });
+  });
+
+  it('offers every other node as a labelled, label-ordered link target', () => {
+    const options = linkTargetOptions(
+      [
+        makeNode('a', { label: 'Zeta' }),
+        makeNode('b', { label: 'Beta', kind: 'rule' }),
+        makeNode('c', { label: 'Alpha', kind: 'preference' }),
+      ],
+      'a',
+    );
+
+    expect(options).toEqual([
+      { value: 'c', label: 'Alpha (Preference)' },
+      { value: 'b', label: 'Beta (Rule)' },
+    ]);
+  });
+
+  it('recognizes only the contract relations and labels unknown ones as stored', () => {
+    expect(BRAIN_RELATIONS.every(isBrainRelation)).toBe(true);
+    expect(isBrainRelation('related-to')).toBe(false);
+    expect(BRAIN_RELATIONS.map(relationLabel)).toEqual([
+      'about',
+      'part of',
+      'supersedes',
+      'caused',
+    ]);
+    expect(relationLabel('related-to')).toBe('related-to');
   });
 });
