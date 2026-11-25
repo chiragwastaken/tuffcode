@@ -1,4 +1,3 @@
-import type { GoalAutonomy } from '@tuffcode/contracts';
 import type { Logger } from '@tuffcode/shared';
 import type { EventBus } from '../events.js';
 import type { Runner } from '../runner/runner.js';
@@ -25,8 +24,8 @@ const DESTRUCTIVE_COMMANDS: readonly RegExp[] = [
   /\bshutdown\b/i,
 ];
 
-/** Manual goals deny every approval with this line, so the reason is never silent. */
-export const MANUAL_DENY_REASON = 'Council runs unattended; approve it from the child thread.';
+/** Every approval council cannot answer for a user is denied with this line. */
+export const UNATTENDED_DENY_REASON = 'Council runs unattended; approve it from the child thread.';
 
 export interface ApprovalDecision {
   decision: 'allow' | 'deny';
@@ -50,22 +49,18 @@ function commandText(input: unknown): string | null {
 }
 
 /**
- * Council's approval policy: destructive commands are denied even on an auto goal;
- * everything else is allowed only when the goal runs unattended by choice.
+ * Council's approval policy: the destructive denylist keeps its specific reason, and
+ * every other approval is denied too because no user is present to answer it.
  */
-export function decideApproval(input: {
-  input: unknown;
-  autonomy: GoalAutonomy;
-}): ApprovalDecision {
-  const text = commandText(input.input);
+export function decideApproval(input: unknown): ApprovalDecision {
+  const text = commandText(input);
   if (text !== null) {
     const destructive = DESTRUCTIVE_COMMANDS.find((pattern) => pattern.test(text));
     if (destructive !== undefined) {
       return { decision: 'deny', reason: `destructive command (${destructive.source})` };
     }
   }
-  if (input.autonomy === 'auto') return { decision: 'allow', reason: 'auto goal' };
-  return { decision: 'deny', reason: MANUAL_DENY_REASON };
+  return { decision: 'deny', reason: UNATTENDED_DENY_REASON };
 }
 
 /**
@@ -80,7 +75,7 @@ export function decideApproval(input: {
 export function createBusTurnRunner(
   deps: BusTurnRunnerDeps,
 ): (input: RunTurnInput) => Promise<TurnResult> {
-  return async ({ threadId, text, signal, autonomy }) => {
+  return async ({ threadId, text, signal }) => {
     if (signal.aborted) {
       return { threadId, turnId: '', status: 'interrupted', text: '' };
     }
@@ -118,7 +113,7 @@ export function createBusTurnRunner(
       const approvalId = event.payload.id;
       if (answered.has(approvalId)) return;
       answered.add(approvalId);
-      const decision = decideApproval({ input: event.payload.input, autonomy });
+      const decision = decideApproval(event.payload.input);
       deps.logger.debug('council approval answered', {
         threadId,
         approvalId,

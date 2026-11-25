@@ -37,8 +37,6 @@ export interface RunTurnInput {
   threadId: string;
   text: string;
   signal: AbortSignal;
-  /** The goal's autonomy, so one bus runner can answer approvals for either mode. */
-  autonomy: GoalAutonomy;
 }
 
 export interface ChildThreadRequest {

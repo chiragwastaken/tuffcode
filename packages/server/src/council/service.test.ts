@@ -1,8 +1,9 @@
-import type { ServerEvent, Thread } from '@tuffcode/contracts';
+import type { Approval, ServerEvent, Thread } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
-import { createEventBus } from '../events.js';
+import { createEventBus, type EventBus } from '../events.js';
 import type { Runner } from '../runner/runner.js';
 import { createTestContext, silentLogger, type TestContext } from '../test-support.js';
+import { createBusTurnRunner } from './runner-turn.js';
 import { createCouncil } from './service.js';
 import type {
   ChildThreadRequest,
@@ -216,7 +217,62 @@ function fakeRunner(disposed: string[]): Runner {
   };
 }
 
-function createHarness(): Harness {
+function turnText(title: string): string {
+  if (title.startsWith('Plan:')) return planJson([planTask('Add widget', ['src/widget.ts'])]);
+  if (title.startsWith('Review:')) return PASS_REVIEW;
+  return 'worker done';
+}
+
+/**
+ * A runner that raises one benign approval per turn before finishing it, so the real
+ * bus turn runner answers approvals exactly as the shipped council wiring does.
+ */
+function approvalRunner(bus: EventBus, titles: Map<string, string>): Runner {
+  let turn = 0;
+  return {
+    listActive: () => [],
+    send: async (threadId) => {
+      turn += 1;
+      const turnId = `turn_${turn}`;
+      queueMicrotask(() => {
+        const approval: Approval = {
+          id: `apv_${turnId}`,
+          threadId,
+          toolCallId: `call_${turnId}`,
+          toolName: 'bash',
+          input: { command: 'pnpm test' },
+          decision: 'pending',
+          createdAt: new Date().toISOString(),
+          resolvedAt: null,
+        };
+        bus.emit({ kind: 'event', type: 'approval.requested', threadId, payload: approval });
+        const text = turnText(titles.get(threadId) ?? '');
+        bus.emit({
+          kind: 'event',
+          type: 'thread.event',
+          threadId,
+          seq: 1,
+          payload: { type: 'text.delta', turnId, text },
+        });
+        bus.emit({
+          kind: 'event',
+          type: 'thread.event',
+          threadId,
+          seq: 2,
+          payload: { type: 'turn.finished', turnId, reason: 'complete' },
+        });
+      });
+      return { turnId };
+    },
+    interrupt: async () => undefined,
+    approve: async () => undefined,
+    disposeThread: async () => undefined,
+    disposeAll: async () => undefined,
+    recoverOrphanedRuns: () => undefined,
+  };
+}
+
+function createHarness(configure?: (ports: FakePorts, bus: EventBus) => void): Harness {
   const ctx = createTestContext();
   seedGoalThread(ctx);
   const bus = createEventBus();
@@ -224,6 +280,7 @@ function createHarness(): Harness {
   bus.subscribe((event) => events.push(event));
   const disposed: string[] = [];
   const ports = new FakePorts(ctx);
+  configure?.(ports, bus);
   const council = createCouncil({
     repos: ctx.repos,
     bus,
@@ -751,6 +808,39 @@ describe('council.latest', () => {
       expect(latest?.tasks.map((task) => task.title)).toEqual(['Add widget']);
       expect(latest?.reviews).toHaveLength(1);
       expect(latest?.reviews[0]?.taskId).toBe(latest?.tasks[0]?.id);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+describe('council approval policy', () => {
+  it('denies a benign approval for both an auto goal and a manual goal', async () => {
+    const harness = createHarness((ports, bus) => {
+      ports.runTurn = createBusTurnRunner({
+        bus,
+        runner: approvalRunner(bus, ports.titles),
+        approve: (threadId, approvalId, decision) =>
+          ports.approve(threadId, approvalId, decision),
+        logger: silentLogger(),
+      });
+    });
+    try {
+      for (const autonomy of ['auto', 'manual'] as const) {
+        const { goalId } = await harness.council.start({
+          threadId: 'thr_goal',
+          goal: `Ship it ${autonomy}`,
+          autonomy,
+        });
+        const goal = await harness.council.awaitGoal(goalId);
+        expect(goal.state).toBe('done');
+        expect(goal.autonomy).toBe(autonomy);
+      }
+
+      expect(harness.ports.approvals.length).toBeGreaterThan(0);
+      for (const approval of harness.ports.approvals) {
+        expect(approval.decision).toBe('deny');
+      }
     } finally {
       await harness.dispose();
     }
