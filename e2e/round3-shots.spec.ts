@@ -145,7 +145,6 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
 
   // The topbar keeps every control clear of the caption-button corner.
   const topbar = page.locator('header').first();
-  const topbarBox = await boxOf(topbar);
   const windowWidth = await page.evaluate(() => window.innerWidth);
   const captionLimit = windowWidth - CAPTION_INSET_PX;
   const topbarControls = topbar.locator('a, button');
