@@ -25,5 +25,6 @@ export function createSubagentHandlers(deps: SubagentHandlerDeps): RpcHandlers {
   handlers.set('subagents.list', (params) =>
     deps.subagents.list((params as RpcParams<'subagents.list'>).threadId),
   );
+  handlers.set('subagents.listAll', () => deps.subagents.listAll());
   return handlers;
 }
