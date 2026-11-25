@@ -167,6 +167,40 @@ describe('providers service', () => {
       contextWindow: 200_000,
     });
 
+    const rich = await service.upsert({
+      id: 'prv_rich',
+      kind: 'claude',
+      label: 'Claude',
+      config: {
+        models: [
+          {
+            id: 'thinking',
+            label: 'Thinking',
+            contextWindow: 200_000,
+            maxOutputTokens: 64_000,
+            capabilities: {
+              tools: true,
+              vision: true,
+              reasoning: true,
+              reasoningEfforts: ['low', 'medium', 'high'],
+            },
+            reasoningEffort: 'medium',
+          },
+        ],
+      },
+    });
+    expect(service.listModels(rich.id)[0]).toMatchObject({
+      modelId: 'thinking',
+      maxOutputTokens: 64_000,
+      capabilities: {
+        tools: true,
+        vision: true,
+        reasoning: true,
+        reasoningEfforts: ['low', 'medium', 'high'],
+      },
+      reasoningEffort: 'medium',
+    });
+
     await service.upsert({
       id: 'prv_a',
       kind: 'claude',

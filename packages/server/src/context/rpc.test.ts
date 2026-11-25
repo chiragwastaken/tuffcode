@@ -9,6 +9,7 @@ interface ContextResult {
   usedTokens: number;
   maxTokens: number;
   percent: number;
+  limitSource: 'model' | 'config' | 'settings' | 'default';
   segments: { name: string; tokens: number }[];
 }
 
@@ -92,6 +93,7 @@ describe('threads.context', () => {
     const result = contextHandler(ctx)('thr_c');
 
     expect(result.maxTokens).toBe(5000);
+    expect(result.limitSource).toBe('config');
     expect(result.segments.map((segment) => segment.name)).toContain('base');
     // The last user message is part of the prompt, so only the assistant row remains.
     expect(result.segments.find((segment) => segment.name === 'messages')).toEqual({
@@ -108,6 +110,18 @@ describe('threads.context', () => {
     expect(result.percent).toBeCloseTo(result.usedTokens / 5000);
   });
 
+  it('reports the model row window and its source', () => {
+    const ctx = setup();
+    ctx.repos.providers.replaceModels('prv_c', [
+      { modelId: 'model-x', label: 'Model X', contextWindow: 12_000, isDefault: true },
+    ]);
+
+    const result = contextHandler(ctx)('thr_c');
+
+    expect(result.maxTokens).toBe(12_000);
+    expect(result.limitSource).toBe('model');
+  });
+
   it('reports the default window when the provider declares none', () => {
     const ctx = setup();
     ctx.repos.providers.upsert({
@@ -120,6 +134,7 @@ describe('threads.context', () => {
     const result = contextHandler(ctx)('thr_c');
 
     expect(result.maxTokens).toBe(200_000);
+    expect(result.limitSource).toBe('default');
     expect(result.percent).toBeGreaterThan(0);
     expect(result.percent).toBeLessThan(1);
   });

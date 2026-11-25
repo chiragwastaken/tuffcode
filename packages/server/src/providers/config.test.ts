@@ -89,6 +89,29 @@ describe('provider config validation', () => {
     });
   });
 
+  it('accepts model metadata, including null limits and unknown capabilities', () => {
+    const models = [
+      {
+        id: 'openrouter/model',
+        label: 'Router',
+        maxOutputTokens: 16_384,
+        capabilities: {
+          tools: true,
+          vision: true,
+          reasoning: true,
+          reasoningEfforts: ['low', 'high'],
+        },
+        reasoningEffort: 'high',
+      },
+      { id: 'unknown', label: 'Unknown', maxOutputTokens: null, capabilities: null },
+      { id: 'plain', label: 'Plain', reasoningEffort: null },
+    ];
+
+    expect(
+      validateProviderConfig('openai-compatible', { baseUrl: 'https://openrouter.test', models }),
+    ).toEqual({ baseUrl: 'https://openrouter.test', models });
+  });
+
   it('rejects a missing or non-http baseUrl', () => {
     expectBadRequest(() => validateProviderConfig('openai-compatible', {}), 'baseUrl');
     expectBadRequest(
@@ -180,6 +203,48 @@ describe('provider config validation', () => {
           ],
         }),
       'models',
+    );
+  });
+
+  it('rejects malformed model metadata', () => {
+    expectBadRequest(
+      () =>
+        validateProviderConfig('claude', {
+          models: [{ id: 'x', label: 'X', maxOutputTokens: 1.5 }],
+        }),
+      'models[0].maxOutputTokens',
+    );
+    expectBadRequest(
+      () =>
+        validateProviderConfig('claude', {
+          models: [{ id: 'x', label: 'X', maxOutputTokens: 0 }],
+        }),
+      'models[0].maxOutputTokens',
+    );
+    expectBadRequest(
+      () =>
+        validateProviderConfig('claude', {
+          models: [
+            {
+              id: 'x',
+              label: 'X',
+              capabilities: {
+                tools: true,
+                vision: false,
+                reasoning: 'yes',
+                reasoningEfforts: [],
+              },
+            },
+          ],
+        }),
+      'models[0].capabilities.reasoning',
+    );
+    expectBadRequest(
+      () =>
+        validateProviderConfig('claude', {
+          models: [{ id: 'x', label: 'X', reasoningEffort: 'extreme' }],
+        }),
+      'models[0].reasoningEffort',
     );
   });
 
