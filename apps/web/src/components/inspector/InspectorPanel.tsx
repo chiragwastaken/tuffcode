@@ -5,17 +5,18 @@ import { useAppStore } from '../../store/app-store';
 import { DiffPanel } from '../diff/DiffPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { requestTerminalAt } from '../terminal/terminal-requests';
+import { ActivityPanel } from './ActivityPanel';
 import { BrainPanel } from './BrainPanel';
 import { ContextPanel } from './ContextPanel';
 import { CouncilPanel } from './CouncilPanel';
 import { subscribePanelRequests, takeInspectorTab } from './panel-requests';
 import {
-  INSPECTOR_TABS,
   INSPECTOR_TAB_LABEL,
   initialInspectorTabs,
   inspectorTabsReducer,
   isInspectorTab,
   tabForThread,
+  tabsForThread,
   type InspectorTab,
 } from './inspector-tabs';
 
@@ -27,14 +28,17 @@ export interface InspectorPanelProps {
 }
 
 /**
- * Right panel: diff, terminal, brain and council for the open thread. The tab
- * choice is remembered per thread for the session, and new threads inherit the
- * last tab used anywhere.
+ * Right panel: activity, diff, terminal, brain, council and context for the open
+ * thread. Council shows only on a council thread. The tab choice is remembered
+ * per thread for the session, and new threads inherit the last tab used anywhere.
  */
 export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
   const [tabs, dispatch] = useReducer(inspectorTabsReducer, initialInspectorTabs);
   const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
-  const activeTab = tabForThread(tabs, threadId);
+  const visibleTabs = tabsForThread(thread);
+  const storedTab = tabForThread(tabs, threadId);
+  // A remembered council tab on a work thread falls back to the first visible tab.
+  const activeTab = visibleTabs.includes(storedTab) ? storedTab : visibleTabs[0] ?? 'activity';
 
   // A slash command can raise a tab; the composer never imports the inspector.
   useEffect(
@@ -54,7 +58,7 @@ export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
         <div className="flex flex-1 items-center justify-center px-3">
           <EmptyState
             variant="inline"
-            title="Open a thread to inspect its diff, terminal, brain and council."
+            title="Open a thread to inspect its activity, diff, terminal, brain and context."
             className="w-full"
           />
         </div>
@@ -70,7 +74,11 @@ export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
       }}
       className="flex h-full min-h-0 flex-col"
     >
-      <InspectorHeader title={thread?.title ?? 'Inspector'} showTabs onCollapse={onCollapse} />
+      <InspectorHeader
+        title={thread?.title ?? 'Inspector'}
+        tabs={visibleTabs}
+        onCollapse={onCollapse}
+      />
 
       <InspectorTabs
         key={threadId}
@@ -87,7 +95,7 @@ interface InspectorHeaderProps {
   /** Thread title, or the section name when no thread is open. */
   title: string;
   /** Renders the section tabs; only valid inside the panel's `TabsRoot`. */
-  showTabs?: boolean;
+  tabs?: readonly InspectorTab[];
   onCollapse?: () => void;
 }
 
@@ -95,7 +103,7 @@ interface InspectorHeaderProps {
  * One header for every inspector state: the thread title, the section tabs and a
  * collapse control. Tabs render inside the panel's `TabsRoot`.
  */
-function InspectorHeader({ title, showTabs = false, onCollapse }: InspectorHeaderProps) {
+function InspectorHeader({ title, tabs, onCollapse }: InspectorHeaderProps) {
   return (
     <div
       data-testid="inspector-header"
@@ -108,15 +116,15 @@ function InspectorHeader({ title, showTabs = false, onCollapse }: InspectorHeade
       >
         {title}
       </span>
-      {showTabs ? (
+      {tabs === undefined ? null : (
         <TabsList aria-label="Inspector sections" className="shrink-0">
-          {INSPECTOR_TABS.map((tab) => (
+          {tabs.map((tab) => (
             <TabsTab key={tab} value={tab} data-testid={`inspector-tab-${tab}`} className="px-2">
               {INSPECTOR_TAB_LABEL[tab]}
             </TabsTab>
           ))}
         </TabsList>
-      ) : null}
+      )}
       {onCollapse ? (
         <IconButton
           icon={PanelRightClose}
@@ -154,6 +162,9 @@ function InspectorTabs({ threadId, projectId, activeTab, onSelectTab }: Inspecto
 
   return (
     <>
+      <TabsPanel value="activity" keepMounted className="min-h-0 flex-1">
+        {isMounted('activity') ? <ActivityPanel threadId={threadId} /> : null}
+      </TabsPanel>
       <TabsPanel value="diff" keepMounted className="min-h-0 flex-1">
         {isMounted('diff') ? (
           <DiffPanel

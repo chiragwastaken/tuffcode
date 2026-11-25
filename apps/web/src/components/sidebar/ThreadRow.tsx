@@ -1,11 +1,26 @@
 import { Link } from '@tanstack/react-router';
 import type { Thread } from '@tuffcode/contracts';
 import { cn } from '@tuffcode/ui';
+import {
+  ListTree,
+  MessagesSquare,
+  ShieldCheck,
+  Users,
+  type LucideIcon,
+} from 'lucide-react';
 import { THREAD_MENU, type ActionContext } from '../actions';
 import { useActionPorts } from '../menu/action-context';
 import { useContextMenuTrigger } from '../menu/Menu';
+import { SUBAGENT_TYPE_ICON } from '../subagents/subagent-model';
 import { StatusChip } from '../thread/status-chip';
-import { formatRelativeTime } from './sidebar-model';
+import { elapsedMs, formatDuration } from '../thread/turn-blocks';
+import {
+  childSubagentType,
+  childThreadKind,
+  childThreadLabel,
+  formatRelativeTime,
+  type ChildThreadKind,
+} from './sidebar-model';
 
 export interface ThreadRowProps {
   thread: Thread;
@@ -19,7 +34,7 @@ export interface ThreadRowProps {
 }
 
 /**
- * One 34px thread row: the title truncates across the full width on its own
+ * One 48px thread row: the title truncates across the full width on its own
  * line, and an 11px line beneath it pairs the status chip with the relative
  * update time. The native tooltip carries the untruncated title.
  */
@@ -54,15 +69,15 @@ export function ThreadRow({
       title={title}
       {...menuProps}
       className={cn(
-        'flex h-[34px] flex-col justify-center gap-0.5 rounded-md px-2',
+        'flex h-12 flex-col justify-center gap-1 rounded-md px-2 py-1',
         'transition-colors duration-150',
         selected
           ? 'bg-sidebar-row-active text-sidebar-foreground shadow-[inset_2px_0_0_0_var(--color-primary)]'
           : 'text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground',
       )}
     >
-      <span className="min-w-0 w-full truncate text-xs leading-4">{title}</span>
-      <span className="flex min-w-0 items-center gap-1.5 text-2xs leading-none">
+      <span className="min-w-0 w-full truncate text-[13px] leading-5">{title}</span>
+      <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-none">
         <StatusChip status={thread.status} className="h-3.5 px-1" />
         {updated === '' ? null : (
           <time dateTime={thread.updatedAt} className="ml-auto shrink-0 tabular-nums">
@@ -71,5 +86,67 @@ export function ThreadRow({
         )}
       </span>
     </Link>
+  );
+}
+
+export interface ChildThreadRowProps {
+  thread: Thread;
+  parentId: string;
+  selected: boolean;
+  onOpen: (thread: Thread, parentId: string) => void;
+}
+
+const CHILD_KIND_ICON: Record<ChildThreadKind, LucideIcon> = {
+  subagent: MessagesSquare,
+  council: Users,
+  plan: ListTree,
+  review: ShieldCheck,
+  thread: MessagesSquare,
+};
+
+function childIcon(thread: Thread): LucideIcon {
+  const type = childSubagentType(thread);
+  if (type !== null) return SUBAGENT_TYPE_ICON[type];
+  return CHILD_KIND_ICON[childThreadKind(thread)];
+}
+
+/**
+ * One 44px child row nested under its root thread: a type icon, the short label,
+ * then the status chip and how long the child thread has been alive.
+ */
+export function ChildThreadRow({ thread, parentId, selected, onOpen }: ChildThreadRowProps) {
+  const label = childThreadLabel(thread);
+  const Icon = childIcon(thread);
+  const elapsed = formatDuration(elapsedMs(thread.createdAt, thread.updatedAt));
+
+  return (
+    <button
+      type="button"
+      data-testid="thread-child-row"
+      data-thread-id={thread.id}
+      onClick={() => onOpen(thread, parentId)}
+      aria-current={selected ? 'page' : undefined}
+      title={label}
+      className={cn(
+        'flex h-11 w-full min-w-0 flex-col justify-center gap-1 rounded-md pr-2 pl-6 py-1 text-left',
+        'transition-colors duration-150',
+        selected
+          ? 'bg-sidebar-row-active text-sidebar-foreground shadow-[inset_2px_0_0_0_var(--color-primary)]'
+          : 'text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground',
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-1.5">
+        <Icon aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-[12px] leading-4">{label}</span>
+      </span>
+      <span className="flex min-w-0 items-center gap-1.5 pl-[18px] text-[11px] leading-none">
+        <StatusChip status={thread.status} className="h-3.5 px-1" />
+        {elapsed === '' ? null : (
+          <time dateTime={thread.updatedAt} className="ml-auto shrink-0 tabular-nums">
+            {elapsed}
+          </time>
+        )}
+      </span>
+    </button>
   );
 }
