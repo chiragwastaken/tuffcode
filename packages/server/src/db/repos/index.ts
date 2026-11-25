@@ -6,6 +6,7 @@ import { createCheckpointsRepo, type CheckpointsRepo } from './checkpoints.js';
 import { createReviewCommentsRepo, type ReviewCommentsRepo } from './comments.js';
 import { createCouncilRepo, type CouncilRepo } from './council.js';
 import { createEventsRepo, type EventsRepo } from './events.js';
+import { createMcpRepo, type McpRepo } from './mcp.js';
 import { createMessagesRepo, type MessagesRepo } from './messages.js';
 import { createProjectsRepo, type ProjectsRepo } from './projects.js';
 import { createProvidersRepo, type ProvidersRepo } from './providers.js';
@@ -23,6 +24,7 @@ export interface Repos {
   comments: ReviewCommentsRepo;
   approvals: ApprovalsRepo;
   providers: ProvidersRepo;
+  mcp: McpRepo;
   brain: BrainRepo;
   council: CouncilRepo;
   turns: TurnsRepo;
@@ -43,6 +45,7 @@ export function createRepos(db: DatabaseSync): Repos {
     comments: createReviewCommentsRepo(db),
     approvals: createApprovalsRepo(db),
     providers: createProvidersRepo(db),
+    mcp: createMcpRepo(db),
     brain: createBrainRepo(db),
     council: createCouncilRepo(db),
     turns: createTurnsRepo(db),
@@ -71,6 +74,7 @@ export type {
   TaskStatePatch,
 } from './council.js';
 export type { EventsRepo } from './events.js';
+export type { McpRepo, UpsertMcpServerInput } from './mcp.js';
 export type { AddMessageInput, MessagesRepo } from './messages.js';
 export type { AddProjectInput, ProjectMeta, ProjectsRepo } from './projects.js';
 export type {

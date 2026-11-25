@@ -4,6 +4,7 @@ import {
   AttachmentSchema,
   BrainEntrySchema,
   BrainKindSchema,
+  BrainRelationSchema,
   BrainSliceSchema,
   CheckpointSchema,
   CommandSchema,
@@ -13,6 +14,8 @@ import {
   GoalSchema,
   IdSchema,
   IsoDateTimeSchema,
+  McpServerSchema,
+  McpToolSchema,
   MessageSchema,
   ModelSchema,
   PermissionModeSchema,
@@ -235,6 +238,8 @@ export const methods = {
       usedTokens: z.number().int().nonnegative(),
       maxTokens: z.number().int().positive(),
       percent: z.number().min(0).max(1),
+      /** Which precedence step supplied `maxTokens`: the model row, its config, settings, or the default. */
+      limitSource: z.enum(['model', 'config', 'settings', 'default']),
       compactedAt: IsoDateTimeSchema.optional(),
       segments: z
         .object({
@@ -380,6 +385,34 @@ export const methods = {
       error: z.string().optional(),
     }),
   },
+  'mcp.list': {
+    params: EmptyObjectSchema,
+    result: McpServerSchema.array(),
+  },
+  'mcp.upsert': {
+    params: z.object({
+      id: IdSchema.optional(),
+      label: z.string().min(1),
+      command: z.string().min(1),
+      args: z.string().array().optional(),
+      env: z.record(z.string(), z.string()).optional(),
+      cwd: z.string().nullable().optional(),
+      enabled: z.boolean().optional(),
+    }),
+    result: McpServerSchema,
+  },
+  'mcp.remove': {
+    params: idParam,
+    result: EmptyObjectSchema,
+  },
+  'mcp.test': {
+    params: idParam,
+    result: z.object({
+      ok: z.boolean(),
+      detail: z.string(),
+      tools: McpToolSchema.array(),
+    }),
+  },
   'settings.get': {
     params: EmptyObjectSchema,
     result: SettingsSchema,
@@ -455,6 +488,14 @@ export const methods = {
         .array(),
     }),
   },
+  'brain.link': {
+    params: z.object({
+      fromId: IdSchema,
+      toId: IdSchema,
+      relation: BrainRelationSchema,
+    }),
+    result: EmptyObjectSchema,
+  },
   'memory.search': {
     params: z.object({
       projectId: IdSchema.optional(),
@@ -517,6 +558,11 @@ export const methods = {
   },
   'subagents.list': {
     params: z.object({ threadId: IdSchema }),
+    result: SubagentViewSchema.array(),
+  },
+  /** Every subagent across threads, so the sidebar can map child thread ids to child ids. */
+  'subagents.listAll': {
+    params: EmptyObjectSchema,
     result: SubagentViewSchema.array(),
   },
   'commands.list': {

@@ -41,6 +41,9 @@ export const BrainKindSchema = z.enum([
 ]);
 export type BrainKind = z.infer<typeof BrainKindSchema>;
 
+export const BrainRelationSchema = z.enum(['about', 'part-of', 'supersedes', 'caused']);
+export type BrainRelation = z.infer<typeof BrainRelationSchema>;
+
 export const GoalStateSchema = z.enum([
   'intake',
   'planning',
@@ -182,6 +185,18 @@ export const ApprovalSchema = z.object({
 });
 export type Approval = z.infer<typeof ApprovalSchema>;
 
+/** What a model can do; every flag is known once a row carries the object. */
+export const ModelCapabilitiesSchema = z.object({
+  tools: z.boolean(),
+  vision: z.boolean(),
+  reasoning: z.boolean(),
+  reasoningEfforts: z.string().array(),
+});
+export type ModelCapabilities = z.infer<typeof ModelCapabilitiesSchema>;
+
+export const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high']);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
 /**
  * Free-form provider config with the token limits presets seed and users override.
  * Unknown keys stay untouched so adapters can read their own settings.
@@ -190,6 +205,8 @@ export const ProviderConfigSchema = z
   .object({
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
+    capabilities: ModelCapabilitiesSchema.optional(),
+    reasoningEffort: ReasoningEffortSchema.optional(),
   })
   .catchall(z.unknown());
 
@@ -210,10 +227,32 @@ export const ModelSchema = z.object({
   modelId: z.string(),
   label: z.string(),
   contextWindow: z.number().int().positive().nullable().optional(),
-  maxOutputTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().nullable().optional(),
+  capabilities: ModelCapabilitiesSchema.nullable().optional(),
+  reasoningEffort: ReasoningEffortSchema.nullable().optional(),
   isDefault: z.boolean(),
 });
 export type Model = z.infer<typeof ModelSchema>;
+
+export const McpServerSchema = z.object({
+  id: IdSchema,
+  label: z.string().min(1),
+  command: z.string().min(1),
+  args: z.string().array(),
+  env: z.record(z.string(), z.string()),
+  cwd: z.string().nullable(),
+  enabled: z.boolean(),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema,
+});
+export type McpServer = z.infer<typeof McpServerSchema>;
+
+export const McpToolSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  inputSchema: z.record(z.string(), z.unknown()),
+});
+export type McpTool = z.infer<typeof McpToolSchema>;
 
 export const SubagentSpecSchema = z.object({
   type: SubagentTypeSchema,

@@ -15,12 +15,12 @@ describe('db migrations', () => {
     env = createTempEnv();
     const db = openDb(join(env.root, 'tuffcode.db'));
     try {
-      expect(migrate(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(migrate(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
       expect(migrate(db)).toEqual([]);
 
       const versions = db.prepare('SELECT version FROM schema_migrations').all();
-      expect(versions).toHaveLength(7);
-      expect(versions.map((row) => row['version'])).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(versions).toHaveLength(9);
+      expect(versions.map((row) => row['version'])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
       expect(db.prepare('PRAGMA journal_mode').get()?.['journal_mode']).toBe('wal');
       expect(db.prepare('PRAGMA foreign_keys').get()?.['foreign_keys']).toBe(1);
@@ -51,8 +51,23 @@ describe('db migrations', () => {
         'terminal_sessions',
         'turns',
         'subagents',
+        'mcp_servers',
       ]) {
         expect(tables).toContain(table);
+      }
+
+      const modelColumns = db
+        .prepare('PRAGMA table_info(provider_models)')
+        .all()
+        .map((row) => row['name']);
+      for (const column of [
+        'context_window',
+        'max_output_tokens',
+        'capabilities',
+        'reasoning_effort',
+        'source',
+      ]) {
+        expect(modelColumns).toContain(column);
       }
     } finally {
       db.close();
@@ -83,6 +98,39 @@ describe('db migrations', () => {
           )
           .run('prv_bad', 'gemini', 'Gemini', '{}', now, now),
       ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('keeps mcp servers independent of projects and threads', () => {
+    env = createTempEnv();
+    const db = openDb(join(env.root, 'tuffcode.db'));
+    migrate(db);
+    try {
+      const now = new Date().toISOString();
+      const insert = db.prepare(
+        'INSERT INTO mcp_servers (id, label, command, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      );
+      insert.run('mcp_one', 'filesystem', 'npx', now, now);
+      insert.run('mcp_two', 'github', 'npx', now, now);
+
+      expect(db.prepare('PRAGMA foreign_key_list(mcp_servers)').all()).toEqual([]);
+
+      db.prepare('INSERT INTO projects (id, name, path, created_at) VALUES (?, ?, ?, ?)').run(
+        'prj_mcp',
+        'MCP',
+        join(env.root, 'mcp-project'),
+        now,
+      );
+      db.prepare('DELETE FROM projects WHERE id = ?').run('prj_mcp');
+
+      db.prepare('DELETE FROM mcp_servers WHERE id = ?').run('mcp_one');
+      const remaining = db
+        .prepare('SELECT id, args, env, enabled FROM mcp_servers ORDER BY id')
+        .all();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]).toEqual({ id: 'mcp_two', args: '[]', env: '{}', enabled: 1 });
     } finally {
       db.close();
     }

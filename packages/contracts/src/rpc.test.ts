@@ -2,16 +2,20 @@ import { describe, expect, it } from 'vitest';
 import {
   AdapterEventSchema,
   BrainEntrySchema,
+  BrainRelationSchema,
   ClientRequestSchema,
   CommandSchema,
   DEFAULT_SETTINGS,
   DiffFileSchema,
+  McpServerSchema,
   MessageSchema,
+  ModelCapabilitiesSchema,
   ModelSchema,
   PROTOCOL_VERSION,
   ProjectSchema,
   ProviderViewSchema,
   RPC_METHODS,
+  ReasoningEffortSchema,
   ReviewCommentSchema,
   RpcErrorCodeSchema,
   ServerEventFrameSchema,
@@ -29,6 +33,8 @@ import {
   type Command,
   type DiffFile,
   type Goal,
+  type McpServer,
+  type McpTool,
   type Message,
   type Model,
   type Project,
@@ -111,7 +117,32 @@ const model: Model = {
   label: 'Opus 4.5',
   contextWindow: 200000,
   maxOutputTokens: 8192,
+  capabilities: {
+    tools: true,
+    vision: true,
+    reasoning: true,
+    reasoningEfforts: ['low', 'medium', 'high'],
+  },
+  reasoningEffort: 'high',
   isDefault: true,
+};
+
+const mcpServer: McpServer = {
+  id: 'mcp-1',
+  label: 'filesystem',
+  command: 'npx',
+  args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:/work'],
+  env: { DEBUG: '1' },
+  cwd: null,
+  enabled: true,
+  createdAt: at,
+  updatedAt: at,
+};
+
+const mcpTool: McpTool = {
+  name: 'read_file',
+  description: 'Read one file from the allowed roots',
+  inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
 };
 
 const subagentView: SubagentView = {
@@ -337,6 +368,7 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
       usedTokens: 42000,
       maxTokens: 200000,
       percent: 0.21,
+      limitSource: 'model',
       compactedAt: at,
       segments: [
         { name: 'system', tokens: 640 },
@@ -413,6 +445,23 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     result: {},
   },
   'models.list': { params: { providerId: 'prov-claude' }, result: [model] },
+  'mcp.list': { params: {}, result: [mcpServer] },
+  'mcp.upsert': {
+    params: {
+      label: 'filesystem',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:/work'],
+      env: { DEBUG: '1' },
+      cwd: null,
+      enabled: true,
+    },
+    result: mcpServer,
+  },
+  'mcp.remove': { params: { id: 'mcp-1' }, result: {} },
+  'mcp.test': {
+    params: { id: 'mcp-1' },
+    result: { ok: true, detail: 'listed 1 tool', tools: [mcpTool] },
+  },
   'providers.models': {
     params: { providerId: 'prov-claude', refresh: true },
     result: { models: [model], source: 'sdk' },
@@ -465,6 +514,10 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
       edges: [{ from: 'b1', to: 'b2', relation: 'about' }],
     },
   },
+  'brain.link': {
+    params: { fromId: 'b1', toId: 'b2', relation: 'about' },
+    result: {},
+  },
   'memory.search': {
     params: { projectId: 'p1', query: 'emdash', limit: 8 },
     result: {
@@ -508,6 +561,7 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
   },
   'subagents.cancel': { params: { childId: 'child-1' }, result: {} },
   'subagents.list': { params: { threadId: 't1' }, result: [subagentView] },
+  'subagents.listAll': { params: {}, result: [subagentView] },
   'commands.list': { params: { projectId: 'p1' }, result: [command] },
   'commands.run': {
     params: { threadId: 't1', input: '/context' },
@@ -533,6 +587,7 @@ const expectedMethods: RpcMethod[] = [
   'app.health',
   'brain.delete',
   'brain.graph',
+  'brain.link',
   'brain.list',
   'brain.preview',
   'brain.upsert',
@@ -553,6 +608,10 @@ const expectedMethods: RpcMethod[] = [
   'git.commit',
   'git.pr',
   'git.push',
+  'mcp.list',
+  'mcp.remove',
+  'mcp.test',
+  'mcp.upsert',
   'memory.search',
   'messages.list',
   'models.list',
@@ -573,6 +632,7 @@ const expectedMethods: RpcMethod[] = [
   'skills.list',
   'subagents.cancel',
   'subagents.list',
+  'subagents.listAll',
   'subagents.spawn',
   'terminal.close',
   'terminal.input',
@@ -666,8 +726,8 @@ function parseCommandRunResult(result: unknown) {
 }
 
 describe('rpc methods', () => {
-  it('exposes exactly 58 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(58);
+  it('exposes exactly 64 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(64);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
@@ -720,6 +780,7 @@ describe('rpc methods', () => {
         usedTokens: 0,
         maxTokens: 200000,
         percent: 0,
+        limitSource: 'default',
         segments: [],
       }).success,
     ).toBe(true);
@@ -734,6 +795,41 @@ describe('rpc methods', () => {
         kind: 'openai-compatible',
         label: 'Local',
         config: { contextWindow: 200000, maxOutputTokens: 8192, baseUrl: 'http://127.0.0.1:1/v1' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts the round 3 methods with optional fields omitted', () => {
+    expect(methods['mcp.list'].params.safeParse({}).success).toBe(true);
+    expect(methods['mcp.list'].result.safeParse([]).success).toBe(true);
+    expect(methods['mcp.upsert'].params.safeParse({ label: 'fs', command: 'npx' }).success).toBe(
+      true,
+    );
+    expect(
+      methods['mcp.upsert'].params.safeParse({ id: 'mcp-1', label: 'fs', command: 'npx' }).success,
+    ).toBe(true);
+    expect(
+      methods['mcp.test'].result.safeParse({ ok: false, detail: 'spawn failed', tools: [] }).success,
+    ).toBe(true);
+    expect(methods['subagents.listAll'].result.safeParse([]).success).toBe(true);
+    expect(
+      methods['brain.link'].params.safeParse({ fromId: 'b1', toId: 'b2', relation: 'caused' })
+        .success,
+    ).toBe(true);
+    expect(
+      methods['providers.upsert'].params.safeParse({
+        kind: 'openai-compatible',
+        label: 'Local',
+        config: {
+          contextWindow: 200000,
+          capabilities: {
+            tools: true,
+            vision: false,
+            reasoning: true,
+            reasoningEfforts: ['low', 'high'],
+          },
+          reasoningEffort: 'medium',
+        },
       }).success,
     ).toBe(true);
   });
@@ -939,6 +1035,18 @@ describe('rpc methods', () => {
         'memory.search',
         'result',
         { entries: [{ id: 'b1', kind: 'idea', text: 'x', score: 1, reason: 'r' }] },
+      ],
+      ['mcp.upsert', 'params', { label: '', command: 'npx' }],
+      ['mcp.upsert', 'params', { label: 'fs', command: '' }],
+      ['mcp.upsert', 'params', { label: 'fs', command: 'npx', env: { TOKEN: 7 } }],
+      ['mcp.upsert', 'params', { label: 'fs', command: 'npx', args: 'C:/work' }],
+      ['mcp.test', 'result', { ok: true, detail: 'x', tools: [{ name: '', inputSchema: {} }] }],
+      ['brain.link', 'params', { fromId: 'b1', toId: 'b2', relation: 'related-to' }],
+      ['brain.link', 'params', { fromId: '', toId: 'b2', relation: 'about' }],
+      [
+        'threads.context',
+        'result',
+        { usedTokens: 1, maxTokens: 200000, percent: 0.5, limitSource: 'guess', segments: [] },
       ],
     ];
 
@@ -1401,12 +1509,70 @@ describe('entity schemas', () => {
       ...model,
       contextWindow: null,
     });
-    expect(ModelSchema.safeParse({ ...model, maxOutputTokens: null }).success).toBe(false);
+    expect(ModelSchema.parse({ ...model, maxOutputTokens: null })).toEqual({
+      ...model,
+      maxOutputTokens: null,
+    });
     expect(ModelSchema.safeParse({ ...model, contextWindow: 0 }).success).toBe(false);
     expect(ModelSchema.safeParse({ ...model, contextWindow: -1 }).success).toBe(false);
     expect(ModelSchema.safeParse({ ...model, contextWindow: 1.5 }).success).toBe(false);
     expect(ModelSchema.safeParse({ ...model, maxOutputTokens: 0 }).success).toBe(false);
     expect(ModelSchema.safeParse({ ...model, maxOutputTokens: 255.5 }).success).toBe(false);
+  });
+
+  it('carries model capabilities and a reasoning effort when the row knows them', () => {
+    expect(ModelSchema.parse({ ...model, capabilities: null })).toEqual({
+      ...model,
+      capabilities: null,
+    });
+    expect(ModelSchema.parse({ ...model, reasoningEffort: null })).toEqual({
+      ...model,
+      reasoningEffort: null,
+    });
+    expect(
+      ModelCapabilitiesSchema.parse({
+        tools: true,
+        vision: false,
+        reasoning: true,
+        reasoningEfforts: ['low', 'high'],
+      }),
+    ).toEqual({ tools: true, vision: false, reasoning: true, reasoningEfforts: ['low', 'high'] });
+    expect(ReasoningEffortSchema.options).toEqual(['none', 'minimal', 'low', 'medium', 'high']);
+    expect(ModelSchema.safeParse({ ...model, reasoningEffort: 'turbo' }).success).toBe(false);
+    expect(
+      ModelSchema.safeParse({
+        ...model,
+        capabilities: { tools: true, vision: false, reasoning: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelSchema.safeParse({
+        ...model,
+        capabilities: { tools: true, vision: false, reasoning: true, reasoningEfforts: [1] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('round-trips an MCP server and rejects empty labels or commands', () => {
+    expect(McpServerSchema.parse(mcpServer)).toEqual(mcpServer);
+    expect(McpServerSchema.parse({ ...mcpServer, cwd: 'C:/work', enabled: false })).toEqual({
+      ...mcpServer,
+      cwd: 'C:/work',
+      enabled: false,
+    });
+    expect(McpServerSchema.safeParse({ ...mcpServer, label: '' }).success).toBe(false);
+    expect(McpServerSchema.safeParse({ ...mcpServer, command: '' }).success).toBe(false);
+    expect(McpServerSchema.safeParse({ ...mcpServer, args: 'C:/work' }).success).toBe(false);
+    expect(McpServerSchema.safeParse({ ...mcpServer, env: { TOKEN: 7 } }).success).toBe(false);
+    expect(McpServerSchema.safeParse({ ...mcpServer, updatedAt: 'yesterday' }).success).toBe(false);
+  });
+
+  it('accepts only the four brain relations', () => {
+    expect(BrainRelationSchema.options).toEqual(['about', 'part-of', 'supersedes', 'caused']);
+    for (const relation of ['about', 'part-of', 'supersedes', 'caused']) {
+      expect(BrainRelationSchema.safeParse(relation).success, relation).toBe(true);
+    }
+    expect(BrainRelationSchema.safeParse('related-to').success).toBe(false);
   });
 
   it('rejects entities with invalid enum values', () => {

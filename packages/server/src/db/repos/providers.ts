@@ -1,9 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
+  ModelCapabilitiesSchema,
   ProviderConfigSchema,
+  ReasoningEffortSchema,
   type Model,
+  type ModelCapabilities,
   type ProviderKind,
   type ProviderView,
+  type ReasoningEffort,
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
 import type { z } from 'zod';
@@ -37,10 +41,19 @@ export interface UpsertProviderInput {
   enabled?: boolean;
 }
 
+/**
+ * One row of the discovered set. The metadata fields are optional because discovery
+ * paths that know nothing about them leave the stored columns untouched as unknown;
+ * `replaceModels` writes `NULL` when a field is absent.
+ */
 export interface ReplaceModelInput {
   modelId: string;
   label: string;
   contextWindow: number | null;
+  maxOutputTokens?: number | null;
+  capabilities?: ModelCapabilities | null;
+  reasoningEffort?: ReasoningEffort | null;
+  source?: string | null;
   isDefault: boolean;
 }
 
@@ -74,6 +87,24 @@ function mapRecord(row: SqlRow): ProviderRecord {
   };
 }
 
+/**
+ * Reads the stored capability object. A `NULL` column means the row predates metadata
+ * discovery and reads as unknown (omitted); a value that fails the schema reads as
+ * `null`, so a corrupt row never hides the model.
+ */
+function parseCapabilities(row: SqlRow): ModelCapabilities | null | undefined {
+  if (nullableText(row, 'capabilities') === null) return undefined;
+  const parsed = ModelCapabilitiesSchema.safeParse(json(row, 'capabilities'));
+  return parsed.success ? parsed.data : null;
+}
+
+function parseReasoningEffort(row: SqlRow): ReasoningEffort | null | undefined {
+  const raw = nullableText(row, 'reasoning_effort');
+  if (raw === null) return undefined;
+  const parsed = ReasoningEffortSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 export function toProviderView(record: ProviderRecord): ProviderView {
   return {
     id: record.id,
@@ -100,11 +131,11 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
   );
   const removeRow = db.prepare('DELETE FROM providers WHERE id = ?');
   const selectModels = db.prepare(
-    'SELECT provider_id, model_id, label, context_window, is_default FROM provider_models WHERE provider_id = ? ORDER BY is_default DESC, label ASC',
+    'SELECT provider_id, model_id, label, context_window, max_output_tokens, capabilities, reasoning_effort, source, is_default FROM provider_models WHERE provider_id = ? ORDER BY is_default DESC, label ASC',
   );
   const deleteModels = db.prepare('DELETE FROM provider_models WHERE provider_id = ?');
   const insertModel = db.prepare(
-    'INSERT INTO provider_models (provider_id, model_id, label, context_window, is_default, refreshed_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO provider_models (provider_id, model_id, label, context_window, max_output_tokens, capabilities, reasoning_effort, source, is_default, refreshed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const selectRefreshedAt = db.prepare(
     'SELECT MAX(refreshed_at) AS refreshed_at FROM provider_models WHERE provider_id = ?',
@@ -118,11 +149,17 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
   function listModels(providerId: string): Model[] {
     return selectModels.all(providerId).map((row) => {
       const record = asRow(row);
+      const maxOutputTokens = nullableInteger(record, 'max_output_tokens');
+      const capabilities = parseCapabilities(record);
+      const reasoningEffort = parseReasoningEffort(record);
       return {
         providerId: text(record, 'provider_id'),
         modelId: text(record, 'model_id'),
         label: text(record, 'label'),
         contextWindow: nullableInteger(record, 'context_window'),
+        ...(maxOutputTokens === null ? {} : { maxOutputTokens }),
+        ...(capabilities === undefined ? {} : { capabilities }),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         isDefault: boolean(record, 'is_default'),
       };
     });
@@ -181,6 +218,12 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
             model.modelId,
             model.label,
             model.contextWindow,
+            model.maxOutputTokens ?? null,
+            model.capabilities === undefined || model.capabilities === null
+              ? null
+              : JSON.stringify(model.capabilities),
+            model.reasoningEffort ?? null,
+            model.source ?? null,
             model.isDefault ? 1 : 0,
             refreshedAt,
           );
