@@ -314,7 +314,7 @@ export function CouncilBoard({
                   className={cn(
                     'absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded-lg border bg-background px-2 text-left outline-none',
                     'transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring',
-                    node.kind === 'reviewer' ? 'py-0.5' : 'py-1.5',
+                    node.kind === 'reviewer' ? 'border-dashed py-0.5' : 'py-1.5',
                     selected ? 'ring-2 ring-ring' : 'hover:bg-accent/60',
                     opensThread ? 'cursor-pointer' : 'cursor-default',
                   )}
@@ -340,9 +340,9 @@ export function CouncilBoard({
                   onBlur={() => setHoveredId((current) => (current === node.id ? null : current))}
                 >
                   {node.kind === 'reviewer' ? (
-                    <span className="flex min-w-0 items-center gap-1 text-2xs">
+                    <span className="flex min-w-0 items-center gap-1">
                       {node.verdict === null ? (
-                        <span className="shrink-0 font-medium" style={{ color: accent }}>
+                        <span className="shrink-0 text-2xs font-medium" style={{ color: accent }}>
                           {reviewerChipLabel(node)}
                         </span>
                       ) : (
@@ -350,16 +350,6 @@ export function CouncilBoard({
                           {reviewerChipLabel(node)}
                         </Badge>
                       )}
-                      {node.model !== null ? (
-                        <>
-                          <span aria-hidden="true" className="text-muted-foreground/40">
-                            ·
-                          </span>
-                          <span className="truncate font-mono text-muted-foreground">
-                            {node.model}
-                          </span>
-                        </>
-                      ) : null}
                     </span>
                   ) : (
                     <>

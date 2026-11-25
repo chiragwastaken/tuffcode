@@ -1,6 +1,21 @@
-import type { SubagentType, ThreadEventRow, ThreadStatus } from '@tuffcode/contracts';
+import type {
+  GoalState,
+  RpcResult,
+  SubagentType,
+  TaskState,
+  ThreadEventRow,
+  ThreadStatus,
+} from '@tuffcode/contracts';
 import type { SubagentChild } from '../../store/app-store';
 import { toolHeadline } from '../thread/turn-blocks';
+import {
+  GOAL_STATE_LABEL,
+  GOAL_STATE_TONE,
+  TASK_STATE_LABEL,
+  TASK_STATE_TONE,
+  isGoalTerminal,
+  type CouncilTone,
+} from './council-model';
 
 /**
  * Pure helpers behind the Activity tab and its header badge: which tool calls
@@ -263,4 +278,48 @@ export function runningElapsedMs(startedAt: string | null, nowMs: number): numbe
   const start = Date.parse(startedAt);
   if (Number.isNaN(start) || nowMs < start) return null;
   return nowMs - start;
+}
+
+/** One task line in the Activity panel's Council section. */
+export interface CouncilActivityTask {
+  id: string;
+  title: string;
+  state: TaskState;
+  stateLabel: string;
+  tone: CouncilTone;
+}
+
+/** The Council section of the Activity panel: the goal and its tasks. */
+export interface CouncilActivity {
+  goalState: GoalState;
+  goalLabel: string;
+  goalTone: CouncilTone;
+  /** True until the goal reaches done, failed or cancelled. */
+  goalActive: boolean;
+  tasks: CouncilActivityTask[];
+}
+
+/**
+ * The Council section reads straight from a `council.status` snapshot: the goal
+ * state and one row per planned task, in plan order. A thread without a goal has
+ * no section, and a goal that is still running keeps the panel from claiming
+ * that nothing is running.
+ */
+export function councilActivityOf(
+  status: RpcResult<'council.status'> | null,
+): CouncilActivity | null {
+  if (status === null) return null;
+  return {
+    goalState: status.goal.state,
+    goalLabel: GOAL_STATE_LABEL[status.goal.state],
+    goalTone: GOAL_STATE_TONE[status.goal.state],
+    goalActive: !isGoalTerminal(status.goal.state),
+    tasks: status.tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      state: task.state,
+      stateLabel: TASK_STATE_LABEL[task.state],
+      tone: TASK_STATE_TONE[task.state],
+    })),
+  };
 }

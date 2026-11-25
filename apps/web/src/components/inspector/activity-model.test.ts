@@ -1,8 +1,9 @@
-import type { AdapterEvent, ThreadEventRow } from '@tuffcode/contracts';
+import type { AdapterEvent, Goal, RpcResult, Task, ThreadEventRow } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SubagentChild } from '../../store/app-store';
 import {
   activityCount,
+  councilActivityOf,
   countRunningSubagents,
   finishedToolRows,
   runningElapsedMs,
@@ -313,5 +314,78 @@ describe('runningElapsedMs', () => {
     expect(runningElapsedMs(null, now)).toBeNull();
     expect(runningElapsedMs('not-a-date', now)).toBeNull();
     expect(runningElapsedMs('2026-11-25T12:00:10.000Z', now)).toBeNull();
+  });
+});
+
+function goal(state: Goal['state']): Goal {
+  return {
+    id: 'gol_1',
+    threadId: 'thr_1',
+    text: 'Ship the round',
+    autonomy: 'manual',
+    state,
+    createdAt: '2026-11-25T12:00:00.000Z',
+    reportedAt: null,
+  };
+}
+
+function planTask(id: string, title: string, state: Task['state']): Task {
+  return {
+    id,
+    goalId: 'gol_1',
+    threadId: `thr_${id}`,
+    title,
+    brief: `Do ${title}.`,
+    dependsOn: [],
+    state,
+    authorProvider: 'p1',
+    authorModel: 'model-1',
+    reviewerProvider: null,
+    reviewerModel: null,
+    critical: false,
+    round: 0,
+    error: null,
+    createdAt: '2026-11-25T12:00:00.000Z',
+    updatedAt: '2026-11-25T12:00:00.000Z',
+  };
+}
+
+describe('councilActivityOf', () => {
+  it('has no Council section before a goal exists', () => {
+    expect(councilActivityOf(null)).toBeNull();
+  });
+
+  it('lists the goal state and every task with its own state', () => {
+    const status: RpcResult<'council.status'> = {
+      goal: goal('running'),
+      tasks: [
+        planTask('tsk_1', 'Build api', 'running'),
+        planTask('tsk_2', 'Build ui', 'queued'),
+      ],
+      reviews: [],
+    };
+
+    const council = councilActivityOf(status);
+
+    expect(council).toMatchObject({
+      goalState: 'running',
+      goalLabel: 'Running',
+      goalTone: 'primary',
+      goalActive: true,
+    });
+    expect(council?.tasks).toEqual([
+      { id: 'tsk_1', title: 'Build api', state: 'running', stateLabel: 'Running', tone: 'primary' },
+      { id: 'tsk_2', title: 'Build ui', state: 'queued', stateLabel: 'Queued', tone: 'neutral' },
+    ]);
+  });
+
+  it('keeps the goal active until it reaches a terminal state', () => {
+    expect(
+      councilActivityOf({ goal: goal('reviewing'), tasks: [], reviews: [] })?.goalActive,
+    ).toBe(true);
+    for (const state of ['done', 'failed', 'cancelled'] as const) {
+      const council = councilActivityOf({ goal: goal(state), tasks: [], reviews: [] });
+      expect(council?.goalActive).toBe(false);
+    }
   });
 });
