@@ -1,10 +1,14 @@
 import type { Goal, Review, Task, TaskState } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  COLUMN_ROW_LIMIT,
+  COLUMN_WRAP_GAP,
+  REVIEWER_HEIGHT,
   TASK_HEIGHT,
   TASK_WIDTH,
   boardLayoutFromStatus,
   clampZoom,
+  councilBoardCounts,
   edgePath,
   fitViewport,
   goalStateColor,
@@ -51,9 +55,9 @@ function goal(state: Goal['state'] = 'running'): Goal {
   };
 }
 
-function review(taskId: string, verdict: Review['verdict']): Review {
+function review(taskId: string, verdict: Review['verdict'], round = 0): Review {
   return {
-    id: `rev_${taskId}_${verdict}`,
+    id: `rev_${taskId}_${verdict}_${round}`,
     taskId,
     providerId: 'prov_1',
     modelId: 'reviewer-1',
@@ -183,6 +187,120 @@ describe('layoutCouncilBoard', () => {
   it('labels a reviewer with no verdict from the task state', () => {
     const layout = layoutCouncilBoard(goal(), [task('A', [], 'reviewing')], []);
     expect(reviewerLabel(nodeById(layout.nodes, 'reviewer:tsk_A'))).toBe('Reviewing');
+  });
+});
+
+/**
+ * A full plan: six independent roots so column 0 wraps, three workers one level
+ * deep, three audits two levels deep, and three review rounds per task.
+ */
+const FULL_PLAN_ROOTS = ['Schema', 'Api', 'Ui', 'Docs', 'Auth', 'Search'];
+const FULL_PLAN: Task[] = [
+  ...FULL_PLAN_ROOTS.map((title) => task(title)),
+  task('Wire api', ['Api']),
+  task('Render ui', ['Ui']),
+  task('Index search', ['Search']),
+  task('Audit api', ['Wire api']),
+  task('Audit ui', ['Render ui']),
+  task('Audit search', ['Index search']),
+];
+const FULL_PLAN_REVIEWS: Review[] = FULL_PLAN.flatMap((entry) =>
+  (['changes-requested', 'escalate', 'pass'] as const).map((verdict, round) =>
+    review(entry.id, verdict, round),
+  ),
+);
+
+describe('layoutCouncilBoard at plan scale', () => {
+  it('keeps all twelve tasks inside the bounds without overlapping', () => {
+    const layout = layoutCouncilBoard(goal(), FULL_PLAN, FULL_PLAN_REVIEWS);
+
+    expect(layout.nodes.filter((node) => node.kind === 'task')).toHaveLength(12);
+    expect(layout.columns).toBe(3);
+
+    for (const node of layout.nodes) {
+      expect(node.x).toBeGreaterThanOrEqual(0);
+      expect(node.y).toBeGreaterThanOrEqual(0);
+      expect(node.x + node.width).toBeLessThanOrEqual(layout.width);
+      expect(node.y + node.height).toBeLessThanOrEqual(layout.height);
+    }
+
+    for (let left = 0; left < layout.nodes.length; left += 1) {
+      for (let right = left + 1; right < layout.nodes.length; right += 1) {
+        const first = layout.nodes[left];
+        const second = layout.nodes[right];
+        if (first === undefined || second === undefined) continue;
+        const clash =
+          first.x < second.x + second.width &&
+          second.x < first.x + first.width &&
+          first.y < second.y + second.height &&
+          second.y < first.y + first.height;
+        expect(clash, `${first.id} overlaps ${second.id}`).toBe(false);
+      }
+    }
+  });
+
+  it('wraps a column past the row limit with the wrap gap', () => {
+    const layout = layoutCouncilBoard(goal(), FULL_PLAN, FULL_PLAN_REVIEWS);
+    const roots = layout.nodes
+      .filter((node) => node.kind === 'task' && node.column === 0)
+      .toSorted((left, right) => left.y - right.y);
+
+    expect(roots).toHaveLength(FULL_PLAN_ROOTS.length);
+    const lastOfBand = roots[COLUMN_ROW_LIMIT - 1];
+    const firstOfNextBand = roots[COLUMN_ROW_LIMIT];
+    if (lastOfBand === undefined || firstOfNextBand === undefined) {
+      throw new Error('the root column did not wrap');
+    }
+    expect(firstOfNextBand.y - (lastOfBand.y + TASK_HEIGHT + 6 + REVIEWER_HEIGHT)).toBe(
+      COLUMN_WRAP_GAP,
+    );
+  });
+
+  it('shows the latest of three review rounds on every reviewer chip', () => {
+    const layout = layoutCouncilBoard(goal(), FULL_PLAN, FULL_PLAN_REVIEWS);
+    const reviewers = layout.nodes.filter((node) => node.kind === 'reviewer');
+
+    expect(reviewers).toHaveLength(FULL_PLAN.length);
+    for (const node of reviewers) expect(node.verdict).toBe('pass');
+  });
+});
+
+describe('councilBoardCounts', () => {
+  it('partitions every task state into the legend buckets', () => {
+    const tasks: Task[] = [
+      task('Queued', [], 'queued'),
+      task('Provisioning', [], 'provisioning'),
+      task('Running', [], 'running'),
+      task('Reviewing', [], 'reviewing'),
+      task('Pr open', [], 'pr-open'),
+      task('Changes', [], 'changes-requested'),
+      task('Passed', [], 'passed'),
+      task('Merged', [], 'merged'),
+      task('Failed', [], 'failed'),
+      task('Cancelled', [], 'cancelled'),
+      task('Blocked', [], 'blocked'),
+      task('Captain', [], 'awaiting-captain'),
+    ];
+
+    expect(councilBoardCounts(goal(), tasks)).toEqual({
+      planner: 1,
+      queued: 2,
+      running: 4,
+      passed: 2,
+      failed: 2,
+      blocked: 2,
+    });
+  });
+
+  it('has no planner before a goal exists', () => {
+    expect(councilBoardCounts(null, [])).toEqual({
+      planner: 0,
+      queued: 0,
+      running: 0,
+      passed: 0,
+      failed: 0,
+      blocked: 0,
+    });
   });
 });
 

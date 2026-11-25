@@ -1,15 +1,13 @@
-import type { AdapterEvent, ThreadEventRow } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SubagentChild } from '../../store/app-store';
 import {
-  connectorGeometry,
-  placeSubagents,
+  SUBAGENT_CHIP_LIMIT,
   selectActiveSubagent,
   subagentElapsedMs,
-  subagentStripLabel,
-  subagentTypeCounts,
+  subagentFinishedLabel,
+  subagentStripChips,
   subagentsOfThread,
-  turnOrdinals,
+  type SubagentChip,
 } from './subagent-model';
 
 const T0 = '2026-01-01T00:00:00.000Z';
@@ -31,28 +29,13 @@ function child(overrides: Partial<SubagentChild> & { childId: string }): Subagen
   };
 }
 
-function row(seq: number, payload: AdapterEvent): ThreadEventRow {
-  return {
-    id: seq + 1,
-    threadId: 'thread-1',
-    seq,
-    type: payload.type,
-    payload,
-    createdAt: T0,
-  };
+function settled(childId: string): SubagentChild {
+  return child({ childId, status: 'done', finishedAt: T0 });
 }
 
-function toolStarted(
-  turnId: string,
-  toolCallId: string,
-  name: string,
-  input: unknown,
-): AdapterEvent {
-  return { type: 'tool.started', turnId, toolCallId, name, input };
-}
-
-function toolFinished(turnId: string, toolCallId: string, output: string): AdapterEvent {
-  return { type: 'tool.finished', turnId, toolCallId, output, isError: false };
+/** Chip identities in row order, with the two aggregate chips named by kind. */
+function chipIds(chips: readonly SubagentChip[]): string[] {
+  return chips.map((chip) => (chip.kind === 'child' ? chip.child.childId : chip.kind));
 }
 
 describe('selectActiveSubagent', () => {
@@ -84,30 +67,61 @@ describe('subagentsOfThread', () => {
   });
 });
 
-describe('subagentStripLabel', () => {
-  it('counts running children first', () => {
-    const running = [child({ childId: 'a' }), child({ childId: 'b', type: 'worker' })];
-    const settled = child({ childId: 'c', status: 'done', finishedAt: T0 });
+describe('subagentStripChips', () => {
+  it('draws one chip per child while the row fits four', () => {
+    const chips = subagentStripChips([
+      child({ childId: 'a' }),
+      child({ childId: 'b', type: 'worker' }),
+      settled('c'),
+      child({ childId: 'd', type: 'reviewer' }),
+    ]);
 
-    expect(subagentStripLabel([...running, settled])).toBe('2 subagents running');
-    expect(subagentStripLabel([settled])).toBe('1 subagent');
-    expect(subagentStripLabel([running[0] as SubagentChild])).toBe('1 subagent running');
-    expect(subagentStripLabel([settled, settled, settled])).toBe('3 subagents');
+    expect(SUBAGENT_CHIP_LIMIT).toBe(4);
+    expect(chipIds(chips)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('keeps the first three running children and folds the rest into a count', () => {
+    const chips = subagentStripChips([
+      child({ childId: 'r1' }),
+      child({ childId: 'r2' }),
+      child({ childId: 'r3' }),
+      child({ childId: 'r4' }),
+      settled('s1'),
+    ]);
+
+    expect(chipIds(chips)).toEqual(['r1', 'r2', 'r3', 'more']);
+    expect(chips[3]).toEqual({ kind: 'more', count: 2, childId: 'r1' });
+  });
+
+  it('keeps only the running children when they are the ones that fit', () => {
+    const chips = subagentStripChips([
+      settled('s1'),
+      child({ childId: 'r1' }),
+      child({ childId: 'r2' }),
+      settled('s2'),
+      settled('s3'),
+      settled('s4'),
+    ]);
+
+    expect(chipIds(chips)).toEqual(['r1', 'r2', 'more']);
+    expect(chips[2]).toEqual({ kind: 'more', count: 4, childId: 'r1' });
+  });
+
+  it('folds a settled set into one finished chip on the last child', () => {
+    expect(subagentStripChips([settled('s1'), settled('s2'), settled('s3')])).toEqual([
+      { kind: 'finished', count: 3, label: '3 subagents finished', childId: 's3' },
+    ]);
+  });
+
+  it('has no chips before the first spawn', () => {
+    expect(subagentStripChips([])).toEqual([]);
   });
 });
 
-describe('subagentTypeCounts', () => {
-  it('groups one icon per type in first-seen order', () => {
-    const counts = subagentTypeCounts([
-      child({ childId: 'a', type: 'explorer' }),
-      child({ childId: 'b', type: 'worker' }),
-      child({ childId: 'c', type: 'explorer' }),
-    ]);
-
-    expect(counts).toEqual([
-      { type: 'explorer', count: 2 },
-      { type: 'worker', count: 1 },
-    ]);
+describe('subagentFinishedLabel', () => {
+  it('counts one child and many children', () => {
+    expect(subagentFinishedLabel(1)).toBe('1 subagent finished');
+    expect(subagentFinishedLabel(4)).toBe('4 subagents finished');
   });
 });
 
@@ -126,99 +140,5 @@ describe('subagentElapsedMs', () => {
       ),
     ).toBe(4500);
     expect(subagentElapsedMs(child({ childId: 'a', startedAt: null }), 1)).toBeNull();
-  });
-});
-
-describe('turnOrdinals', () => {
-  it('numbers turns by first appearance', () => {
-    const ordinals = turnOrdinals([
-      row(0, { type: 'turn.started', turnId: 'turn-a' }),
-      row(1, toolStarted('turn-a', 'call-1', 'bash', {})),
-      row(2, { type: 'turn.finished', turnId: 'turn-a', reason: 'complete' }),
-      row(3, { type: 'turn.started', turnId: 'turn-b' }),
-    ]);
-
-    expect(ordinals.get('turn-a')).toBe(1);
-    expect(ordinals.get('turn-b')).toBe(2);
-  });
-});
-
-describe('placeSubagents', () => {
-  it('attributes a settled spawn by the child id in the tool output', () => {
-    const events = [
-      row(0, { type: 'turn.started', turnId: 'turn-1' }),
-      row(1, toolStarted('turn-1', 'call-1', 'subagent', { type: 'explorer', task: 'map it' })),
-      row(
-        2,
-        toolFinished(
-          'turn-1',
-          'call-1',
-          'subagent child-abc (explorer) running. Poll subagents.list for its summary.',
-        ),
-      ),
-    ];
-
-    const placement = placeSubagents([child({ childId: 'child-abc', task: 'map it' })], events);
-
-    expect(placement.unplaced).toEqual([]);
-    expect(placement.groups).toHaveLength(1);
-    expect(placement.groups[0]?.turnId).toBe('turn-1');
-    expect(placement.groups[0]?.label).toBe('Turn 1');
-  });
-
-  it('attributes a running spawn by the task text and does not double-claim a tool', () => {
-    const events = [
-      row(0, toolStarted('turn-1', 'call-1', 'subagent', { task: 'map the project' })),
-      row(1, toolStarted('turn-2', 'call-2', 'subagent', { task: 'review the diff' })),
-    ];
-
-    const placement = placeSubagents(
-      [
-        child({ childId: 'child-1', task: 'review the diff' }),
-        child({ childId: 'child-2', task: 'map the project' }),
-      ],
-      events,
-    );
-
-    expect(placement.groups.map((group) => [group.turnId, group.children[0]?.childId])).toEqual([
-      ['turn-1', 'child-2'],
-      ['turn-2', 'child-1'],
-    ]);
-  });
-
-  it('leaves a child without a spawn row unplaced', () => {
-    const placement = placeSubagents([child({ childId: 'child-1', task: 'orphan' })], []);
-    expect(placement.groups).toEqual([]);
-    expect(placement.unplaced.map((entry) => entry.childId)).toEqual(['child-1']);
-  });
-});
-
-describe('connectorGeometry', () => {
-  it('draws a cubic from the card right edge to the pane header left edge', () => {
-    const geometry = connectorGeometry(
-      { left: 100, top: 200, width: 200, height: 60 },
-      { left: 800, top: 100, width: 400, height: 40 },
-      { left: 0, top: 0, width: 1200, height: 900 },
-    );
-
-    expect(geometry).toEqual({
-      x1: 300,
-      y1: 230,
-      x2: 800,
-      y2: 120,
-      d: 'M 300 230 C 348 230, 752 120, 800 120',
-    });
-  });
-
-  it('is relative to the pane origin and keeps a 16px minimum bend', () => {
-    const geometry = connectorGeometry(
-      { left: 700, top: 200, width: 70, height: 60 },
-      { left: 800, top: 100, width: 400, height: 40 },
-      { left: 780, top: 0, width: 420, height: 900 },
-    );
-
-    expect(geometry.x1).toBe(-10);
-    expect(geometry.x2).toBe(20);
-    expect(geometry.d).toBe('M -10 230 C 6 230, 4 120, 20 120');
   });
 });

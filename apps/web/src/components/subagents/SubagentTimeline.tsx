@@ -1,4 +1,5 @@
 import type { MarkdownTheme } from '@tuffcode/ui';
+import { ChevronRight } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import type { SubagentChild } from '../../store/app-store';
 import { groupTimeline } from '../thread/grouping';
@@ -38,7 +39,7 @@ export interface SubagentTimelineProps {
   theme: MarkdownTheme;
 }
 
-/** The child's own turn: its task, then its reasoning, tools and answer. */
+/** The child's own turn: its task behind a disclosure, then its reasoning, tools and answer. */
 export function SubagentTimeline({ child, theme }: SubagentTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -70,15 +71,25 @@ export function SubagentTimeline({ child, theme }: SubagentTimelineProps) {
         pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
       }}
     >
-      <div className="mb-3 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-        <div className="mb-1 text-2xs font-medium text-muted-foreground">Task</div>
+      <details
+        data-testid="subagent-task-disclosure"
+        className="group mb-3 rounded-md border border-border bg-muted/30"
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-1 px-2.5 py-1.5 text-2xs font-medium text-muted-foreground select-none hover:text-foreground">
+          <ChevronRight
+            aria-hidden="true"
+            strokeWidth={1.75}
+            className="size-3 shrink-0 transition-transform duration-150 group-open:rotate-90"
+          />
+          Task brief
+        </summary>
         <p
           data-testid="subagent-task"
-          className="whitespace-pre-wrap text-xs leading-5 text-foreground"
+          className="border-t border-border/60 px-2.5 py-2 text-xs leading-5 break-words whitespace-pre-wrap text-muted-foreground"
         >
           {child.task.length > 0 ? child.task : 'No task recorded for this child.'}
         </p>
-      </div>
+      </details>
 
       <div className="flex flex-col gap-2">
         {blocks.map((block) => (

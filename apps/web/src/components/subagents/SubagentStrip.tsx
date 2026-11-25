@@ -1,65 +1,119 @@
-import { ChevronRight } from 'lucide-react';
+import { Check } from 'lucide-react';
+import { StatusDot, cn } from '@tuffcode/ui';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/app-store';
+import { formatDuration } from '../thread/turn-blocks';
 import {
+  SUBAGENT_STATUS_TONE,
   SUBAGENT_TYPE_ICON,
   SUBAGENT_TYPE_LABEL,
   isRunningSubagent,
-  subagentStripLabel,
-  subagentTypeCounts,
+  runningSubagentCount,
+  subagentElapsedMs,
+  subagentStripChips,
   subagentsOfThread,
 } from './subagent-model';
+import { useSubagentClock } from './use-subagents';
 
 export interface SubagentStripProps {
   threadId: string;
   onOpen(childId: string): void;
 }
 
+const MORE_CHIP_CLASS =
+  'flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-2xs text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent hover:text-foreground';
+
 /**
- * What replaces the cards while the pane is closed: one compact row with the
- * running count and the types involved. Clicking opens the pane on live work.
+ * The dock above the composer, decision D40: one compact chip row with no task
+ * text, no model and no cards. Each chip opens the pane on its child; a crowded row
+ * folds the extra children into a count, and a fully settled set folds into one
+ * finished chip.
  */
 export function SubagentStrip({ threadId, onOpen }: SubagentStripProps) {
   const subagents = useAppStore(
     useShallow((state) => subagentsOfThread(state.subagents, threadId)),
   );
+  const now = useSubagentClock(subagents);
+  const chips = subagentStripChips(subagents);
 
-  if (subagents.length === 0) return null;
+  if (chips.length === 0) return null;
 
-  const target = subagents.find(isRunningSubagent) ?? subagents[0];
-  if (target === undefined) return null;
-  const types = subagentTypeCounts(subagents);
+  const running = runningSubagentCount(subagents);
 
   return (
     <div className="flex shrink-0 justify-center px-4 pt-1 pb-0.5">
-      <button
-        type="button"
+      <div
         data-testid="subagent-strip"
-        data-running={subagents.some(isRunningSubagent) ? 'true' : 'false'}
-        onClick={() => onOpen(target.childId)}
-        className="flex h-8 max-w-full items-center gap-2 rounded-full border border-border bg-card px-3 text-2xs text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent hover:text-foreground"
+        data-running={running > 0 ? 'true' : 'false'}
+        data-running-count={running}
+        data-child-count={subagents.length}
+        className="flex h-8 max-w-[var(--chat-content-max-width)] items-center gap-1 overflow-x-auto rounded-xl border border-border bg-card/60 px-1.5 py-1"
       >
-        <span className="flex items-center gap-1" aria-hidden="true">
-          {types.map(({ type, count }) => {
-            const Icon = SUBAGENT_TYPE_ICON[type];
+        {chips.map((chip) => {
+          if (chip.kind === 'finished') {
             return (
-              <span
-                key={type}
-                data-testid={`subagent-strip-type-${type}`}
-                title={`${SUBAGENT_TYPE_LABEL[type]}${count > 1 ? ` ×${count}` : ''}`}
-                className="flex items-center gap-0.5"
+              <button
+                key="finished"
+                type="button"
+                data-testid="subagent-strip-finished"
+                data-child-id={chip.childId}
+                onClick={() => onOpen(chip.childId)}
+                className={MORE_CHIP_CLASS}
               >
-                <Icon strokeWidth={1.75} className="size-3" />
-                {count > 1 ? <span className="tabular-nums">{count}</span> : null}
-              </span>
+                <Check aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0" />
+                <span className="truncate">{chip.label}</span>
+              </button>
             );
-          })}
-        </span>
-        <span data-testid="subagent-strip-label" className="truncate font-medium text-foreground">
-          {subagentStripLabel(subagents)}
-        </span>
-        <ChevronRight aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0" />
-      </button>
+          }
+
+          if (chip.kind === 'more') {
+            return (
+              <button
+                key="more"
+                type="button"
+                data-testid="subagent-strip-more"
+                data-child-id={chip.childId}
+                aria-label={`Open the running subagent, ${chip.count} more hidden`}
+                onClick={() => onOpen(chip.childId)}
+                className={MORE_CHIP_CLASS}
+              >
+                <span className="tabular-nums">+{chip.count} more</span>
+              </button>
+            );
+          }
+
+          const { child } = chip;
+          const Icon = SUBAGENT_TYPE_ICON[child.type];
+          const live = isRunningSubagent(child);
+          const elapsed = live ? formatDuration(subagentElapsedMs(child, now)) : '';
+
+          return (
+            <button
+              key={child.childId}
+              type="button"
+              data-testid="subagent-strip-chip"
+              data-child-id={child.childId}
+              data-subagent-type={child.type}
+              data-status={child.status}
+              aria-label={`Open the ${SUBAGENT_TYPE_LABEL[child.type]} subagent`}
+              onClick={() => onOpen(child.childId)}
+              className={cn(
+                'flex h-6 shrink-0 items-center gap-1 rounded-md border px-1.5 text-2xs transition-colors duration-150 ease-out',
+                live
+                  ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15'
+                  : 'border-transparent bg-muted/40 text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
+            >
+              <Icon aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0" />
+              <span className="max-w-24 truncate">{SUBAGENT_TYPE_LABEL[child.type]}</span>
+              {elapsed.length > 0 ? (
+                <span className="shrink-0 tabular-nums text-muted-foreground/70">{elapsed}</span>
+              ) : null}
+              <StatusDot status={SUBAGENT_STATUS_TONE[child.status]} className="shrink-0" />
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
