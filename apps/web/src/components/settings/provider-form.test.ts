@@ -4,6 +4,7 @@ import {
   buildProviderPayload,
   headersToText,
   parseHeadersText,
+  parseReasoningEfforts,
   providerDraftFromPreset,
   providerDraftFromView,
   updateModelLimit,
@@ -28,6 +29,11 @@ function draft(overrides: Partial<ProviderDraft> = {}): ProviderDraft {
     secret: 'sk-test',
     configDir: '',
     command: '',
+    contextWindow: '',
+    maxOutputTokens: '',
+    capabilities: { tools: true, vision: false, reasoning: false },
+    reasoningEfforts: '',
+    reasoningEffort: '',
     ...overrides,
   };
 }
@@ -47,6 +53,11 @@ function subscriptionDraft(overrides: Partial<ProviderDraft> = {}): ProviderDraf
     secret: '',
     configDir: '',
     command: '',
+    contextWindow: '',
+    maxOutputTokens: '',
+    capabilities: { tools: true, vision: false, reasoning: false },
+    reasoningEfforts: '',
+    reasoningEffort: '',
     ...overrides,
   };
 }
@@ -352,6 +363,11 @@ describe('providerDraftFromView', () => {
       secret: '',
       configDir: '',
       command: '',
+      contextWindow: '',
+      maxOutputTokens: '',
+      capabilities: { tools: true, vision: false, reasoning: false },
+      reasoningEfforts: '',
+      reasoningEffort: '',
     });
   });
 
@@ -367,7 +383,36 @@ describe('providerDraftFromView', () => {
       secret: '',
       configDir: '',
       command: '',
+      contextWindow: '',
+      maxOutputTokens: '',
+      capabilities: { tools: true, vision: false, reasoning: false },
+      reasoningEfforts: '',
+      reasoningEffort: '',
     });
+  });
+
+  it('reads stored advanced options back into the draft', () => {
+    const result = providerDraftFromView({
+      ...providerView,
+      config: {
+        ...providerView.config,
+        contextWindow: 64_000,
+        maxOutputTokens: 8_192,
+        capabilities: {
+          tools: true,
+          vision: true,
+          reasoning: true,
+          reasoningEfforts: ['low', 'high'],
+        },
+        reasoningEffort: 'high',
+      },
+    });
+
+    expect(result.contextWindow).toBe('64000');
+    expect(result.maxOutputTokens).toBe('8192');
+    expect(result.capabilities).toEqual({ tools: true, vision: true, reasoning: true });
+    expect(result.reasoningEfforts).toBe('low, high');
+    expect(result.reasoningEffort).toBe('high');
   });
 
   it('serializes object headers and ignores non-object headers', () => {
@@ -486,5 +531,124 @@ describe('model limit overrides', () => {
       contextWindow: 128_000,
       maxOutputTokens: 16_384,
     });
+  });
+});
+
+describe('provider advanced options', () => {
+  it('rejects provider token overrides that are not positive whole numbers', () => {
+    expect(validateProviderDraft(draft({ contextWindow: '0' }))).toEqual({
+      contextWindow: 'Context window must be a positive whole number.',
+    });
+    expect(validateProviderDraft(draft({ maxOutputTokens: '-4' }))).toEqual({
+      maxOutputTokens: 'Max output must be a positive whole number.',
+    });
+    expect(
+      validateProviderDraft(draft({ contextWindow: '8000', maxOutputTokens: '9000' })),
+    ).toEqual({ maxOutputTokens: 'Max output cannot exceed the context window.' });
+  });
+
+  it('accepts a max output equal to the context window', () => {
+    expect(
+      validateProviderDraft(draft({ contextWindow: '8000', maxOutputTokens: '8000' })),
+    ).toEqual({});
+  });
+
+  it('trims and de-duplicates reasoning efforts', () => {
+    expect(parseReasoningEfforts(' low, medium , low, high ')).toEqual(['low', 'medium', 'high']);
+    expect(parseReasoningEfforts('')).toEqual([]);
+    expect(parseReasoningEfforts(' , ')).toEqual([]);
+  });
+
+  it('writes the advanced options into the provider config', () => {
+    const payload = buildProviderPayload(
+      draft({
+        contextWindow: '128000',
+        maxOutputTokens: '16384',
+        capabilities: { tools: true, vision: true, reasoning: true },
+        reasoningEfforts: ' low, medium , low, high ',
+        reasoningEffort: 'medium',
+      }),
+    );
+
+    expect(payload.config).toMatchObject({
+      contextWindow: 128_000,
+      maxOutputTokens: 16_384,
+      capabilities: {
+        tools: true,
+        vision: true,
+        reasoning: true,
+        reasoningEfforts: ['low', 'medium', 'high'],
+      },
+      reasoningEffort: 'medium',
+    });
+    expect(methods['providers.upsert'].params.safeParse(payload).success).toBe(true);
+  });
+
+  it('ignores a reasoning effort outside the contract values', () => {
+    const payload = buildProviderPayload(draft({ reasoningEffort: 'extreme' }));
+    expect(payload.config).not.toHaveProperty('reasoningEffort');
+  });
+
+  it('clears stored advanced options when the fields are emptied', () => {
+    const payload = buildProviderPayload(draft(), {
+      existingConfig: {
+        preset: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        family: 'openai',
+        contextWindow: 64_000,
+        maxOutputTokens: 8_192,
+        reasoningEffort: 'high',
+      },
+    });
+
+    expect(payload.config).not.toHaveProperty('contextWindow');
+    expect(payload.config).not.toHaveProperty('maxOutputTokens');
+    expect(payload.config).not.toHaveProperty('reasoningEffort');
+    expect(payload.config.capabilities).toEqual({
+      tools: true,
+      vision: false,
+      reasoning: false,
+      reasoningEfforts: [],
+    });
+  });
+
+  it('carries per-model capabilities and effort through the seed', () => {
+    const payload = buildProviderPayload(
+      draft({
+        models: [
+          {
+            id: 'gpt-5.1',
+            label: 'gpt-5.1',
+            contextWindow: 128_000,
+            maxOutputTokens: 16_384,
+            capabilities: {
+              tools: true,
+              vision: false,
+              reasoning: true,
+              reasoningEfforts: ['high'],
+            },
+            reasoningEffort: 'high',
+          },
+        ],
+      }),
+    );
+    const seeds = payload.config.models as Record<string, unknown>[];
+
+    expect(seeds[0]).toMatchObject({
+      capabilities: { tools: true, vision: false, reasoning: true, reasoningEfforts: ['high'] },
+      reasoningEffort: 'high',
+    });
+  });
+
+  it('seeds capabilities from the preset', () => {
+    const openai = providerDraftFromPreset(presetById('openai')!);
+    expect(openai.capabilities).toEqual({ tools: true, vision: false, reasoning: true });
+    expect(openai.reasoningEfforts).toBe('low, medium, high');
+    expect(openai.contextWindow).toBe('128000');
+    expect(openai.maxOutputTokens).toBe('16384');
+
+    const together = providerDraftFromPreset(presetById('together')!);
+    expect(together.capabilities).toEqual({ tools: true, vision: false, reasoning: false });
+    expect(together.reasoningEfforts).toBe('');
   });
 });

@@ -1,4 +1,11 @@
-import type { ProviderKind, ProviderView } from '@tuffcode/contracts';
+import {
+  ModelCapabilitiesSchema,
+  ReasoningEffortSchema,
+  type ModelCapabilities,
+  type ProviderKind,
+  type ProviderView,
+  type ReasoningEffort,
+} from '@tuffcode/contracts';
 
 export type ProviderGroup = 'subscriptions' | 'api' | 'local' | 'agents';
 
@@ -29,6 +36,10 @@ export interface PresetModel {
   contextWindow?: number | null;
   /** Tokens the model may answer with; seeded by the preset, overridable per model. */
   maxOutputTokens?: number | null;
+  /** What the model can do; carried through the seed when the row has it. */
+  capabilities?: ModelCapabilities | null;
+  /** Reasoning effort the model starts with; carried through the seed when set. */
+  reasoningEffort?: ReasoningEffort | null;
 }
 
 export interface ProviderPreset {
@@ -54,6 +65,10 @@ export interface ProviderPreset {
   /** Default token limits seeded into every model of this preset. */
   contextWindow?: number;
   maxOutputTokens?: number;
+  /** What models of this preset can do; seeded into the provider config. */
+  capabilities?: ModelCapabilities;
+  /** Reasoning effort this preset starts with; the advanced form overrides it. */
+  reasoningEffort?: ReasoningEffort;
   /** Headers the endpoint requires, prefilled into the form's header field. */
   headers?: Readonly<Record<string, string>>;
 }
@@ -91,6 +106,21 @@ function models(...ids: string[]): PresetModel[] {
   return ids.map((id) => ({ id, label: id }));
 }
 
+const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+
+/**
+ * Every preset advertises tool use. Reasoning presets also list the efforts
+ * their endpoint accepts; the advanced form can override both.
+ */
+function presetCapabilities(reasoning = false): ModelCapabilities {
+  return {
+    tools: true,
+    vision: false,
+    reasoning,
+    reasoningEfforts: reasoning ? [...REASONING_EFFORTS] : [],
+  };
+}
+
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'claude',
@@ -103,6 +133,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'),
     defaultModel: 'claude-opus-4-5',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
+    capabilities: presetCapabilities(true),
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
   },
@@ -117,6 +148,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('gpt-5-codex', 'gpt-5.1', 'gpt-5'),
     defaultModel: 'gpt-5-codex',
     docsUrl: 'https://developers.openai.com/codex/cli/',
+    capabilities: presetCapabilities(),
     contextWindow: 128_000,
     maxOutputTokens: 16_384,
   },
@@ -132,6 +164,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'),
     defaultModel: 'claude-sonnet-4-5',
     docsUrl: 'https://docs.anthropic.com/en/api/getting-started',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'anthropic',
     contextWindow: 200_000,
@@ -149,6 +182,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('gpt-5.1', 'gpt-5', 'gpt-5-mini'),
     defaultModel: 'gpt-5.1',
     docsUrl: 'https://platform.openai.com/docs/api-reference',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'openai',
     contextWindow: 128_000,
@@ -171,6 +205,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     ),
     defaultModel: 'openai/gpt-5.1',
     docsUrl: 'https://openrouter.ai/docs',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'openrouter',
     contextWindow: 128_000,
@@ -188,6 +223,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('deepseek-chat', 'deepseek-reasoner'),
     defaultModel: 'deepseek-chat',
     docsUrl: 'https://api-docs.deepseek.com',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'deepseek',
     contextWindow: 64_000,
@@ -205,6 +241,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('kimi-k2-0905-preview', 'kimi-k2-turbo-preview'),
     defaultModel: 'kimi-k2-0905-preview',
     docsUrl: 'https://platform.moonshot.ai/docs',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'moonshot',
     contextWindow: 256_000,
@@ -222,6 +259,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct'),
     defaultModel: 'llama-3.3-70b-versatile',
     docsUrl: 'https://console.groq.com/docs/openai',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'groq',
     contextWindow: 128_000,
@@ -239,6 +277,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('mistral-large-latest', 'mistral-medium-latest', 'codestral-latest'),
     defaultModel: 'mistral-large-latest',
     docsUrl: 'https://docs.mistral.ai/api',
+    capabilities: presetCapabilities(),
     requiresSecret: true,
     family: 'mistral',
     contextWindow: 128_000,
@@ -256,6 +295,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('grok-4', 'grok-3', 'grok-code-fast-1'),
     defaultModel: 'grok-4',
     docsUrl: 'https://docs.x.ai/docs/api-reference',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'xai',
     contextWindow: 256_000,
@@ -277,6 +317,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     ),
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     docsUrl: 'https://docs.together.ai/docs/openai-api-compatibility',
+    capabilities: presetCapabilities(),
     requiresSecret: true,
     family: 'together',
     contextWindow: 128_000,
@@ -294,6 +335,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-pro-preview'),
     defaultModel: 'gemini-2.5-pro',
     docsUrl: 'https://ai.google.dev/gemini-api/docs/openai',
+    capabilities: presetCapabilities(true),
     requiresSecret: true,
     family: 'google',
     contextWindow: 1_000_000,
@@ -311,6 +353,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('gpt-4o', 'claude-sonnet-4', 'o3-mini'),
     defaultModel: 'gpt-4o',
     docsUrl: 'https://docs.github.com/en/copilot',
+    capabilities: presetCapabilities(),
     requiresSecret: true,
     family: 'github-copilot',
     contextWindow: 128_000,
@@ -332,6 +375,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('gpt-4o', 'gpt-4.1', 'o3-mini'),
     defaultModel: 'gpt-4o',
     docsUrl: 'https://learn.microsoft.com/azure/ai-services/openai/reference',
+    capabilities: presetCapabilities(),
     requiresSecret: true,
     custom: true,
     family: 'azure-openai',
@@ -351,6 +395,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('qwen3-coder', 'llama3.3', 'deepseek-r1'),
     defaultModel: 'qwen3-coder',
     docsUrl: 'https://docs.ollama.com/api/openai-compatibility',
+    capabilities: presetCapabilities(),
     family: 'local',
     contextWindow: 32_000,
     maxOutputTokens: 4_096,
@@ -367,6 +412,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: models('qwen3-coder', 'gpt-oss-20b'),
     defaultModel: 'qwen3-coder',
     docsUrl: 'https://lmstudio.ai/docs/app/api/endpoints/openai',
+    capabilities: presetCapabilities(),
     family: 'local',
     contextWindow: 32_000,
     maxOutputTokens: 4_096,
@@ -382,6 +428,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     baseUrl: 'http://127.0.0.1:8000/v1',
     models: [],
     docsUrl: 'https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html',
+    capabilities: presetCapabilities(),
     family: 'local',
     contextWindow: 32_000,
     maxOutputTokens: 4_096,
@@ -396,6 +443,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     icon: 'terminal',
     models: [],
     docsUrl: 'https://opencode.ai/docs',
+    capabilities: presetCapabilities(),
   },
   {
     id: 'acp',
@@ -407,6 +455,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     icon: 'plug',
     models: [],
     docsUrl: 'https://agentclientprotocol.com',
+    capabilities: presetCapabilities(),
   },
   {
     id: 'custom-openai',
@@ -418,6 +467,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     icon: 'wrench',
     models: [],
     custom: true,
+    capabilities: presetCapabilities(),
     family: 'openai-compatible',
   },
 ];
@@ -562,11 +612,15 @@ export function providerModels(provider: ProviderView): PresetModel[] {
         record.maxOutputTokens > 0
           ? record.maxOutputTokens
           : undefined;
+      const parsedCapabilities = ModelCapabilitiesSchema.safeParse(record.capabilities);
+      const parsedEffort = ReasoningEffortSchema.safeParse(record.reasoningEffort);
       entries.push({
         id,
         label,
         ...(contextWindow === undefined ? {} : { contextWindow }),
         ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+        ...(parsedCapabilities.success ? { capabilities: parsedCapabilities.data } : {}),
+        ...(parsedEffort.success ? { reasoningEffort: parsedEffort.data } : {}),
       });
     }
     if (entries.length > 0) return entries;

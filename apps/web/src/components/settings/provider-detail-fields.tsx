@@ -22,10 +22,23 @@ export interface ProviderDetailFieldsProps {
   detection: Detection;
   serverError: string | null;
   detecting: boolean;
+  advancedOpen: boolean;
   onUpdate: <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => void;
   onCustomize: () => void;
   onDetect: () => void;
+  onToggleAdvanced: () => void;
 }
+
+const REASONING_EFFORT_DEFAULT = '__default__';
+
+const REASONING_EFFORT_OPTIONS = [
+  { value: REASONING_EFFORT_DEFAULT, label: 'Preset default' },
+  { value: 'none', label: 'None' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+] as const;
 
 /** Fields for API, local, agent, and custom providers. Subscriptions use their own panel. */
 export function ProviderDetailFields({
@@ -39,9 +52,11 @@ export function ProviderDetailFields({
   detection,
   serverError,
   detecting,
+  advancedOpen,
   onUpdate,
   onCustomize,
   onDetect,
+  onToggleAdvanced,
 }: ProviderDetailFieldsProps) {
   const modelOptions = useMemo(() => {
     const options = draft.models.map((model) => ({
@@ -305,26 +320,173 @@ export function ProviderDetailFields({
             </div>
           ) : null}
 
-          {(isFullForm || draft.headers.trim() !== '') && auth !== 'local' ? (
-            <FormField
-              label="Headers"
-              htmlFor="provider-headers"
-              hint='Optional JSON object of string headers, for example {"X-Org": "team"}.'
-              error={errors.headers}
+          <div className="flex flex-col gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-start"
+              data-testid="provider-advanced-toggle"
+              onClick={onToggleAdvanced}
             >
-              <Textarea
-                id="provider-headers"
-                value={draft.headers}
-                onChange={(event) => onUpdate('headers', event.target.value)}
-                placeholder={'{\n  "X-Org": "team"\n}'}
-                spellCheck={false}
-                rows={3}
-                className="font-mono text-xs"
-                aria-invalid={Boolean(errors.headers)}
-                aria-describedby={errors.headers ? 'provider-headers-error' : undefined}
-              />
-            </FormField>
-          ) : null}
+              {advancedOpen ? 'Hide advanced' : 'Advanced'}
+            </Button>
+            {advancedOpen ? (
+              <div className="flex flex-col gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField
+                    label="Provider context window"
+                    htmlFor="provider-context-window"
+                    hint="Tokens every model of this provider can hold. Leave blank to clear."
+                    error={errors.contextWindow}
+                  >
+                    <Input
+                      id="provider-context-window"
+                      data-testid="provider-context-window-input"
+                      type="number"
+                      min={1}
+                      step={1000}
+                      className="tabular-nums"
+                      value={draft.contextWindow}
+                      onChange={(event) => onUpdate('contextWindow', event.target.value)}
+                      placeholder={preset.contextWindow ? String(preset.contextWindow) : 'Unset'}
+                      aria-invalid={Boolean(errors.contextWindow)}
+                      aria-describedby={
+                        errors.contextWindow ? 'provider-context-window-error' : undefined
+                      }
+                    />
+                  </FormField>
+                  <FormField
+                    label="Provider max output tokens"
+                    htmlFor="provider-max-output"
+                    hint="Tokens a reply may use. Cannot exceed the context window."
+                    error={errors.maxOutputTokens}
+                  >
+                    <Input
+                      id="provider-max-output"
+                      data-testid="provider-max-output-input"
+                      type="number"
+                      min={1}
+                      step={256}
+                      className="tabular-nums"
+                      value={draft.maxOutputTokens}
+                      onChange={(event) => onUpdate('maxOutputTokens', event.target.value)}
+                      placeholder={
+                        preset.maxOutputTokens ? String(preset.maxOutputTokens) : 'Unset'
+                      }
+                      aria-invalid={Boolean(errors.maxOutputTokens)}
+                      aria-describedby={
+                        errors.maxOutputTokens ? 'provider-max-output-error' : undefined
+                      }
+                    />
+                  </FormField>
+                </div>
+
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="text-sm font-medium text-foreground">Capabilities</legend>
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm text-foreground">
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded-sm border border-input accent-primary"
+                        checked={draft.capabilities.tools}
+                        onChange={(event) =>
+                          onUpdate('capabilities', {
+                            ...draft.capabilities,
+                            tools: event.target.checked,
+                          })
+                        }
+                      />
+                      Tools
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-foreground">
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded-sm border border-input accent-primary"
+                        checked={draft.capabilities.vision}
+                        onChange={(event) =>
+                          onUpdate('capabilities', {
+                            ...draft.capabilities,
+                            vision: event.target.checked,
+                          })
+                        }
+                      />
+                      Vision
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-foreground">
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded-sm border border-input accent-primary"
+                        checked={draft.capabilities.reasoning}
+                        onChange={(event) =>
+                          onUpdate('capabilities', {
+                            ...draft.capabilities,
+                            reasoning: event.target.checked,
+                          })
+                        }
+                      />
+                      Reasoning
+                    </label>
+                  </div>
+                </fieldset>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField
+                    label="Reasoning efforts"
+                    htmlFor="provider-reasoning-efforts"
+                    hint="Comma separated, for example low, medium, high."
+                  >
+                    <Input
+                      id="provider-reasoning-efforts"
+                      data-testid="provider-reasoning-efforts-input"
+                      value={draft.reasoningEfforts}
+                      onChange={(event) => onUpdate('reasoningEfforts', event.target.value)}
+                      placeholder="low, medium, high"
+                      spellCheck={false}
+                      className="font-mono text-xs"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Default reasoning effort"
+                    htmlFor="provider-reasoning-effort"
+                    hint="Used when a turn does not pick one."
+                  >
+                    <Select
+                      id="provider-reasoning-effort"
+                      options={REASONING_EFFORT_OPTIONS}
+                      value={draft.reasoningEffort || REASONING_EFFORT_DEFAULT}
+                      onValueChange={(value) =>
+                        onUpdate(
+                          'reasoningEffort',
+                          value === null || value === REASONING_EFFORT_DEFAULT ? '' : value,
+                        )
+                      }
+                    />
+                  </FormField>
+                </div>
+
+                {(isFullForm || draft.headers.trim() !== '') && auth !== 'local' ? (
+                  <FormField
+                    label="Headers"
+                    htmlFor="provider-headers"
+                    hint='Optional JSON object of string headers, for example {"X-Org": "team"}.'
+                    error={errors.headers}
+                  >
+                    <Textarea
+                      id="provider-headers"
+                      value={draft.headers}
+                      onChange={(event) => onUpdate('headers', event.target.value)}
+                      placeholder={'{\n  "X-Org": "team"\n}'}
+                      spellCheck={false}
+                      rows={3}
+                      className="font-mono text-xs"
+                      aria-invalid={Boolean(errors.headers)}
+                      aria-describedby={errors.headers ? 'provider-headers-error' : undefined}
+                    />
+                  </FormField>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
 

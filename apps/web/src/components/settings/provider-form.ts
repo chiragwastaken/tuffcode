@@ -1,4 +1,10 @@
-import type { ProviderKind, ProviderView } from '@tuffcode/contracts';
+import {
+  ModelCapabilitiesSchema,
+  ReasoningEffortSchema,
+  type ModelCapabilities,
+  type ProviderKind,
+  type ProviderView,
+} from '@tuffcode/contracts';
 import {
   isSubscriptionKind,
   presetById,
@@ -18,6 +24,12 @@ const PROVIDER_KINDS: readonly ProviderKind[] = [
   'opencode',
 ];
 
+export interface ProviderCapabilityFlags {
+  tools: boolean;
+  vision: boolean;
+  reasoning: boolean;
+}
+
 export interface ProviderDraft {
   kind: ProviderKind;
   presetId: string;
@@ -29,6 +41,15 @@ export interface ProviderDraft {
   secret: string;
   configDir: string;
   command: string;
+  /** Provider-wide context window, as typed. Empty means no override. */
+  contextWindow: string;
+  /** Provider-wide max output tokens, as typed. Empty means no override. */
+  maxOutputTokens: string;
+  capabilities: ProviderCapabilityFlags;
+  /** Comma separated reasoning efforts, as typed. */
+  reasoningEfforts: string;
+  /** One of the contract reasoning efforts, or empty for no default. */
+  reasoningEffort: string;
 }
 
 export interface ProviderFieldErrors {
@@ -41,6 +62,8 @@ export interface ProviderFieldErrors {
   secret?: string;
   configDir?: string;
   command?: string;
+  contextWindow?: string;
+  maxOutputTokens?: string;
 }
 
 export interface ProviderValidationOptions {
@@ -81,6 +104,10 @@ const MANAGED_CONFIG_KEYS = [
   'configDir',
   'command',
   'args',
+  'contextWindow',
+  'maxOutputTokens',
+  'capabilities',
+  'reasoningEffort',
 ] as const;
 
 export function isProviderKind(value: string): value is ProviderKind {
@@ -107,6 +134,31 @@ function emptyDraft(): ProviderDraft {
     secret: '',
     configDir: '',
     command: '',
+    contextWindow: '',
+    maxOutputTokens: '',
+    capabilities: { tools: true, vision: false, reasoning: false },
+    reasoningEfforts: '',
+    reasoningEffort: '',
+  };
+}
+
+function numberText(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+}
+
+function capabilityDraftFrom(
+  value: unknown,
+  fallback?: ModelCapabilities,
+): { capabilities: ProviderCapabilityFlags; reasoningEfforts: string } {
+  const parsed = ModelCapabilitiesSchema.safeParse(value);
+  const source = parsed.success ? parsed.data : fallback;
+  return {
+    capabilities: {
+      tools: source?.tools ?? true,
+      vision: source?.vision ?? false,
+      reasoning: source?.reasoning ?? false,
+    },
+    reasoningEfforts: source?.reasoningEfforts.join(', ') ?? '',
   };
 }
 
@@ -116,6 +168,8 @@ export function providerDraftFromView(view?: ProviderView | null): ProviderDraft
   const preset = presetForProvider(view);
   const model = typeof view.config.model === 'string' ? view.config.model : '';
   const command = typeof view.config.command === 'string' ? view.config.command : '';
+  const capabilityDraft = capabilityDraftFrom(view.config.capabilities, preset?.capabilities);
+  const storedEffort = ReasoningEffortSchema.safeParse(view.config.reasoningEffort);
 
   return {
     kind: view.kind,
@@ -128,10 +182,16 @@ export function providerDraftFromView(view?: ProviderView | null): ProviderDraft
     secret: '',
     configDir: typeof view.config.configDir === 'string' ? view.config.configDir : '',
     command,
+    contextWindow: numberText(view.config.contextWindow),
+    maxOutputTokens: numberText(view.config.maxOutputTokens),
+    capabilities: capabilityDraft.capabilities,
+    reasoningEfforts: capabilityDraft.reasoningEfforts,
+    reasoningEffort: storedEffort.success ? storedEffort.data : (preset?.reasoningEffort ?? ''),
   };
 }
 
 export function providerDraftFromPreset(preset: ProviderPreset): ProviderDraft {
+  const capabilityDraft = capabilityDraftFrom(undefined, preset.capabilities);
   return {
     ...emptyDraft(),
     kind: preset.kind,
@@ -145,6 +205,11 @@ export function providerDraftFromPreset(preset: ProviderPreset): ProviderDraft {
       maxOutputTokens: model.maxOutputTokens ?? preset.maxOutputTokens ?? null,
     })),
     headers: preset.headers ? headersToText(preset.headers) : '',
+    contextWindow: numberText(preset.contextWindow),
+    maxOutputTokens: numberText(preset.maxOutputTokens),
+    capabilities: capabilityDraft.capabilities,
+    reasoningEfforts: capabilityDraft.reasoningEfforts,
+    reasoningEffort: preset.reasoningEffort ?? '',
   };
 }
 
@@ -198,6 +263,31 @@ export function validateBaseUrl(value: string): string | undefined {
   }
 
   return undefined;
+}
+
+/** Splits the comma separated efforts field, trimming and de-duplicating entries. */
+export function parseReasoningEfforts(value: string): string[] {
+  const seen = new Set<string>();
+  const efforts: string[] = [];
+  for (const part of value.split(',')) {
+    const effort = part.trim();
+    if (!effort || seen.has(effort)) continue;
+    seen.add(effort);
+    efforts.push(effort);
+  }
+  return efforts;
+}
+
+function positiveTokenError(
+  value: string,
+  label: 'Context window' | 'Max output',
+): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) && parsed > 0
+    ? undefined
+    : `${label} must be a positive whole number.`;
 }
 
 export interface ModelLimitErrors {
@@ -268,6 +358,22 @@ export function validateProviderDraft(
     return errors;
   }
 
+  const contextWindowText = draft.contextWindow.trim();
+  const maxOutputText = draft.maxOutputTokens.trim();
+  const contextWindowError = positiveTokenError(contextWindowText, 'Context window');
+  if (contextWindowError) errors.contextWindow = contextWindowError;
+  const maxOutputError = positiveTokenError(maxOutputText, 'Max output');
+  if (maxOutputError) {
+    errors.maxOutputTokens = maxOutputError;
+  } else if (
+    contextWindowError === undefined &&
+    contextWindowText &&
+    maxOutputText &&
+    Number(maxOutputText) > Number(contextWindowText)
+  ) {
+    errors.maxOutputTokens = 'Max output cannot exceed the context window.';
+  }
+
   if (auth === 'api-key' || auth === 'local') {
     const baseUrl = draft.baseUrl.trim();
     if (!baseUrl) {
@@ -325,6 +431,8 @@ function modelSeeds(draft: ProviderDraft, preset?: ProviderPreset): Record<strin
       label: entry.label || entry.id,
       contextWindow,
       ...(typeof maxOutputTokens === 'number' ? { maxOutputTokens } : {}),
+      ...(entry.capabilities ? { capabilities: entry.capabilities } : {}),
+      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
       isDefault: entry.id === model,
     };
   });
@@ -353,6 +461,9 @@ export function buildProviderPayload(
   const model = draft.model.trim();
   const configDir = draft.configDir.trim();
   const command = draft.command.trim();
+  const contextWindow = draft.contextWindow.trim();
+  const maxOutputTokens = draft.maxOutputTokens.trim();
+  const reasoningEffort = ReasoningEffortSchema.safeParse(draft.reasoningEffort.trim());
 
   if (auth === 'subscription') {
     if (model) config.model = model;
@@ -381,6 +492,16 @@ export function buildProviderPayload(
   } else if (auth === 'cli' && model) {
     config.models = modelSeeds(draft, preset);
   }
+
+  if (contextWindow) config.contextWindow = Number(contextWindow);
+  if (maxOutputTokens) config.maxOutputTokens = Number(maxOutputTokens);
+  config.capabilities = {
+    tools: draft.capabilities.tools,
+    vision: draft.capabilities.vision,
+    reasoning: draft.capabilities.reasoning,
+    reasoningEfforts: parseReasoningEfforts(draft.reasoningEfforts),
+  };
+  if (reasoningEffort.success) config.reasoningEffort = reasoningEffort.data;
 
   const payload: ProviderPayload = {
     kind: draft.kind,

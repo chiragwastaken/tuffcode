@@ -185,9 +185,31 @@ function ProviderModelsCard({
                         provider default
                       </Badge>
                     ) : null}
-                    {model.contextWindow ? (
+                    {model.capabilities?.tools ? (
+                      <Badge size="sm" variant="outline">
+                        Tools
+                      </Badge>
+                    ) : null}
+                    {model.capabilities?.vision ? (
+                      <Badge size="sm" variant="outline">
+                        Vision
+                      </Badge>
+                    ) : null}
+                    {model.capabilities?.reasoning ? (
+                      <Badge size="sm" variant="outline">
+                        Reasoning
+                      </Badge>
+                    ) : null}
+                    {model.contextWindow === null ? (
+                      <span className="text-2xs text-muted-foreground">Context unknown</span>
+                    ) : model.contextWindow ? (
                       <span className="text-2xs tabular-nums text-muted-foreground">
                         {Math.round(model.contextWindow / 1000)}k ctx
+                      </span>
+                    ) : null}
+                    {model.maxOutputTokens ? (
+                      <span className="text-2xs tabular-nums text-muted-foreground">
+                        {Math.round(model.maxOutputTokens / 1000)}k out
                       </span>
                     ) : null}
                   </span>
