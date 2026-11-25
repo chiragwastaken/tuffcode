@@ -37,13 +37,27 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
   await sendMessage(page, 'spawn-subagent');
   await expectAssistantText(page, MOCK_SUBAGENT_FINAL);
 
-  // Closed pane: one compact strip that names the running child.
+  // Closed pane: one compact chip row (D40). A settled child folds into one
+  // finished chip; while it runs the strip shows its explorer chip instead.
   const strip = page.getByTestId('subagent-strip');
   await expect(strip).toBeVisible();
-  await expect(strip.getByTestId('subagent-strip-label')).toContainText(/1 subagent/);
-  await expect(strip.getByTestId('subagent-strip-type-explorer')).toBeVisible();
+  await expect(strip).toHaveAttribute('data-child-count', '1');
+  const stripChips = strip.locator(
+    '[data-testid="subagent-strip-chip"], [data-testid="subagent-strip-finished"]',
+  );
+  await expect(stripChips).toHaveCount(1);
+  await expect
+    .poll(async () => {
+      const running = strip.getByTestId('subagent-strip-chip');
+      if ((await running.count()) > 0) {
+        return (await running.getAttribute('data-subagent-type')) ?? '';
+      }
+      const finished = await strip.getByTestId('subagent-strip-finished').count();
+      return finished > 0 ? 'finished' : 'missing';
+    })
+    .toMatch(/^(explorer|finished)$/);
 
-  await strip.click();
+  await stripChips.click();
 
   const pane = page.getByTestId('subagent-pane');
   await expect(pane).toBeVisible();
@@ -51,17 +65,11 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
   await expect(header).toContainText('Explorer');
   await expect(page.getByTestId('subagent-pane-model')).toContainText('mock-model');
 
-  // The card stays in the parent timeline, attributed to the turn that spawned it,
-  // and the connector line runs from that card to the pane header.
-  const group = page.getByTestId('subagent-group').first();
-  await expect(group).toContainText('Turn 1');
-  const card = group.getByTestId('subagent-card');
-  await expect(card).toHaveCount(1);
-  await expect(card).toHaveAttribute('data-active', 'true');
-
-  const connector = page.getByTestId('subagent-connector');
-  await expect(connector).toBeVisible();
-  await expect(connector).toHaveAttribute('data-connector-d', /^M -?\d/);
+  // D40 removed the in-timeline card grid and its connector; the spawn stays in
+  // the parent timeline as one tool row attributed to the turn that ran it. The
+  // verb and target are separate spans, so textContent has no space between them.
+  const spawnRow = page.getByTestId('tool-row').filter({ hasText: /Used subagent/ });
+  await expect(spawnRow).toBeVisible();
 
   await expect(page.getByTestId('subagent-task')).toContainText(MOCK_SUBAGENT_TASK);
 
@@ -77,14 +85,10 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
   }
 
   // Reopening the inspector narrows the thread row below the pane's split width, so
-  // the pane becomes a sheet and the connector re-anchors to its edge.
+  // the pane becomes a sheet but stays mounted.
   await page.getByRole('button', { name: 'Show inspector' }).click();
   await expect(page.getByTestId('inspector-header')).toBeVisible();
   await expect(page.getByTestId('subagent-pane')).toBeVisible();
-  await expect(page.getByTestId('subagent-connector')).toHaveAttribute(
-    'data-connector-d',
-    /^M -?\d/,
-  );
   if (shots) {
     await page.screenshot({ path: join(shots, `${prefix}-pane-narrow.png`) });
   }
@@ -97,9 +101,11 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
 
   await tabs.getByRole('tab', { name: /Reviewer/ }).click();
   await expect(header).toContainText('Reviewer');
-  // Every child panel stays mounted for its scroll position, so assert on the
-  // visible one rather than on a duplicated test id.
-  await expect(page.getByTestId('subagent-task').locator('visible=true')).toContainText(
+  // Every child panel stays mounted, so scope to the selected reviewer panel
+  // instead of matching the first task element. The task text arrives with the
+  // debounced subagents.list merge.
+  const reviewerPanel = page.getByRole('tabpanel', { name: /Reviewer/ });
+  await expect(reviewerPanel.getByTestId('subagent-task')).toContainText(
     MOCK_SUBAGENT_TWO_TASK,
   );
 
@@ -108,5 +114,5 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
   await expect(pane).toBeHidden();
   const closingStrip = page.getByTestId('subagent-strip');
   await expect(closingStrip).toBeVisible();
-  await expect(closingStrip.getByTestId('subagent-strip-label')).toContainText(/2 subagents/);
+  await expect(closingStrip).toHaveAttribute('data-child-count', '2');
 });

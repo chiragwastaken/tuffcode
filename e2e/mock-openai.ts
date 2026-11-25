@@ -45,6 +45,13 @@ export const MOCK_COUNCIL_PLAN = {
 
 /** First line of the planner prompt; no worker or reviewer prompt carries it. */
 const PLANNER_MARKER = 'You are the planner for a council of coding agents';
+export const MOCK_ACTIVITY_COMMAND = 'node -e "console.log(\'activity-ok\')"';
+export const MOCK_ACTIVITY_FINAL = 'The activity command printed its line.';
+export const MOCK_INTERLEAVE_REASONING_ONE = 'First I check the readme.';
+export const MOCK_INTERLEAVE_PROSE_ONE = 'Reading the readme before the source.';
+export const MOCK_INTERLEAVE_REASONING_TWO = 'Now I check the source file.';
+export const MOCK_INTERLEAVE_PROSE_TWO = 'Reading the source after the readme.';
+export const MOCK_INTERLEAVE_FINAL = 'Both files were read in event order.';
 
 const LF = String.fromCharCode(10);
 const DONE = String.fromCharCode(91, 68, 79, 78, 69, 93);
@@ -242,6 +249,46 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
     return;
   }
   const last = messages.at(-1);
+
+  if (prompt.includes('interleave-timeline')) {
+    const toolResults = messages.filter((message) => message.role === 'tool').length;
+    if (toolResults === 0) {
+      await streamReasoning(response, MOCK_INTERLEAVE_REASONING_ONE);
+      await streamContent(response, MOCK_INTERLEAVE_PROSE_ONE);
+      finishWithToolCalls(response, [
+        {
+          id: 'call_e2e_interleave_readme',
+          name: 'read',
+          args: { path: 'README.md' },
+        },
+      ]);
+      response.end();
+      return;
+    }
+    if (toolResults === 1) {
+      await streamReasoning(response, MOCK_INTERLEAVE_REASONING_TWO);
+      await streamContent(response, MOCK_INTERLEAVE_PROSE_TWO);
+      finishWithToolCalls(response, [
+        {
+          id: 'call_e2e_interleave_source',
+          name: 'read',
+          args: { path: 'src/index.ts' },
+        },
+      ]);
+      response.end();
+      return;
+    }
+    await streamText(response, MOCK_INTERLEAVE_FINAL);
+    response.end();
+    return;
+  }
+
+  if (prompt.includes('activity-bash') && last?.role !== 'tool') {
+    streamToolCall(response, 'call_e2e_activity', 'bash', { command: MOCK_ACTIVITY_COMMAND });
+    response.end();
+    return;
+  }
+
   if (last?.role === 'tool') {
     const output = contentOf(last);
     const reply = output.includes('denied')
@@ -250,9 +297,11 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
         ? MOCK_SUBAGENT_FINAL
         : prompt.includes('show-timeline')
           ? MOCK_TIMELINE_FINAL
-          : output.startsWith('wrote ')
-            ? MOCK_WROTE_TEXT
-            : MOCK_ALLOWED_TEXT;
+          : prompt.includes('activity-bash')
+            ? MOCK_ACTIVITY_FINAL
+            : output.startsWith('wrote ')
+              ? MOCK_WROTE_TEXT
+              : MOCK_ALLOWED_TEXT;
     await streamText(response, reply);
     response.end();
     return;
