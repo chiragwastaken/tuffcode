@@ -58,6 +58,18 @@ export function subagentsOfThread(
   return Object.values(subagents).filter((child) => child.threadId === threadId);
 }
 
+/**
+ * The live child that runs in `threadId`. A child row's thread id is the child
+ * thread, while `threadId` on the child is its parent, so this matches
+ * `childThreadId` only. Returns undefined until a list row has supplied it.
+ */
+export function childForThread(
+  subagents: Readonly<Record<string, SubagentChild>>,
+  threadId: string,
+): SubagentChild | undefined {
+  return Object.values(subagents).find((child) => child.childThreadId === threadId);
+}
+
 export function isRunningSubagent(child: SubagentChild): boolean {
   return !isTerminalSubagentStatus(child.status);
 }

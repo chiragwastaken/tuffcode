@@ -15,7 +15,6 @@ export interface CreateSubagentInput {
 }
 
 export interface SubagentRecord extends SubagentView {
-  childThreadId: string | null;
   budgetTokens: number | null;
 }
 
@@ -60,11 +59,12 @@ function mapRecord(row: SqlRow): SubagentRecord {
   };
 }
 
-/** The contract view hides the internal child thread and budget columns. */
+/** The contract view hides the internal budget column. */
 export function toSubagentView(record: SubagentRecord): SubagentView {
   return {
     childId: record.childId,
     threadId: record.threadId,
+    childThreadId: record.childThreadId,
     type: record.type,
     model: record.model,
     providerId: record.providerId,

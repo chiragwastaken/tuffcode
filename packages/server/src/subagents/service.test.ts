@@ -590,7 +590,12 @@ describe('subagent service', () => {
       expect(harness.subagents.list(PARENT_ID)).toHaveLength(2);
       const views = harness.subagents.listAll();
       expect(views.map((view) => view.childId)).toEqual([first, second, other]);
-      expect(views.some((view) => 'childThreadId' in view)).toBe(false);
+      expect(views.map((view) => view.childThreadId)).toEqual([
+        'thr_child_1',
+        'thr_child_2',
+        'thr_child_3',
+      ]);
+      expect(views.some((view) => 'budgetTokens' in view)).toBe(false);
 
       const handlers = createSubagentHandlers({ subagents: harness.subagents });
       const listAll = handlers.get('subagents.listAll');
