@@ -1,4 +1,4 @@
-import { Link, Outlet, useMatchRoute, useRouterState } from '@tanstack/react-router';
+import { Link, Outlet, useMatchRoute, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   Button,
   IconButton,
@@ -8,14 +8,30 @@ import {
   buttonVariants,
   cn,
 } from '@tuffcode/ui';
-import { ArrowLeft, PanelLeft, PanelRight, Settings } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowLeft, PanelLeft, Settings } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
 import { useAppStore } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
 import { InspectorPanel } from './inspector/InspectorPanel';
-import { subscribePanelRequests } from './inspector/panel-requests';
+import {
+  EMPTY_DOCK,
+  activeDockTab,
+  clampDockWidth,
+  closeDock,
+  closeDockTab,
+  loadDockState,
+  openDockTab,
+  saveDockWidth,
+  toggleDockTab,
+  visibleDockTabs,
+  type DockState,
+  type InspectorTab,
+} from './inspector/inspector-tabs';
+import { hasContextPreview, subscribePanelRequests, takeInspectorTab } from './inspector/panel-requests';
 import { CommandPalette } from './menu/CommandPalette';
 import { MenuProvider } from './menu/Menu';
+import { useNotifications } from './notifications/use-notifications';
+import { DockToolbar } from './shell/DockToolbar';
 import { Sidebar } from './sidebar/Sidebar';
 import { ThreadActionDialogs } from './thread/thread-action-dialogs';
 import { ThreadModeSwitch } from './thread/ThreadModeSwitch';
@@ -28,43 +44,38 @@ const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> 
   'protocol-error': { dot: 'bg-error', label: 'Protocol error' },
 };
 
-/** The inspector is a column at this width and an overlay sheet below it. */
-const WIDE_LAYOUT_QUERY = '(min-width: 1024px)';
+/** Below this window width an open dock pushes the sidebar out instead of squeezing the chat. */
+const COMPACT_WINDOW_PX = 900;
 
-/** Everything the sheet's focus trap cycles through. */
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
-
-function isWideLayout(): boolean {
-  return typeof window === 'undefined' ? true : window.matchMedia(WIDE_LAYOUT_QUERY).matches;
+function windowWidth(): number {
+  return typeof window === 'undefined' ? 1280 : window.innerWidth;
 }
 
 export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [wide, setWide] = useState(isWideLayout);
-  const [inspectorOpen, setInspectorOpen] = useState(isWideLayout);
-  const sheetRef = useRef<HTMLElement>(null);
+  const [dock, setDock] = useState<DockState>(() => loadDockState());
+  const [promptRequest, setPromptRequest] = useState(0);
+  const [width, setWidth] = useState(windowWidth);
   const connection = useAppStore((state) => state.connection);
   const bootstrap = useAppStore((state) => state.bootstrap);
   const meta = CONNECTION_META[connection];
   const matchRoute = useMatchRoute();
+  const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const visibility = shellVisibility(pathname);
   const threadMatch = matchRoute({ to: '/project/$projectId/thread/$threadId' });
-  const inspectorThreadId = threadMatch === false ? null : threadMatch.threadId;
-  const hasThread = inspectorThreadId !== null;
-  /** The switch lives in the app topbar, but only for an open thread outside settings. */
+  const threadId = threadMatch === false ? null : threadMatch.threadId;
+  const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
+  const hasThread = threadId !== null;
   const showModeSwitch = hasThread && !visibility.backToWorkspace;
-  const showInspectorToggle = visibility.inspector && hasThread;
-  const inspectorVisible = showInspectorToggle && inspectorOpen;
-  /** Below 1024px the inspector is an overlay sheet, which behaves as a modal dialog. */
-  const sheetOpen = inspectorVisible && !wide;
+  const dockTabs = visibleDockTabs(dock, thread);
+  const dockActive = activeDockTab(dock, thread);
+  const dockVisible = hasThread && visibility.inspector && dockTabs.length > 0;
+  const dockWidth = clampDockWidth(dock.width, width);
+  const compactWindow = width < COMPACT_WINDOW_PX;
+  const sidebarShown = visibility.sidebar && sidebarOpen && !(compactWindow && dockVisible);
+
+  useNotifications();
 
   useLayoutEffect(() => {
     const element = document.documentElement;
@@ -73,12 +84,10 @@ export function AppShell() {
       element.dataset.platform = platform;
       element.style.setProperty('--window-controls-inset', `${windowControlsInset(platform)}px`);
     };
-
     if (bootstrap?.platform) {
       applyPlatform(bootstrap.platform);
       return;
     }
-
     let cancelled = false;
     void window.tuffcode
       ?.getBootstrap()
@@ -91,89 +100,75 @@ export function AppShell() {
     };
   }, [bootstrap?.platform]);
 
-  // A slash command that shows an inspector tab also reveals the column when it
-  // was collapsed, so the result is never invisible.
-  useEffect(() => subscribePanelRequests(() => setInspectorOpen(true)), []);
-
   useEffect(() => {
-    const query = window.matchMedia(WIDE_LAYOUT_QUERY);
-    const handleChange = (event: MediaQueryListEvent): void => {
-      setWide(event.matches);
-      // Wide shows the column, narrow closes the sheet so it never covers the
-      // thread uninvited.
-      setInspectorOpen(event.matches);
-    };
-    query.addEventListener('change', handleChange);
-    return () => query.removeEventListener('change', handleChange);
+    const onResize = (): void => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // The narrow sheet is a modal: it traps Tab, closes on Escape, and returns focus
-  // to whatever opened it. The page behind it is inert while it is open.
+  // A slash command or a sidebar row can ask for a panel; it opens in the dock.
+  useEffect(
+    () =>
+      subscribePanelRequests(() => {
+        const preview = hasContextPreview();
+        const tab = takeInspectorTab();
+        if (tab === null) return;
+        setDock((current) => openDockTab(current, tab));
+        if (tab === 'activity' && preview) setPromptRequest((count) => count + 1);
+      }),
+    [],
+  );
+
+  // A notification click asks the window to show the thread it was about.
   useEffect(() => {
-    const sheet = sheetRef.current;
-    if (!sheetOpen || sheet === null) return;
-
-    const previouslyFocused = document.activeElement;
-    const focusable = (): HTMLElement[] =>
-      [...sheet.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
-        (element) => element.offsetParent !== null,
-      );
-
-    (focusable()[0] ?? sheet).focus();
-
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.defaultPrevented || (event.key !== 'Escape' && event.key !== 'Tab')) return;
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setInspectorOpen(false);
-        return;
+    const unsubscribe = window.tuffcode?.onMenuAction?.((action) => {
+      if (!action.startsWith('navigate:')) return;
+      const route = action.slice('navigate:'.length);
+      const match = /^\/project\/([^/]+)\/thread\/([^/]+)$/.exec(route);
+      if (match?.[1] !== undefined && match[2] !== undefined) {
+        void navigate({ to: '/project/$projectId/thread/$threadId', params: { projectId: match[1], threadId: match[2] } });
       }
+    });
+    return () => unsubscribe?.();
+  }, [navigate]);
 
-      const elements = focusable();
-      if (elements.length === 0) {
-        event.preventDefault();
-        sheet?.focus();
-        return;
-      }
+  const toggleTab = useCallback((tab: InspectorTab) => setDock((current) => toggleDockTab(current, tab)), []);
+  const openTab = useCallback((tab: InspectorTab) => setDock((current) => openDockTab(current, tab)), []);
+  const closeTab = useCallback((tab: InspectorTab) => setDock((current) => closeDockTab(current, tab)), []);
 
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (first === undefined || last === undefined) return;
-      const active = document.activeElement;
-      const outside = active === null || !sheet?.contains(active);
-
-      if (event.shiftKey && (active === first || outside)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || outside)) {
-        event.preventDefault();
-        first.focus();
-      }
+  const resize = useRef<{ startX: number; startWidth: number } | null>(null);
+  function startResize(event: PointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resize.current = { startX: event.clientX, startWidth: dockWidth };
+  }
+  function moveResize(event: PointerEvent<HTMLDivElement>): void {
+    const drag = resize.current;
+    if (drag === null) return;
+    const next = clampDockWidth(drag.startWidth + (drag.startX - event.clientX), width);
+    setDock((current) => (current.width === next ? current : { ...current, width: next }));
+  }
+  function endResize(event: PointerEvent<HTMLDivElement>): void {
+    if (resize.current === null) return;
+    resize.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
-    };
-  }, [sheetOpen]);
+    saveDockWidth(dockWidth);
+  }
 
   return (
     <MenuProvider>
-      <div
-        data-testid="app-shell"
-        className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
-      >
+      <div data-testid="app-shell" className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
         <header
-          inert={sheetOpen}
           data-testid="topbar"
           className="drag-region relative flex h-[var(--topbar-height)] shrink-0 items-center gap-2 border-b border-border pl-2"
-          style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1.5rem)' }}
+          style={{ paddingRight: 'calc(var(--window-controls-inset, 0px) + 1rem)' }}
         >
-          {/* Absolutely centered so it never reflows the brand or the right cluster. */}
-          {showModeSwitch ? (
+          {showModeSwitch && threadId !== null ? (
             <div className="no-drag absolute top-1/2 left-1/2 hidden -translate-x-1/2 -translate-y-1/2 min-[900px]:flex">
-              <ThreadModeSwitch threadId={inspectorThreadId} />
+              <ThreadModeSwitch threadId={threadId} />
             </div>
           ) : null}
 
@@ -183,39 +178,41 @@ export function AppShell() {
                 to="/"
                 aria-label="Back to workspace"
                 title="Back to workspace"
-                className={cn(
-                  buttonVariants({ variant: 'ghost', size: 'icon-sm' }),
-                  'no-drag shrink-0',
-                )}
+                className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'no-drag shrink-0')}
               >
                 <ArrowLeft strokeWidth={1.75} />
               </Link>
             ) : (
               <IconButton
                 icon={PanelLeft}
-                label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                label={sidebarShown ? 'Hide sidebar' : 'Show sidebar'}
                 size="sm"
-                aria-pressed={sidebarOpen}
+                aria-pressed={sidebarShown}
                 className="no-drag shrink-0"
-                onClick={() => setSidebarOpen((open) => !open)}
+                onClick={() => {
+                  if (compactWindow && dockVisible && !sidebarShown) {
+                    setDock((current) => closeDock(current));
+                    setSidebarOpen(true);
+                    return;
+                  }
+                  setSidebarOpen((open) => !open);
+                }}
               />
             )}
-
             <span className="shrink-0 text-sm font-semibold tracking-tight">Tuffcode</span>
-
             {visibility.backToWorkspace ? (
               <span className="min-w-0 truncate text-xs text-muted-foreground">Settings</span>
             ) : null}
           </div>
 
           <div className="no-drag flex shrink-0 items-center gap-1">
-            {showInspectorToggle ? (
-              <IconButton
-                icon={PanelRight}
-                label={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
-                size="sm"
-                aria-pressed={inspectorOpen}
-                onClick={() => setInspectorOpen((open) => !open)}
+            {hasThread && visibility.inspector && threadId !== null ? (
+              <DockToolbar
+                threadId={threadId}
+                activeTab={dockVisible ? dockActive : null}
+                openTabs={dockTabs}
+                onToggle={toggleTab}
+                onOpen={openTab}
               />
             ) : null}
 
@@ -225,13 +222,10 @@ export function AppShell() {
                 data-status={connection}
                 title={meta.label}
                 aria-label={`Connection: ${meta.label}`}
-                className={cn(
-                  buttonVariants({ variant: 'ghost', size: 'sm' }),
-                  'gap-1.5 px-2 text-2xs',
-                )}
+                className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'gap-1.5 px-2 text-2xs')}
               >
                 <span aria-hidden="true" className={cn('size-2 rounded-full', meta.dot)} />
-                <span className="hidden sm:inline">{meta.label}</span>
+                <span className="hidden lg:inline">{meta.label}</span>
               </PopoverTrigger>
               <PopoverContent align="end" className="w-64 p-3">
                 <div className="flex flex-col gap-2" data-testid="connection-popover">
@@ -244,19 +238,13 @@ export function AppShell() {
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-2xs text-muted-foreground">Port</span>
-                    <span
-                      className="text-xs tabular-nums text-foreground"
-                      data-testid="connection-port"
-                    >
+                    <span className="text-xs tabular-nums text-foreground" data-testid="connection-port">
                       {bootstrap?.port ?? 'unknown'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-2xs text-muted-foreground">Version</span>
-                    <span
-                      className="text-xs tabular-nums text-foreground"
-                      data-testid="connection-version"
-                    >
+                    <span className="text-xs tabular-nums text-foreground" data-testid="connection-version">
                       {bootstrap?.version ?? 'unknown'}
                     </span>
                   </div>
@@ -288,58 +276,63 @@ export function AppShell() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {visibility.sidebar && sidebarOpen ? (
+          {sidebarShown ? (
             <aside
               aria-label="Projects and threads"
-              inert={sheetOpen}
               className="flex w-[var(--sidebar-width)] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
             >
               <Sidebar />
             </aside>
           ) : null}
 
-          <main inert={sheetOpen} className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <Outlet />
           </main>
 
-          {hasThread ? (
+          {dockVisible && threadId !== null ? (
             <>
-              {inspectorVisible ? (
-                <button
-                  type="button"
-                  aria-label="Close inspector"
-                  data-testid="inspector-backdrop"
-                  className="fixed inset-0 z-30 bg-black/40 min-[1024px]:hidden"
-                  onClick={() => setInspectorOpen(false)}
-                />
-              ) : null}
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize panels"
+                tabIndex={0}
+                data-testid="dock-splitter"
+                className="w-1 shrink-0 cursor-col-resize touch-none bg-border transition-colors duration-150 select-none hover:bg-primary/50 focus-visible:bg-primary/40"
+                onPointerDown={startResize}
+                onPointerMove={moveResize}
+                onPointerUp={endResize}
+                onPointerCancel={endResize}
+                onDoubleClick={() => {
+                  setDock((current) => ({ ...current, width: EMPTY_DOCK.width }));
+                  saveDockWidth(EMPTY_DOCK.width);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                  event.preventDefault();
+                  const step = event.shiftKey ? 48 : 16;
+                  const next = clampDockWidth(dockWidth + (event.key === 'ArrowLeft' ? step : -step), width);
+                  setDock((current) => ({ ...current, width: next }));
+                  saveDockWidth(next);
+                }}
+              />
               <aside
-                ref={sheetRef}
-                aria-label="Inspector"
-                role={sheetOpen ? 'dialog' : undefined}
-                aria-modal={sheetOpen ? true : undefined}
-                tabIndex={-1}
+                aria-label="Panels"
                 data-panel=""
                 data-slot="right-panel"
-                data-state={inspectorVisible ? 'open' : 'closed'}
-                className={cn(
-                  'z-40 min-h-0 flex-col border-border bg-background outline-none',
-                  // Below the topbar: its top-right corner is reserved for the native
-                  // caption buttons, so the sheet's own header and collapse control
-                  // must stay under it. The backdrop still covers the whole window.
-                  'max-[1024px]:fixed max-[1024px]:top-[var(--topbar-height)] max-[1024px]:right-0 max-[1024px]:bottom-0',
-                  'max-[1024px]:w-[min(26rem,92vw)] max-[1024px]:border-l max-[1024px]:shadow-2xl',
-                  'min-[1024px]:static min-[1024px]:w-[var(--right-panel-width)] min-[1024px]:max-w-[var(--right-panel-max-width)] min-[1024px]:shrink-0 min-[1024px]:border-l',
-                  // Kept mounted while hidden so the terminal and tab choice survive.
-                  inspectorVisible ? 'flex' : 'hidden',
-                )}
+                data-state="open"
+                data-testid="dock"
+                className="flex min-h-0 shrink-0 flex-col bg-background"
+                style={{ width: dockWidth }}
               >
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                  <InspectorPanel
-                    threadId={inspectorThreadId}
-                    onCollapse={() => setInspectorOpen(false)}
-                  />
-                </div>
+                <InspectorPanel
+                  threadId={threadId}
+                  dock={dock}
+                  onSelect={openTab}
+                  onOpenTab={openTab}
+                  onCloseTab={closeTab}
+                  onCollapse={() => setDock((current) => closeDock(current))}
+                  promptRequest={promptRequest}
+                />
               </aside>
             </>
           ) : null}

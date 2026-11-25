@@ -12,6 +12,10 @@ import {
   closeTab,
   collapseToSinglePane,
   defaultPaneLayout,
+  isPaneSurface,
+  paneSurfaceLabel,
+  sideThreadId,
+  threadSurface,
   loadPaneLayout,
   moveTab,
   normalizePaneLayout,
@@ -72,7 +76,7 @@ describe('pane add and close', () => {
     expect(layout.panes[0]?.width).toBe(100);
   });
 
-  it('splits into equal halves, then equal thirds, up to three panes', () => {
+  it('splits into equal halves, then thirds, then quarters, up to four panes', () => {
     const two = addPane(defaultPaneLayout(), 'diff');
     expect(two.panes).toHaveLength(2);
     expect(widths(two).map((width) => Math.round(width))).toEqual([50, 50]);
@@ -83,9 +87,9 @@ describe('pane add and close', () => {
     expect(widths(three).map((width) => Math.round(width))).toEqual([33, 33, 33]);
     expect(widths(three).reduce((sum, width) => sum + width, 0)).toBeCloseTo(100, 5);
 
-    const fourth = addPane(three, 'brain');
-    expect(fourth).toBe(three);
-    expect(three.panes).toHaveLength(MAX_PANES);
+    const four = addPane(three, 'brain');
+    expect(four.panes).toHaveLength(MAX_PANES);
+    expect(addPane(four, 'files')).toBe(four);
   });
 
   it('never moves the thread out of the first pane and never duplicates a surface', () => {
@@ -138,7 +142,7 @@ describe('pane add and close', () => {
 
     const selected = selectTab(layout, 'pane-2', 'diff');
     expect(selected).toBe(layout);
-    expect(availableSurfaces(layout)).toEqual(['brain', 'council', 'subagent']);
+    expect(availableSurfaces(layout)).toEqual(['files', 'browser', 'brain', 'council', 'subagent']);
   });
 });
 
@@ -331,12 +335,29 @@ describe('pane persistence', () => {
         { tabs: ['diff'] },
         { tabs: ['terminal'] },
         { tabs: ['brain'] },
+        { tabs: ['files'] },
       ],
     });
-    expect(capped?.panes).toHaveLength(3);
+    expect(capped?.panes).toHaveLength(4);
     expect(capped?.panes[0]?.tabs).toEqual(['thread']);
 
     expect(normalizePaneLayout({ panes: [] })).toBeNull();
     expect(normalizePaneLayout(null)).toBeNull();
+  });
+});
+
+describe('side chats', () => {
+  it('opens another chat beside the thread and labels it by title', () => {
+    const surface = threadSurface('thr_other');
+    expect(isPaneSurface(surface)).toBe(true);
+    expect(isPaneSurface('thread:../../etc')).toBe(false);
+    expect(sideThreadId(surface)).toBe('thr_other');
+    expect(sideThreadId('diff')).toBeNull();
+    const layout = addPane(defaultPaneLayout(), surface);
+    expect(layout.panes[1]?.tabs).toEqual([surface]);
+    expect(paneSurfaceLabel(surface, (id) => (id === 'thr_other' ? 'Fix login' : undefined))).toBe('Fix login');
+    expect(paneSurfaceLabel('files')).toBe('Files');
+    const restored = normalizePaneLayout({ panes: [{ tabs: ['thread'] }, { tabs: [surface] }] });
+    expect(restored?.panes[1]?.tabs).toEqual([surface]);
   });
 });

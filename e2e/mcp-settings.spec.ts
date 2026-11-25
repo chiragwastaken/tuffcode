@@ -9,7 +9,8 @@ test('adds, tests and removes a stdio MCP server', async ({ session }) => {
   const { page } = session;
 
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
-  await page.getByRole('link', { name: 'MCP', exact: true }).click();
+  // MCP servers live under Plugins since round 4.
+  await page.getByRole('link', { name: 'Plugins', exact: true }).click();
   await expect(page.getByText('No MCP servers yet')).toBeVisible();
 
   await page.getByTestId('mcp-add-server').click();

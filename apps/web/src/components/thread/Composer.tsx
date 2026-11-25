@@ -40,7 +40,8 @@ import { CouncilStatusStrip } from '../council/CouncilStatusStrip';
 import { councilSummary } from '../council/council-goal';
 import { useCouncilGoal } from '../council/use-council-goal';
 import { requestInspectorTab } from '../inspector/panel-requests';
-import { ModelPicker } from '../models/ModelPicker';
+import { ModelMenu } from '../models/ModelMenu';
+import { takePendingDraft } from './composer-drafts';
 import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './attachments';
 import { dispatchCommandResult } from './command-run';
 import { DEFAULT_CONTEXT_WARNING_THRESHOLD } from './context-meter';
@@ -119,13 +120,12 @@ export function Composer({ thread }: ComposerProps) {
   const rpc = useRpc();
   const navigate = useNavigate();
   const connection = useAppStore((state) => state.connection);
-  const providers = useAppStore((state) => state.providers);
   const settings = useAppStore((state) => state.settings);
   const upsertThread = useAppStore((state) => state.upsertThread);
   const setMessages = useAppStore((state) => state.setMessages);
   const setEvents = useAppStore((state) => state.setEvents);
 
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => takePendingDraft(thread?.id) ?? '');
   const [hint, setHint] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -151,11 +151,6 @@ export function Composer({ thread }: ComposerProps) {
   const summary = useMemo(
     () => (council.status === null ? null : councilSummary(council.status)),
     [council.status],
-  );
-
-  const provider = useMemo(
-    () => providers.find((entry) => entry.id === thread?.providerId),
-    [providers, thread?.providerId],
   );
 
   const trigger = parseTrigger(input);
@@ -208,7 +203,7 @@ export function Composer({ thread }: ComposerProps) {
   }, [thread?.permissionMode]);
 
   async function applyUpdate(
-    patch: Partial<Pick<Thread, 'modelId' | 'executionMode' | 'permissionMode'>>,
+    patch: Partial<Pick<Thread, 'providerId' | 'modelId' | 'executionMode' | 'permissionMode' | 'reasoningEffort'>>,
   ): Promise<void> {
     if (!thread) return;
     setUpdating(true);
@@ -289,7 +284,7 @@ export function Composer({ thread }: ComposerProps) {
         openSettings: (section) => {
           void navigate({ to: '/settings/{-$section}', params: { section } });
         },
-        showContext: (preview) => requestInspectorTab('context', preview),
+        showContext: (preview) => requestInspectorTab('activity', preview),
         reloadTranscript: async (message) => {
           await refreshTranscript(threadId);
           setNotice(message);
@@ -618,17 +613,13 @@ export function Composer({ thread }: ComposerProps) {
                   }}
                 />
 
-                <div data-testid="model-picker-trigger" className="max-w-52 min-w-20">
-                  <ModelPicker
-                    provider={provider}
-                    value={thread?.modelId ?? null}
+                <div data-testid="model-picker-trigger" className="max-w-60 min-w-20">
+                  <ModelMenu
+                    thread={thread}
                     open={modelPickerOpen}
                     onOpenChange={setModelPickerOpen}
                     disabled={!thread || updating}
-                    onSelect={(modelId) => {
-                      if (modelId !== thread?.modelId) void applyUpdate({ modelId });
-                    }}
-                    className="w-full min-w-0"
+                    onApply={(patch) => void applyUpdate(patch)}
                   />
                 </div>
 

@@ -34,6 +34,7 @@ function thread(id: string, projectId: string, updatedAt: string): Thread {
     branch: null,
     baseBranch: null,
     prUrl: null,
+    reasoningEffort: null,
     lastSeq: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt,

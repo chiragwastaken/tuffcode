@@ -18,6 +18,7 @@ const IMPLEMENTED = [
   'brain.link',
   'brain.list',
   'brain.preview',
+  'brain.reset',
   'brain.upsert',
   'checkpoints.create',
   'checkpoints.list',
@@ -50,6 +51,7 @@ const IMPLEMENTED = [
   'settings.get',
   'settings.set',
   'skills.list',
+  'skills.read',
   'threads.approve',
   'threads.context',
   'threads.create',
@@ -58,6 +60,7 @@ const IMPLEMENTED = [
   'threads.get',
   'threads.interrupt',
   'threads.list',
+  'threads.search',
   'threads.send',
   'threads.update',
 ];

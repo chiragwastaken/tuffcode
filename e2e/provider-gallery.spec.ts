@@ -4,7 +4,7 @@ import { openSettingsSection } from './helpers';
 test('provider gallery shows subscriptions and Claude needs no API key', async ({ session }) => {
   const { page } = session;
 
-  await openSettingsSection(page, 'Providers');
+  await openSettingsSection(page, 'Models');
   await page.getByRole('button', { name: 'Add provider' }).first().click();
 
   const dialog = page.getByRole('dialog');

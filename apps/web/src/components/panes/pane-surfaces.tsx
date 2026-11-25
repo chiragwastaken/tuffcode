@@ -4,12 +4,17 @@ import {
   Bot,
   Brain,
   FileDiff,
+  FolderTree,
+  Globe,
+  MessageSquare,
   MessagesSquare,
   SquareTerminal,
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import type { RefObject } from 'react';
+import { useRef, type RefObject } from 'react';
+import { BrowserPane } from '../browser/BrowserPane';
+import { FilesPanel } from '../files/FilesPanel';
 import { useAppStore } from '../../store/app-store';
 import { DiffPanel } from '../diff/DiffPanel';
 import { BrainPanel } from '../inspector/BrainPanel';
@@ -17,16 +22,22 @@ import { CouncilPanel } from '../inspector/CouncilPanel';
 import { SubagentPane } from '../subagents/SubagentPane';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { ThreadView } from '../thread/ThreadView';
-import { type PaneSurface } from './pane-model';
+import { sideThreadId, type FixedPaneSurface, type PaneSurface } from './pane-model';
 
-export const PANE_SURFACE_ICON: Record<PaneSurface, LucideIcon> = {
+export const PANE_SURFACE_ICON: Record<FixedPaneSurface, LucideIcon> = {
   thread: MessagesSquare,
   diff: FileDiff,
+  files: FolderTree,
   terminal: SquareTerminal,
+  browser: Globe,
   brain: Brain,
   council: Users,
   subagent: Bot,
 };
+
+export function paneSurfaceIcon(surface: PaneSurface): LucideIcon {
+  return sideThreadId(surface) === null ? PANE_SURFACE_ICON[surface as FixedPaneSurface] : MessageSquare;
+}
 
 export interface PaneSurfaceViewProps {
   surface: PaneSurface;
@@ -55,6 +66,8 @@ export function PaneSurfaceView({
   onOpenInTerminal,
   onCloseSubagent,
 }: PaneSurfaceViewProps) {
+  const side = sideThreadId(surface);
+  if (side !== null) return <SideChat threadId={side} />;
   switch (surface) {
     case 'thread':
       return (
@@ -68,6 +81,10 @@ export function PaneSurfaceView({
       );
     case 'diff':
       return <DiffPanel threadId={threadId} onOpenInTerminal={onOpenInTerminal} />;
+    case 'files':
+      return <FilesPanel threadId={threadId} onOpenInTerminal={onOpenInTerminal} />;
+    case 'browser':
+      return <BrowserPane />;
     case 'terminal':
       return <TerminalPanel threadId={threadId} />;
     case 'brain':
@@ -77,6 +94,31 @@ export function PaneSurfaceView({
     case 'subagent':
       return <SubagentSurface threadId={threadId} onClose={onCloseSubagent} />;
   }
+}
+
+/** Another chat beside the route's thread, with its own timeline and composer. */
+function SideChat({ threadId }: { threadId: string }) {
+  const thread = useAppStore((state) => state.threads[threadId]);
+  const projectName = useAppStore(
+    (state) => state.projects.find((project) => project.id === thread?.projectId)?.name,
+  );
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  if (thread === undefined) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <EmptyState title="Chat not found" description="It may have been deleted." className="w-full max-w-sm" />
+      </div>
+    );
+  }
+  return (
+    <ThreadView
+      threadId={threadId}
+      thread={thread}
+      projectName={projectName}
+      stageRef={stageRef}
+      externalSubagentPane={false}
+    />
+  );
 }
 
 interface SubagentSurfaceProps {

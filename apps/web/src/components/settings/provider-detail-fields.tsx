@@ -2,6 +2,8 @@ import { Badge, Button, Input, Select, Spinner, Textarea } from '@tuffcode/ui';
 import { useMemo } from 'react';
 import { FormField } from './form-field';
 import { InlineAlert } from './inline-alert';
+import { ModelLimitsList } from './model-limits-list';
+import { ReasoningPills, parseEfforts } from './reasoning-pills';
 import {
   updateModelLimit,
   validateModelLimits,
@@ -38,6 +40,7 @@ const REASONING_EFFORT_OPTIONS = [
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
 ] as const;
 
 /** Fields for API, local, agent, and custom providers. Subscriptions use their own panel. */
@@ -228,90 +231,13 @@ export function ProviderDetailFields({
 
           {draft.models.length > 0 ? (
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-sm font-medium text-foreground">Model limits</span>
-                <span className="text-2xs text-muted-foreground">
-                  Context window and max output tokens.
-                </span>
-              </div>
-              <ul className="divide-y divide-border rounded-md border border-border">
-                {draft.models.map((model) => {
-                  const limitError = modelLimitErrors[model.id];
-                  return (
-                    <li
-                      key={model.id}
-                      className="grid gap-2 px-2.5 py-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_6.5rem] sm:items-start"
-                    >
-                      <span
-                        className="min-w-0 truncate font-mono text-2xs leading-6 text-muted-foreground"
-                        title={model.id}
-                      >
-                        {model.id}
-                      </span>
-                      <label className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-2xs text-muted-foreground">Context</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          step={1000}
-                          className="h-7 text-xs tabular-nums"
-                          value={model.contextWindow ?? ''}
-                          aria-label={`${model.id} context window`}
-                          aria-invalid={Boolean(limitError?.contextWindow)}
-                          onChange={(event) =>
-                            onUpdate(
-                              'models',
-                              updateModelLimit(
-                                draft.models,
-                                model.id,
-                                'contextWindow',
-                                event.target.value.trim() === ''
-                                  ? null
-                                  : Number(event.target.value),
-                              ),
-                            )
-                          }
-                        />
-                        {limitError?.contextWindow ? (
-                          <span role="alert" className="text-2xs text-error">
-                            {limitError.contextWindow}
-                          </span>
-                        ) : null}
-                      </label>
-                      <label className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-2xs text-muted-foreground">Max output</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          step={256}
-                          className="h-7 text-xs tabular-nums"
-                          value={model.maxOutputTokens ?? ''}
-                          aria-label={`${model.id} max output tokens`}
-                          aria-invalid={Boolean(limitError?.maxOutputTokens)}
-                          onChange={(event) =>
-                            onUpdate(
-                              'models',
-                              updateModelLimit(
-                                draft.models,
-                                model.id,
-                                'maxOutputTokens',
-                                event.target.value.trim() === ''
-                                  ? null
-                                  : Number(event.target.value),
-                              ),
-                            )
-                          }
-                        />
-                        {limitError?.maxOutputTokens ? (
-                          <span role="alert" className="text-2xs text-error">
-                            {limitError.maxOutputTokens}
-                          </span>
-                        ) : null}
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
+              <ModelLimitsList
+                models={draft.models}
+                errors={modelLimitErrors}
+                onChange={(modelId, key, value) =>
+                  onUpdate('models', updateModelLimit(draft.models, modelId, key, value))
+                }
+              />
               {errors.models ? (
                 <p role="alert" className="text-xs leading-5 text-error">
                   {errors.models}
@@ -430,21 +356,17 @@ export function ProviderDetailFields({
                 </fieldset>
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <FormField
-                    label="Reasoning efforts"
-                    htmlFor="provider-reasoning-efforts"
-                    hint="Comma separated, for example low, medium, high."
-                  >
-                    <Input
-                      id="provider-reasoning-efforts"
-                      data-testid="provider-reasoning-efforts-input"
-                      value={draft.reasoningEfforts}
-                      onChange={(event) => onUpdate('reasoningEfforts', event.target.value)}
-                      placeholder="low, medium, high"
-                      spellCheck={false}
-                      className="font-mono text-xs"
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <span className="text-sm font-medium text-foreground">Reasoning levels</span>
+                    <ReasoningPills
+                      testId="provider-reasoning-efforts"
+                      value={parseEfforts(draft.reasoningEfforts)}
+                      onChange={(levels) => onUpdate('reasoningEfforts', levels.join(', '))}
                     />
-                  </FormField>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      The levels the composer offers for this provider. Use + for a level of its own, such as max.
+                    </p>
+                  </div>
                   <FormField
                     label="Default reasoning effort"
                     htmlFor="provider-reasoning-effort"

@@ -2,18 +2,17 @@ import { EmptyState, ScrollArea, buttonVariants, cn } from '@tuffcode/ui';
 import { Link } from '@tanstack/react-router';
 import {
   Activity,
+  Bell,
   Boxes,
-  Brain,
   Info,
   Keyboard,
   Palette,
   Plug,
   RefreshCw,
-  ScrollText,
-  Server,
   ShieldCheck,
+  SlidersHorizontal,
   SquareTerminal,
-  Table2,
+  UserRound,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
@@ -27,32 +26,31 @@ import { SAVE_BAR_CLEARANCE_PX } from '../../components/settings/save-bar';
 import { AboutSection } from './about-section';
 import { AgentsSection } from './agents-section';
 import { AppearanceSection } from './appearance-section';
-import { BrainSection } from './brain-section';
 import { CapabilitiesSection } from './capabilities-section';
-import { CustomPromptSection } from './custom-prompt-section';
 import { DiagnosticsSection } from './diagnostics-section';
 import { KeybindingsSection } from './keybindings-section';
-import { McpSection } from './mcp-section';
 import { ModelsSection } from '../../components/settings/models-section';
+import { NotificationsSection } from './notifications-section';
 import { PermissionsSection } from './permissions-section';
+import { PluginsSettingsSection } from './plugins-settings-section';
 import { ProvidersSection } from './providers-section';
 import { TerminalSection } from './terminal-section';
 import { UpdatesSection } from './updates-section';
+import { YourTuffcodeSection } from './your-tuffcode-section';
 
 const SECTION_ICON: Record<SettingsSection, LucideIcon> = {
   appearance: Palette,
-  providers: Server,
   models: Boxes,
-  instructions: ScrollText,
+  'your-tuffcode': UserRound,
+  capabilities: SlidersHorizontal,
+  notifications: Bell,
+  plugins: Plug,
   agents: Wrench,
-  mcp: Plug,
   permissions: ShieldCheck,
   terminal: SquareTerminal,
-  brain: Brain,
   updates: RefreshCw,
   diagnostics: Activity,
   keybindings: Keyboard,
-  capabilities: Table2,
   about: Info,
 };
 
@@ -60,22 +58,27 @@ function renderSection(section: SettingsSection) {
   switch (section) {
     case 'appearance':
       return <AppearanceSection />;
-    case 'providers':
-      return <ProvidersSection />;
     case 'models':
-      return <ModelsSection />;
-    case 'instructions':
-      return <CustomPromptSection />;
+      // Providers and their models live on one page: sign in or add an endpoint, then
+      // fetch and pick models from it.
+      return (
+        <div className="flex flex-col gap-10" data-testid="models-merged-section">
+          <ProvidersSection />
+          <ModelsSection />
+        </div>
+      );
+    case 'your-tuffcode':
+      return <YourTuffcodeSection />;
+    case 'notifications':
+      return <NotificationsSection />;
+    case 'plugins':
+      return <PluginsSettingsSection />;
     case 'agents':
       return <AgentsSection />;
-    case 'mcp':
-      return <McpSection />;
     case 'permissions':
       return <PermissionsSection />;
     case 'terminal':
       return <TerminalSection />;
-    case 'brain':
-      return <BrainSection />;
     case 'updates':
       return <UpdatesSection />;
     case 'diagnostics':

@@ -1,193 +1,158 @@
-import { EmptyState, IconButton, TabsList, TabsPanel, TabsRoot, TabsTab } from '@tuffcode/ui';
-import { PanelRightClose } from 'lucide-react';
-import { useEffect, useReducer, useState } from 'react';
+import { IconButton, cn } from '@tuffcode/ui';
+import { PanelRightClose, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/app-store';
+import { BrowserPane } from '../browser/BrowserPane';
 import { DiffPanel } from '../diff/DiffPanel';
+import { FilesPanel } from '../files/FilesPanel';
 import { TerminalPanel } from '../terminal/TerminalPanel';
 import { requestTerminalAt } from '../terminal/terminal-requests';
 import { ActivityPanel } from './ActivityPanel';
 import { BrainPanel } from './BrainPanel';
-import { ContextPanel } from './ContextPanel';
 import { CouncilPanel } from './CouncilPanel';
-import { subscribePanelRequests, takeInspectorTab } from './panel-requests';
 import {
   INSPECTOR_TAB_LABEL,
-  initialInspectorTabs,
-  inspectorTabsReducer,
-  isInspectorTab,
-  tabForThread,
-  tabsForThread,
+  activeDockTab,
+  visibleDockTabs,
+  type DockState,
   type InspectorTab,
 } from './inspector-tabs';
 
 export interface InspectorPanelProps {
-  /** The open thread, or null on settings and empty workspace routes. */
-  threadId: string | null;
-  /** Hides the inspector column. The collapse control renders only when provided. */
-  onCollapse?: () => void;
+  threadId: string;
+  dock: DockState;
+  onSelect: (tab: InspectorTab) => void;
+  onCloseTab: (tab: InspectorTab) => void;
+  onOpenTab: (tab: InspectorTab) => void;
+  /** Closes every panel and hides the dock. */
+  onCollapse: () => void;
+  /** Bumped by `/context` so Activity opens its prompt sections. */
+  promptRequest: number;
 }
 
 /**
- * Right panel: activity, diff, terminal, brain, council and context for the open
- * thread. Council shows only on a council thread. The tab choice is remembered
- * per thread for the session, and new threads inherit the last tab used anywhere.
+ * The right dock's body: one strip of the panels the user opened, each closable, and
+ * the front panel below it. A panel mounts the first time it is shown and stays
+ * mounted while its tab is open, so a terminal or an unsaved comment survives a tab
+ * switch; closing the tab unmounts it.
  */
-export function InspectorPanel({ threadId, onCollapse }: InspectorPanelProps) {
-  const [tabs, dispatch] = useReducer(inspectorTabsReducer, initialInspectorTabs);
-  const thread = useAppStore((state) => (threadId === null ? undefined : state.threads[threadId]));
-  const visibleTabs = tabsForThread(thread);
-  const storedTab = tabForThread(tabs, threadId);
-  // A remembered council tab on a work thread falls back to the first visible tab.
-  const activeTab = visibleTabs.includes(storedTab) ? storedTab : visibleTabs[0] ?? 'activity';
+export function InspectorPanel({
+  threadId,
+  dock,
+  onSelect,
+  onCloseTab,
+  onOpenTab,
+  onCollapse,
+  promptRequest,
+}: InspectorPanelProps) {
+  const thread = useAppStore((state) => state.threads[threadId]);
+  const tabs = visibleDockTabs(dock, thread);
+  const active = activeDockTab(dock, thread);
+  const [mounted, setMounted] = useState<readonly InspectorTab[]>(() => (active === null ? [] : [active]));
 
-  // A slash command can raise a tab; the composer never imports the inspector.
-  useEffect(
-    () =>
-      subscribePanelRequests(() => {
-        const requested = takeInspectorTab();
-        if (requested === null || threadId === null) return;
-        dispatch({ type: 'select', threadId, tab: requested });
-      }),
-    [threadId],
-  );
-
-  if (threadId === null) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        <InspectorHeader title="Inspector" onCollapse={onCollapse} />
-        <div className="flex flex-1 items-center justify-center px-3">
-          <EmptyState
-            variant="inline"
-            title="Open a thread to inspect its activity, diff, terminal, brain and context."
-            className="w-full"
-          />
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    setMounted((current) => {
+      const kept = current.filter((tab) => tabs.includes(tab));
+      if (active !== null && !kept.includes(active)) kept.push(active);
+      return kept.length === current.length && kept.every((tab, index) => tab === current[index]) ? current : kept;
+    });
+  }, [active, tabs]);
 
   return (
-    <TabsRoot
-      value={activeTab}
-      onValueChange={(value) => {
-        if (isInspectorTab(value)) dispatch({ type: 'select', threadId, tab: value });
-      }}
-      className="flex h-full min-h-0 flex-col"
-    >
-      <InspectorHeader
-        title={thread?.title ?? 'Inspector'}
-        tabs={visibleTabs}
-        onCollapse={onCollapse}
-      />
-
-      <InspectorTabs
-        key={threadId}
-        threadId={threadId}
-        projectId={thread?.projectId ?? null}
-        activeTab={activeTab}
-        onSelectTab={(tab) => dispatch({ type: 'select', threadId, tab })}
-      />
-    </TabsRoot>
-  );
-}
-
-interface InspectorHeaderProps {
-  /** Thread title, or the section name when no thread is open. */
-  title: string;
-  /** Renders the section tabs; only valid inside the panel's `TabsRoot`. */
-  tabs?: readonly InspectorTab[];
-  onCollapse?: () => void;
-}
-
-/**
- * One header for every inspector state: the thread title, the section tabs and a
- * collapse control. Tabs render inside the panel's `TabsRoot`.
- */
-function InspectorHeader({ title, tabs, onCollapse }: InspectorHeaderProps) {
-  return (
-    <div
-      data-testid="inspector-header"
-      className="flex h-[var(--row-height)] shrink-0 items-center gap-2 border-b border-border pr-2 pl-3"
-    >
-      <span
-        data-testid="inspector-title"
-        title={title}
-        className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+    <div className="flex h-full min-h-0 flex-col" data-testid="inspector">
+      <div
+        data-testid="inspector-header"
+        role="tablist"
+        aria-label="Panels"
+        className="flex h-[var(--row-height)] shrink-0 items-center gap-0.5 border-b border-border pr-1 pl-1.5"
       >
-        {title}
-      </span>
-      {tabs === undefined ? null : (
-        <TabsList aria-label="Inspector sections" className="shrink-0">
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {tabs.map((tab) => (
-            <TabsTab key={tab} value={tab} data-testid={`inspector-tab-${tab}`} className="px-2">
-              {INSPECTOR_TAB_LABEL[tab]}
-            </TabsTab>
+            <div
+              key={tab}
+              className={cn(
+                'group flex h-7 shrink-0 items-center rounded-md text-xs transition-colors',
+                tab === active ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
+              )}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === active}
+                data-testid={`inspector-tab-${tab}`}
+                onClick={() => onSelect(tab)}
+                className="h-7 pl-2 pr-1"
+              >
+                {INSPECTOR_TAB_LABEL[tab]}
+              </button>
+              <button
+                type="button"
+                aria-label={`Close ${INSPECTOR_TAB_LABEL[tab]}`}
+                data-testid={`inspector-tab-close-${tab}`}
+                onClick={() => onCloseTab(tab)}
+                className="mr-1 flex size-4 items-center justify-center rounded-sm opacity-60 hover:bg-background/60 hover:opacity-100"
+              >
+                <X className="size-3" strokeWidth={2} />
+              </button>
+            </div>
           ))}
-        </TabsList>
-      )}
-      {onCollapse ? (
+        </div>
         <IconButton
           icon={PanelRightClose}
-          label="Collapse inspector"
+          label="Close panels"
           size="sm"
           className="shrink-0"
           data-testid="inspector-collapse"
           onClick={onCollapse}
         />
-      ) : null}
+      </div>
+      <div className="relative min-h-0 flex-1">
+        {mounted.map((tab) => (
+          <div key={tab} className={cn('absolute inset-0 flex min-h-0 flex-col', tab === active ? '' : 'hidden')}>
+            <DockBody
+              tab={tab}
+              threadId={threadId}
+              projectId={thread?.projectId ?? null}
+              promptRequest={promptRequest}
+              onOpenInTerminal={(path) => {
+                onOpenTab('terminal');
+                requestTerminalAt(path);
+              }}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-interface InspectorTabsProps {
+function DockBody({
+  tab,
+  threadId,
+  projectId,
+  promptRequest,
+  onOpenInTerminal,
+}: {
+  tab: InspectorTab;
   threadId: string;
   projectId: string | null;
-  activeTab: InspectorTab;
-  onSelectTab: (tab: InspectorTab) => void;
-}
-
-/**
- * Panels stay mounted once visited so a tab switch does not close the thread's
- * terminal or drop an unsaved comment. A panel is not mounted until its tab is
- * first shown, so opening a thread never spawns a shell the user did not ask for.
- */
-function InspectorTabs({ threadId, projectId, activeTab, onSelectTab }: InspectorTabsProps) {
-  const [mountedTabs, setMountedTabs] = useState<readonly InspectorTab[]>([activeTab]);
-
-  useEffect(() => {
-    setMountedTabs((current) => (current.includes(activeTab) ? current : [...current, activeTab]));
-  }, [activeTab]);
-
-  const isMounted = (tab: InspectorTab): boolean => mountedTabs.includes(tab);
-
-  return (
-    <>
-      <TabsPanel value="activity" keepMounted className="min-h-0 flex-1">
-        {isMounted('activity') ? <ActivityPanel threadId={threadId} /> : null}
-      </TabsPanel>
-      <TabsPanel value="diff" keepMounted className="min-h-0 flex-1">
-        {isMounted('diff') ? (
-          <DiffPanel
-            threadId={threadId}
-            onOpenInTerminal={(path) => {
-              onSelectTab('terminal');
-              requestTerminalAt(path);
-            }}
-          />
-        ) : null}
-      </TabsPanel>
-      <TabsPanel value="terminal" keepMounted className="min-h-0 flex-1">
-        {isMounted('terminal') ? <TerminalPanel threadId={threadId} /> : null}
-      </TabsPanel>
-      <TabsPanel value="brain" keepMounted className="min-h-0 flex-1">
-        {isMounted('brain') ? <BrainPanel threadId={threadId} projectId={projectId} /> : null}
-      </TabsPanel>
-      <TabsPanel value="council" keepMounted className="min-h-0 flex-1">
-        {isMounted('council') ? <CouncilPanel threadId={threadId} /> : null}
-      </TabsPanel>
-      <TabsPanel value="context" keepMounted className="min-h-0 flex-1">
-        {isMounted('context') ? <ContextPanel threadId={threadId} /> : null}
-      </TabsPanel>
-    </>
-  );
+  promptRequest: number;
+  onOpenInTerminal: (path: string) => void;
+}) {
+  switch (tab) {
+    case 'activity':
+      return <ActivityPanel key={threadId} threadId={threadId} showPrompt={promptRequest > 0} />;
+    case 'files':
+      return <FilesPanel key={threadId} threadId={threadId} onOpenInTerminal={onOpenInTerminal} />;
+    case 'diff':
+      return <DiffPanel key={threadId} threadId={threadId} onOpenInTerminal={onOpenInTerminal} />;
+    case 'terminal':
+      return <TerminalPanel key={threadId} threadId={threadId} />;
+    case 'browser':
+      return <BrowserPane />;
+    case 'brain':
+      return <BrainPanel key={threadId} threadId={threadId} projectId={projectId} />;
+    case 'council':
+      return <CouncilPanel key={threadId} threadId={threadId} />;
+  }
 }

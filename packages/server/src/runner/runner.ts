@@ -18,6 +18,13 @@ import type { ProviderRecord, Repos, TurnStatus } from '../db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
 import { planPrompt } from '../prompt/service.js';
+import { deriveTitle, isPlaceholderTitle } from '../titles.js';
+import {
+  buildHandoffDigest,
+  isCouncilThread,
+  turnReasoningEffort,
+  turnToolPolicy,
+} from './turn-options.js';
 import type { Secrets } from '../secrets/bridge.js';
 
 export interface RunnerDeps {
@@ -403,10 +410,17 @@ export function createRunner(deps: RunnerDeps): Runner {
         injectedIds: brain.injectedIds,
         createdAt,
       });
+      // The first message names a thread that still carries its placeholder title; a
+      // title the user typed is never touched. setThreadStatus below emits the new row.
+      if (isPlaceholderTitle(thread.title)) {
+        const title = deriveTitle(text);
+        if (title !== null) repos.threads.update(thread.id, { title, updatedAt: createdAt });
+      }
       // A rule the user states mid-chat is stored for the following turn; a capture
       // failure is a brain problem, never a reason to fail the turn.
       try {
-        const captured = captureStandingRules(repos, {
+        // Paused memory (brainCapture off) still recalls; it only stops new writes.
+        const captured = !settings.brainEnabled || !settings.brainCapture ? [] : captureStandingRules(repos, {
           text,
           projectId: thread.projectId,
           threadId: thread.id,
@@ -425,10 +439,14 @@ export function createRunner(deps: RunnerDeps): Runner {
 
       const adapterKey = `${provider.id}:${thread.modelId}`;
       let session: AdapterSession;
+      // A fresh adapter session has none of the thread's earlier turns (a provider or
+      // model switch, or a restart), so its first turn carries a bounded digest.
+      let freshSession = false;
       const cached = sessions.get(thread.id);
       if (cached !== undefined && cached.adapterKey === adapterKey) {
         session = cached.session;
       } else {
+        freshSession = true;
         if (cached !== undefined) {
           sessions.delete(thread.id);
           await cached.session.dispose().catch(() => {
@@ -482,16 +500,27 @@ export function createRunner(deps: RunnerDeps): Runner {
       emitContext(thread, assembly.sections, { excludeMessageId, compacted, limits });
 
       const controller = new AbortController();
+      const handoff = freshSession
+        ? buildHandoffDigest(
+            repos.messages.list(thread.id).filter((message) => message.id !== excludeMessageId),
+          )
+        : null;
+      const policy = turnToolPolicy({ settings, council: isCouncilThread(repos, thread) });
+      const effort = turnReasoningEffort(thread, provider.config);
       const ctx: TurnContext = {
         turnId,
+        threadId: thread.id,
         cwd: worktreePath,
-        systemPrompt: assembly.systemPrompt,
+        systemPrompt:
+          handoff === null ? assembly.systemPrompt : `${assembly.systemPrompt}\n\n${handoff}`,
         permissionMode: thread.permissionMode,
         model: thread.modelId,
         brainSlice: '',
         attachments: turnAttachments,
         signal: controller.signal,
-        toolAllowlist: settings.enabledTools,
+        ...(policy.toolAllowlist === undefined ? {} : { toolAllowlist: policy.toolAllowlist }),
+        toolOptions: policy.toolOptions,
+        ...(effort === undefined ? {} : { reasoningEffort: effort }),
         maxToolIterations: settings.maxToolIterations,
         maxOutputTokens: limits.maxOutputTokens,
       };

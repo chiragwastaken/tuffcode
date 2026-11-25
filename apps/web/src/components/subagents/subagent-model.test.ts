@@ -27,6 +27,8 @@ function child(overrides: Partial<SubagentChild> & { childId: string }): Subagen
     finishedAt: null,
     events: [],
     nextSeq: 0,
+    messages: [],
+    awaitingReopen: false,
     ...overrides,
   };
 }

@@ -220,7 +220,11 @@ export function buildSubagentMessage(input: SubagentMessageInput): string {
   if (input.parentTitle !== undefined && input.parentTitle.trim().length > 0) {
     context.push(`parent thread: ${input.parentTitle.trim()}`);
   }
-  const parts = [SUBAGENT_PROMPTS[input.type], `TASK\n${input.task.trim()}`];
+  const parts = [
+    SUBAGENT_PROMPTS[input.type],
+    `TASK\n${input.task.trim()}`,
+    'REPORTING\nYour final answer is the only thing your parent reads, so make it self-contained. On long work, post a one-line progress note with the subagent tool, action report. Follow-up messages from your parent arrive as new turns in this session.',
+  ];
   if (context.length > 0) parts.push(`CONTEXT\n${context.join('\n')}`);
   return parts.join('\n\n');
 }
@@ -285,6 +289,15 @@ export function parseNotetakerFacts(answer: string): NotetakerFact[] {
 
 export const SUBAGENT_TOOL_NAME = 'subagent';
 
+/** spawn starts a child; the rest inspect, steer or stop children of the current thread. */
+export const SUBAGENT_ACTIONS = ['spawn', 'status', 'wait', 'message', 'stop', 'inbox', 'report'] as const;
+
+export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
+
+export function isSubagentAction(value: unknown): value is SubagentAction {
+  return typeof value === 'string' && (SUBAGENT_ACTIONS as readonly string[]).includes(value);
+}
+
 /**
  * The `subagent` tool. It is not part of the file-tool list: the server offers it
  * separately, so `enabledTools` (which lists file tools) never hides delegation.
@@ -296,18 +309,36 @@ export const SUBAGENT_TOOL: {
 } = {
   name: SUBAGENT_TOOL_NAME,
   description:
-    'Spawn a typed subagent that runs in its own session and returns immediately with a child id. explorer maps code read-only with file:line citations; reviewer applies a nine-point rubric and returns a verdict; notetaker extracts durable facts into the project brain; worker implements and verifies a task in its own worktree; planner returns a JSON task list. Poll subagents.list for status and the final summary. Keep tasks self-contained: the child has no conversation history.',
+    'Run and control typed subagents. action spawn (the default) starts a child in its own session and returns its id at once: explorer maps code read-only with file:line citations; reviewer applies a nine-point rubric and returns a verdict; notetaker extracts durable facts into the project brain; worker implements and verifies a task in its own worktree; planner returns a JSON task list. status lists children with state, tool count, tokens, elapsed time and current activity; wait blocks until the given child (or every child) settles or timeout_s passes and returns their summaries; message sends a follow-up to a child (queued while it runs, a new turn once it settled); stop cancels a child and kills its processes; inbox returns unread reports from children. A child calls report to send a progress note to its parent. Spawn independent children together, then wait. Keep tasks self-contained: the child has no conversation history.',
   parameters: {
     type: 'object',
     properties: {
+      action: {
+        type: 'string',
+        description: 'spawn, status, wait, message, stop, inbox or report. Default spawn.',
+      },
+      id: {
+        type: 'string',
+        description: 'Child id for message and stop; optional filter for status and wait.',
+      },
+      text: {
+        type: 'string',
+        description: 'Message text for message and report.',
+      },
+      timeout_s: {
+        type: 'integer',
+        description: 'For wait: seconds to wait before returning. Default 120.',
+        minimum: 1,
+        maximum: 600,
+      },
       type: {
         type: 'string',
-        description: 'Subagent type: explorer, reviewer, notetaker, worker, or planner.',
+        description: 'For spawn: explorer, reviewer, notetaker, worker, or planner.',
       },
       task: {
         type: 'string',
         description:
-          'The complete task for the child: target files or symbols, the change, and the acceptance check. The child sees nothing else.',
+          'For spawn: the complete task for the child, with target files or symbols, the change, and the acceptance check. The child sees nothing else.',
       },
       model: {
         type: 'string',
@@ -315,7 +346,7 @@ export const SUBAGENT_TOOL: {
           'Optional model override. Omit to use the per-type model from settings with its fallback.',
       },
     },
-    required: ['type', 'task'],
+    required: [],
     additionalProperties: false,
   },
 };

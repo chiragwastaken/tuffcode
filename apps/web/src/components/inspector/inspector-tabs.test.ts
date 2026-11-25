@@ -1,104 +1,76 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_DOCK_WIDTH,
+  EMPTY_DOCK,
   INSPECTOR_TABS,
   INSPECTOR_TAB_LABEL,
-  initialInspectorTabs,
-  inspectorTabsReducer,
+  MIN_DOCK_WIDTH,
+  activeDockTab,
+  clampDockWidth,
+  closeDock,
+  closeDockTab,
   isInspectorTab,
-  tabForThread,
-  tabsForThread,
-  type InspectorTab,
-  type InspectorTabsState,
+  loadDockState,
+  openDockTab,
+  saveDockWidth,
+  toggleDockTab,
+  visibleDockTabs,
 } from './inspector-tabs';
 
-function select(
-  state: InspectorTabsState,
-  threadId: string,
-  tab: InspectorTab,
-): InspectorTabsState {
-  return inspectorTabsReducer(state, { type: 'select', threadId, tab });
+const work = { executionMode: 'work' as const };
+const council = { executionMode: 'council' as const };
+
+function memoryStorage(): { data: Map<string, string>; getItem(key: string): string | null; setItem(key: string, value: string): void } {
+  const data = new Map<string, string>();
+  return { data, getItem: (key) => data.get(key) ?? null, setItem: (key, value) => void data.set(key, value) };
 }
 
-describe('inspector tabs', () => {
-  it('lists activity first and labels every tab', () => {
-    expect(INSPECTOR_TABS[0]).toBe('activity');
-    expect(INSPECTOR_TABS).toEqual([
-      'activity',
-      'diff',
-      'terminal',
-      'brain',
-      'council',
-      'context',
-    ]);
+describe('dock model', () => {
+  it('labels every tab and recognizes only known ones', () => {
     for (const tab of INSPECTOR_TABS) expect(INSPECTOR_TAB_LABEL[tab].length).toBeGreaterThan(0);
-    expect(INSPECTOR_TAB_LABEL.activity).toBe('Activity');
+    expect(isInspectorTab('files')).toBe(true);
+    expect(isInspectorTab('context')).toBe(false);
   });
 
-  it('shows council only for a council thread', () => {
-    expect(tabsForThread(undefined)).toEqual(['activity', 'diff', 'terminal', 'brain', 'context']);
-    expect(tabsForThread({ executionMode: 'work' })).toEqual([
-      'activity',
-      'diff',
-      'terminal',
-      'brain',
-      'context',
-    ]);
-    expect(tabsForThread({ executionMode: 'council' })).toEqual([
-      'activity',
-      'diff',
-      'terminal',
-      'brain',
-      'council',
-      'context',
-    ]);
-    expect(tabsForThread({ executionMode: 'plan' })).not.toContain('council');
-  });
-});
-
-describe('inspector tab reducer', () => {
-  it('starts on the diff tab for any thread', () => {
-    expect(tabForThread(initialInspectorTabs, 'thr_a')).toBe('diff');
-    expect(tabForThread(initialInspectorTabs, null)).toBe('diff');
+  it('starts empty, so the dock is hidden until a panel is asked for', () => {
+    expect(EMPTY_DOCK.tabs).toEqual([]);
+    expect(activeDockTab(EMPTY_DOCK, work)).toBeNull();
   });
 
-  it('remembers the tab per thread', () => {
-    let state = select(initialInspectorTabs, 'thr_a', 'brain');
-    state = select(state, 'thr_b', 'terminal');
-
-    expect(tabForThread(state, 'thr_a')).toBe('brain');
-    expect(tabForThread(state, 'thr_b')).toBe('terminal');
+  it('opens, toggles and closes tabs, keeping the neighbour in front', () => {
+    let dock = openDockTab(EMPTY_DOCK, 'activity');
+    dock = openDockTab(dock, 'terminal');
+    dock = openDockTab(dock, 'files');
+    expect(dock).toMatchObject({ tabs: ['activity', 'terminal', 'files'], active: 'files' });
+    dock = toggleDockTab(dock, 'terminal');
+    expect(dock.active).toBe('terminal');
+    dock = toggleDockTab(dock, 'terminal');
+    expect(dock).toMatchObject({ tabs: ['activity', 'files'], active: 'activity' });
+    expect(closeDockTab(dock, 'diff')).toBe(dock);
+    expect(closeDock(dock)).toMatchObject({ tabs: [], active: null });
+    expect(openDockTab(dock, 'activity')).toBe(dock);
   });
 
-  it('opens a thread without its own choice on the last tab used anywhere', () => {
-    const state = select(initialInspectorTabs, 'thr_a', 'council');
-
-    expect(tabForThread(state, 'thr_new')).toBe('council');
-    expect(tabForThread(state, null)).toBe('council');
+  it('hides the council tab outside council threads', () => {
+    const dock = openDockTab(openDockTab(EMPTY_DOCK, 'activity'), 'council');
+    expect(visibleDockTabs(dock, work)).toEqual(['activity']);
+    expect(activeDockTab(dock, work)).toBe('activity');
+    expect(activeDockTab(dock, council)).toBe('council');
   });
 
-  it('keeps the last tab in sync when a thread changes its choice', () => {
-    let state = select(initialInspectorTabs, 'thr_a', 'brain');
-    state = select(state, 'thr_b', 'terminal');
-    state = select(state, 'thr_a', 'diff');
-
-    expect(state.lastTab).toBe('diff');
-    expect(tabForThread(state, 'thr_c')).toBe('diff');
-    expect(tabForThread(state, 'thr_a')).toBe('diff');
-    expect(tabForThread(state, 'thr_b')).toBe('terminal');
+  it('clamps the width between the minimum and 60 percent of the window', () => {
+    expect(clampDockWidth(100, 1400)).toBe(MIN_DOCK_WIDTH);
+    expect(clampDockWidth(2000, 1400)).toBe(840);
+    expect(clampDockWidth(Number.NaN, 1400)).toBe(DEFAULT_DOCK_WIDTH);
+    expect(clampDockWidth(500, 300)).toBe(MIN_DOCK_WIDTH);
   });
 
-  it('returns the same state when the selection does not change', () => {
-    const state = select(initialInspectorTabs, 'thr_a', 'brain');
-
-    expect(select(state, 'thr_a', 'brain')).toBe(state);
-    expect(select(state, 'thr_b', 'brain').lastTab).toBe('brain');
-  });
-
-  it('recognizes only the known inspector tabs', () => {
-    expect(isInspectorTab('activity')).toBe(true);
-    expect(isInspectorTab('brain')).toBe(true);
-    expect(isInspectorTab('context')).toBe(true);
-    expect(isInspectorTab('settings')).toBe(false);
-    expect(isInspectorTab(null)).toBe(false);
+  it('persists only the width', () => {
+    const storage = memoryStorage();
+    expect(loadDockState(storage)).toEqual(EMPTY_DOCK);
+    saveDockWidth(520, storage);
+    expect(loadDockState(storage)).toEqual({ ...EMPTY_DOCK, width: 520 });
+    storage.setItem('tuffcode.dock.v1', '{broken');
+    expect(loadDockState(storage)).toEqual(EMPTY_DOCK);
   });
 });

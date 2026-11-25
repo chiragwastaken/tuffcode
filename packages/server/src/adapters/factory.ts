@@ -86,6 +86,7 @@ export interface AdapterDepsOptions {
   env?: NodeJS.ProcessEnv;
   /** Late-bound so the subagent service can be created after the runner it needs. */
   spawnSubagent?: AdapterDeps['spawnSubagent'];
+  subagentControl?: AdapterDeps['subagentControl'];
   /** Runs the server-owned `mcp`, `memory` and `config` tools for a turn. */
   extraTool?: AdapterDeps['extraTool'];
   /** Enabled stdio MCP servers for vendor CLIs that launch servers themselves. */
@@ -108,6 +109,7 @@ export function createAdapterDeps(options: AdapterDepsOptions): AdapterDeps {
     resolveCommand: options.resolveCommand ?? createResolveCommand(),
     env: adapterEnv(options.env),
     ...(options.spawnSubagent === undefined ? {} : { spawnSubagent: options.spawnSubagent }),
+    ...(options.subagentControl === undefined ? {} : { subagentControl: options.subagentControl }),
     ...(options.extraTool === undefined ? {} : { extraTool: options.extraTool }),
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
   };

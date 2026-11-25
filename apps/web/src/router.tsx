@@ -11,6 +11,7 @@ import { AppShell } from './components/AppShell';
 import { EmptyWorkspace } from './components/EmptyWorkspace';
 import { PaneWorkspace } from './components/panes/PaneWorkspace';
 import { resolveRootView } from './components/shell-layout';
+import { PluginsPage } from './routes/plugins/plugins-page';
 import { SettingsPage } from './routes/settings/settings-page';
 import { useAppStore } from './store/app-store';
 
@@ -98,7 +99,13 @@ const settingsRoute = createRoute({
   component: SettingsView,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, threadRoute, settingsRoute]);
+const pluginsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/plugins',
+  component: PluginsPage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, threadRoute, settingsRoute, pluginsRoute]);
 
 /**
  * The packaged renderer loads `file:///.../index.html?port=…`, so the browser

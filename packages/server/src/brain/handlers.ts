@@ -71,5 +71,9 @@ export function createBrainRpcHandlers(deps: BrainHandlerDeps): RpcHandlers {
     handlers['brain.preview'](params as RpcParams<'brain.preview'>),
   );
   map.set('brain.link', (params) => handlers['brain.link'](params as RpcParams<'brain.link'>));
+  map.set('brain.reset', (params) => {
+    const { projectId } = params as RpcParams<'brain.reset'>;
+    return { removed: deps.repos.transaction(() => deps.repos.brain.removeAll(projectId)) };
+  });
   return map;
 }

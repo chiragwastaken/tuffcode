@@ -20,7 +20,7 @@ test('a reopened thread shows the persisted user message', async ({
   await addProjectThroughUi(session, workspace);
   await addMockProvider(page, mock);
   await seedDefaultModel(rpc);
-  const title = await createThreadThroughSidebar(page);
+  await createThreadThroughSidebar(page);
 
   await sendMessage(page, 'Persist this user turn');
   await expectAssistantText(page, MOCK_TEXT);
@@ -30,7 +30,8 @@ test('a reopened thread shows the persisted user message', async ({
 
   // Reloading drops the session-local echo; the bubble now comes from messages.list.
   await page.reload();
-  await expect(page.getByTestId('thread-title')).toHaveText(title);
+  // The first message names the thread (round 4 titles).
+  await expect(page.getByTestId('thread-title')).toHaveText('Persist this user turn');
   const bubble = page.getByTestId('user-message').filter({ hasText: 'Persist this user turn' });
   await expect(bubble).toBeVisible();
   await expect(bubble).toHaveAttribute('data-status', 'sent');

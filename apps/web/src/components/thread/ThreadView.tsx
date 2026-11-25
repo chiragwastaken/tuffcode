@@ -19,6 +19,8 @@ import { groupTimeline, type UserItem } from './grouping';
 import { useApprovalDecisions, useLocalUserMessages, useSupersededTurns } from './local-messages';
 import { StatusChip } from './status-chip';
 import { Timeline } from './Timeline';
+import { TurnSummary } from './TurnSummary';
+import { TodoStrip } from '../todos/TodoList';
 import { ThreadModeSwitch } from './ThreadModeSwitch';
 import { useThreadStream } from './use-thread-stream';
 
@@ -231,6 +233,8 @@ export function ThreadView({
           <div ref={dockRef} className="flex shrink-0 flex-col">
             {hasSubagents ? <SubagentStrip threadId={threadId} onOpen={openSubagent} /> : null}
 
+            <TodoStrip threadId={threadId} />
+            {thread !== undefined && thread.executionMode !== 'council' ? <TurnSummary thread={thread} /> : null}
             <Composer thread={thread} />
           </div>
         </div>

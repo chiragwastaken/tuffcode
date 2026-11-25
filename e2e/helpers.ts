@@ -24,7 +24,7 @@ export async function addProjectThroughUi(
 
 /** Saves an OpenAI-compatible provider that points at the in-process mock endpoint. */
 export async function addMockProvider(page: Page, mock: MockOpenAI): Promise<void> {
-  await openSettingsSection(page, 'Providers');
+  await openSettingsSection(page, 'Models');
   await page.getByRole('button', { name: 'Add provider' }).first().click();
 
   const dialog = page.getByRole('dialog');
@@ -38,7 +38,8 @@ export async function addMockProvider(page: Page, mock: MockOpenAI): Promise<voi
   await dialog.getByRole('button', { name: 'Add provider' }).click();
 
   await expect(page.getByText('Provider added.')).toBeVisible();
-  await expect(page.getByText(PROVIDER_LABEL)).toBeVisible();
+  // The merged Models page lists the provider and its models, so the label appears twice.
+  await expect(page.getByText(PROVIDER_LABEL).first()).toBeVisible();
 
   // Settings hides the thread sidebar, so leave through the header control before
   // the caller creates a thread.
@@ -80,7 +81,7 @@ export async function sendMessage(page: Page, text: string): Promise<void> {
 
 export async function openSettingsSection(
   page: Page,
-  section: 'Appearance' | 'Providers',
+  section: 'Appearance' | 'Models' | 'Your Tuffcode' | 'Capabilities' | 'Notifications' | 'Plugins',
 ): Promise<void> {
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await page.getByRole('link', { name: section, exact: true }).click();
@@ -104,4 +105,19 @@ export async function expectAssistantText(page: Page, text: string): Promise<voi
   await expect(
     page.getByTestId('assistant-message').filter({ hasText: text }).last(),
   ).toBeVisible();
+}
+
+/** Opens one dock panel from the thread toolbar unless it is already in front. */
+export async function openDock(page: Page, tab: 'activity' | 'terminal' | 'diff' | 'browser' | 'files'): Promise<void> {
+  const tabButton = page.getByTestId(`inspector-tab-${tab}`);
+  if ((await tabButton.count()) > 0 && (await tabButton.getAttribute('aria-selected')) === 'true') return;
+  await page.getByTestId(`dock-toggle-${tab}`).click();
+  await expect(page.getByTestId(`inspector-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+}
+
+/** Closes every dock panel; the dock starts closed, so this is a no-op then. */
+export async function closeDock(page: Page): Promise<void> {
+  const collapse = page.getByTestId('inspector-collapse');
+  if ((await collapse.count()) > 0) await collapse.click();
+  await expect(page.getByTestId('dock')).toHaveCount(0);
 }

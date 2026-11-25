@@ -79,10 +79,18 @@ describe('subagent prompts', () => {
     expect(message).toContain('parent thread: Parent');
   });
 
-  it('describes the subagent tool with the three documented fields', () => {
+  it('describes the subagent tool with its actions and spawn fields', () => {
     expect(SUBAGENT_TOOL.name).toBe('subagent');
-    expect(Object.keys(SUBAGENT_TOOL.parameters.properties)).toEqual(['type', 'task', 'model']);
-    expect(SUBAGENT_TOOL.parameters.required).toEqual(['type', 'task']);
+    expect(Object.keys(SUBAGENT_TOOL.parameters.properties)).toEqual([
+      'action',
+      'id',
+      'text',
+      'timeout_s',
+      'type',
+      'task',
+      'model',
+    ]);
+    expect(SUBAGENT_TOOL.parameters.required).toEqual([]);
   });
 });
 

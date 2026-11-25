@@ -63,7 +63,7 @@ describe('custom instruction budget', () => {
   });
 
   it('warns near the budget before it is exceeded', () => {
-    const budget = customPromptBudget('x'.repeat(240 * 4));
+    const budget = customPromptBudget('x'.repeat(CUSTOM_INSTRUCTION_TOKEN_BUDGET * 0.8 * 4));
     expect(budget.near).toBe(true);
     expect(budget.over).toBe(false);
   });
@@ -185,7 +185,10 @@ describe('prompt preview sections', () => {
   it('labels every section the server can return', () => {
     expect(PROMPT_SECTION_ORDER.map((name) => promptSectionLabel(name))).toEqual([
       PROMPT_SECTION_LABEL.base,
+      PROMPT_SECTION_LABEL['about-user'],
       PROMPT_SECTION_LABEL['custom-instructions'],
+      PROMPT_SECTION_LABEL.skills,
+      PROMPT_SECTION_LABEL['available-skills'],
       PROMPT_SECTION_LABEL['brain-always'],
       PROMPT_SECTION_LABEL['retrieved-memory'],
       PROMPT_SECTION_LABEL['turn-context'],

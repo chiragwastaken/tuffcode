@@ -5,6 +5,8 @@ import {
   AnthropicRequestError,
   type AnthropicContentBlock,
   type AnthropicMessage,
+  type AnthropicRedactedThinkingBlock,
+  type AnthropicThinkingBlock,
   type AnthropicToolResultBlock,
   type AnthropicToolUseBlock,
   type MessagesStreamer,
@@ -19,7 +21,12 @@ import {
   type ToolExecResult,
   type ToolSessionState,
 } from '../openai/tools.js';
-import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
+import {
+  effectiveToolIterations,
+  isServerToolOffered,
+  isToolDisabled,
+  resolveToolOptions,
+} from '../tool-policy.js';
 import { isExtraToolName } from '../extra-tools.js';
 import { redactToolInput } from '../redact.js';
 
@@ -97,6 +104,7 @@ function parseToolArguments(json: string): {
 export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEvent> {
   const { ctx, client, messages, state, deps, signal } = options;
   const turnId = ctx.turnId;
+  const toolOptions = resolveToolOptions(ctx, deps);
   const maxIterations = effectiveToolIterations(
     ctx.maxToolIterations,
     options.maxIterations,
@@ -122,10 +130,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             max_tokens: ctx.maxOutputTokens ?? options.maxTokens,
             ...(system.length > 0 ? { system } : {}),
             ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
-            ...(deps.spawnSubagent !== undefined && ctx.permissionMode !== 'read-only'
-              ? { subagentTool: true }
-              : {}),
-            ...(deps.extraTool !== undefined ? { extraTools: true } : {}),
+            toolOptions,
+            ...(ctx.reasoningEffort !== undefined ? { reasoningEffort: ctx.reasoningEffort } : {}),
           },
           signal,
         );
@@ -142,6 +148,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
 
       const textParts: string[] = [];
       const calls = new Map<number, ToolUseAccumulator>();
+      /** Thinking blocks by stream index; they precede tool_use in the echoed assistant turn. */
+      const thinking = new Map<number, AnthropicThinkingBlock | AnthropicRedactedThinkingBlock>();
       let stopReason: string | null = null;
       let inputTokens: number | undefined;
       let outputTokens: number | undefined;
@@ -170,7 +178,15 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             const block = asRecord(record.content_block);
             if (block === null) continue;
             const index = typeof record.index === 'number' ? record.index : calls.size;
-            if (block.type === 'tool_use') {
+            if (block.type === 'thinking') {
+              thinking.set(index, {
+                type: 'thinking',
+                thinking: typeof block.thinking === 'string' ? block.thinking : '',
+                signature: typeof block.signature === 'string' ? block.signature : '',
+              });
+            } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
+              thinking.set(index, { type: 'redacted_thinking', data: block.data });
+            } else if (block.type === 'tool_use') {
               calls.set(index, {
                 id: typeof block.id === 'string' ? block.id : '',
                 name: typeof block.name === 'string' ? block.name : '',
@@ -202,7 +218,14 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
               typeof delta.thinking === 'string' &&
               delta.thinking.length > 0
             ) {
+              const index = typeof record.index === 'number' ? record.index : -1;
+              const block = thinking.get(index);
+              if (block?.type === 'thinking') block.thinking += delta.thinking;
               yield { type: 'reasoning.delta', turnId, text: delta.thinking };
+            } else if (delta.type === 'signature_delta' && typeof delta.signature === 'string') {
+              const index = typeof record.index === 'number' ? record.index : -1;
+              const block = thinking.get(index);
+              if (block?.type === 'thinking') block.signature += delta.signature;
             } else if (
               delta.type === 'input_json_delta' &&
               typeof delta.partial_json === 'string'
@@ -293,7 +316,9 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
         break;
       }
 
-      const assistantBlocks: AnthropicContentBlock[] = [];
+      const assistantBlocks: AnthropicContentBlock[] = [...thinking.entries()]
+        .toSorted((left, right) => left[0] - right[0])
+        .map(([, block]) => block);
       const text = textParts.join('');
       if (text.length > 0) assistantBlocks.push({ type: 'text', text });
 
@@ -335,8 +360,13 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
         let decision: PermissionDecision | null = null;
         if (parseError !== null) {
           result = { output: parseError, isError: true };
+        } else if (!isServerToolOffered(call.name, toolOptions)) {
+          result = {
+            output: 'tool "' + call.name + '" is not available in this turn',
+            isError: true,
+          };
         } else if (call.name === SUBAGENT_TOOL_NAME) {
-          decision = classifySubagentTool(ctx.permissionMode);
+          decision = classifySubagentTool(ctx.permissionMode, args ?? {});
         } else if (isExtraToolName(call.name)) {
           decision = classifyExtraTool(call.name, args ?? {}, ctx.permissionMode);
         } else if (!isToolName(call.name)) {
@@ -445,6 +475,7 @@ function renderAnthropicMessage(message: AnthropicMessage): string {
     if (block.type === 'tool_use') {
       return `tool_use ${block.name}(${JSON.stringify(block.input)})`;
     }
+    if (block.type === 'thinking' || block.type === 'redacted_thinking') return '';
     return `tool_result ${block.tool_use_id}: ${block.content}${block.is_error === true ? ' (error)' : ''}`;
   });
   return `[${message.role}] ${blocks.join(LF)}`;

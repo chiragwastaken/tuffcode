@@ -26,6 +26,7 @@ import {
   parseReviewVerdict,
 } from './prompts.js';
 import { createBusTurnRunner } from './runner-turn.js';
+import { deriveTitle } from '../titles.js';
 import { deleteChildThread, provisionChildThread } from './threads.js';
 import type {
   Council,
@@ -228,7 +229,7 @@ export function createCouncil(deps: CouncilDeps): Council {
     const planner = await ports.createThread({
       projectId: project.id,
       parentThreadId: thread.id,
-      title: `Plan: ${goal.text.slice(0, 60)}`,
+      title: `Plan: ${deriveTitle(goal.text, 54) ?? 'council goal'}`,
       providerId: thread.providerId,
       modelId: thread.modelId,
       executionMode: 'plan',

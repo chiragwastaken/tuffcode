@@ -21,7 +21,10 @@ export interface CreateThreadInput {
 
 export interface UpdateThreadInput {
   title?: string;
+  providerId?: string;
   modelId?: string;
+  /** `null` clears the override; `undefined` leaves it as it is. */
+  reasoningEffort?: string | null;
   executionMode?: ExecutionMode;
   permissionMode?: PermissionMode;
   status?: ThreadStatus;
@@ -40,7 +43,7 @@ export interface ThreadsRepo {
 }
 
 const THREAD_COLUMNS =
-  'id, project_id, parent_thread_id, title, provider_id, model_id, execution_mode, permission_mode, status, worktree_path, branch, base_branch, pr_url, last_seq, created_at, updated_at';
+  'id, project_id, parent_thread_id, title, provider_id, model_id, execution_mode, permission_mode, status, worktree_path, branch, base_branch, pr_url, reasoning_effort, last_seq, created_at, updated_at';
 
 export function mapThread(row: SqlRow): Thread {
   return {
@@ -57,6 +60,7 @@ export function mapThread(row: SqlRow): Thread {
     branch: nullableText(row, 'branch'),
     baseBranch: nullableText(row, 'base_branch'),
     prUrl: nullableText(row, 'pr_url'),
+    reasoningEffort: nullableText(row, 'reasoning_effort'),
     lastSeq: integer(row, 'last_seq'),
     createdAt: text(row, 'created_at'),
     updatedAt: text(row, 'updated_at'),
@@ -73,7 +77,7 @@ export function createThreadsRepo(db: DatabaseSync): ThreadsRepo {
     'INSERT INTO threads (id, project_id, parent_thread_id, title, provider_id, model_id, execution_mode, permission_mode, status, worktree_path, branch, base_branch, pr_url, last_seq, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)',
   );
   const updateRow = db.prepare(
-    'UPDATE threads SET title = COALESCE(?, title), model_id = COALESCE(?, model_id), execution_mode = COALESCE(?, execution_mode), permission_mode = COALESCE(?, permission_mode), status = COALESCE(?, status), updated_at = ? WHERE id = ?',
+    'UPDATE threads SET title = COALESCE(?, title), provider_id = COALESCE(?, provider_id), model_id = COALESCE(?, model_id), reasoning_effort = CASE WHEN ? = 1 THEN ? ELSE reasoning_effort END, execution_mode = COALESCE(?, execution_mode), permission_mode = COALESCE(?, permission_mode), status = COALESCE(?, status), updated_at = ? WHERE id = ?',
   );
   const removeRow = db.prepare('DELETE FROM threads WHERE id = ?');
   const updateWorktree = db.prepare(
@@ -118,7 +122,10 @@ export function createThreadsRepo(db: DatabaseSync): ThreadsRepo {
     update: (id, input) => {
       updateRow.run(
         input.title ?? null,
+        input.providerId ?? null,
         input.modelId ?? null,
+        input.reasoningEffort === undefined ? 0 : 1,
+        input.reasoningEffort ?? null,
         input.executionMode ?? null,
         input.permissionMode ?? null,
         input.status ?? null,

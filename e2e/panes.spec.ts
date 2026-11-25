@@ -6,6 +6,8 @@ import {
   addProjectThroughUi,
   createThreadThroughSidebar,
   seedDefaultModel,
+  closeDock,
+  openDock,
 } from './helpers';
 
 /**
@@ -27,7 +29,7 @@ test('splits into two and three panes, drags a tab, collapses narrow, and persis
 
   // The inspector's 560px column would put the row below 1100px, where panes
   // deliberately collapse into tabs.
-  await page.getByRole('button', { name: 'Hide inspector' }).click();
+  await closeDock(page);
 
   const workspaceEl = page.getByTestId('pane-workspace');
   await expect(workspaceEl).toHaveAttribute('data-narrow', 'false');
@@ -103,7 +105,7 @@ test('splits into two and three panes, drags a tab, collapses narrow, and persis
   await expect(threadPane.getByTestId('pane-tab-close')).toHaveCount(1);
 
   // Below 1100px the row keeps one pane; every surface becomes a tab.
-  await page.getByRole('button', { name: 'Show inspector' }).click();
+  await openDock(page, 'activity');
   await expect(workspaceEl).toHaveAttribute('data-narrow', 'true');
   await expect(page.getByTestId('pane')).toHaveCount(1);
   await expect(page.getByTestId('pane-tab')).toHaveCount(3);
@@ -116,7 +118,7 @@ test('splits into two and three panes, drags a tab, collapses narrow, and persis
   // Selecting a tab in the narrow row writes back to its owning pane.
   await page.getByTestId('pane-tab').filter({ hasText: 'Thread' }).click();
   await expect(page.getByTestId('pane')).toHaveAttribute('data-surface', 'thread');
-  await page.getByRole('button', { name: 'Hide inspector' }).click();
+  await closeDock(page);
   await expect(workspaceEl).toHaveAttribute('data-narrow', 'false');
   await expect(page.getByTestId('pane')).toHaveCount(2);
   await expect(page.getByTestId('pane').first()).toHaveAttribute('data-surface', 'thread');
@@ -141,7 +143,7 @@ test('splits into two and three panes, drags a tab, collapses narrow, and persis
   );
   const relaunched = session.page.getByTestId('pane-workspace');
   await expect(relaunched).toHaveAttribute('data-pane-count', '3');
-  await session.page.getByRole('button', { name: 'Hide inspector' }).click();
+  await closeDock(session.page);
   await expect(relaunched).toHaveAttribute('data-narrow', 'false');
   await expect(session.page.getByTestId('pane')).toHaveCount(3);
   await expect(session.page.getByTestId('pane').nth(2)).toHaveAttribute('data-surface', 'brain');

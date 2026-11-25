@@ -56,6 +56,8 @@ describe('skills', () => {
       name: 'deploy',
       description: 'Project deploy',
       path: projectFile,
+      source: 'project',
+      pluginId: null,
     });
     expect(skills.find((skill) => skill.name === 'lint')?.description).toBe('Lint the repo');
   });

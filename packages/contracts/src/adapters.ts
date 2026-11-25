@@ -16,6 +16,24 @@ export interface TurnContext {
   maxToolIterations?: number;
   /** Output token cap for this turn; unset leaves the adapter's configured default. */
   maxOutputTokens?: number;
+  /** The thread the turn belongs to, so server tools attribute work without guessing. */
+  threadId?: string;
+  /** Reasoning level for this turn (`none` disables thinking); unset keeps the adapter default. */
+  reasoningEffort?: string;
+  /** Which server tools this turn offers; unset keeps the adapter's construction-time choice. */
+  toolOptions?: TurnToolOptions;
+}
+
+/** Server tools a turn may offer, decided per turn from capabilities and the thread kind. */
+export interface TurnToolOptions {
+  subagent: boolean;
+  /** mcp, memory and config. */
+  extra: boolean;
+  todo: boolean;
+  skill: boolean;
+  webFetch: boolean;
+  /** mcp tool and Claude's MCP servers; false when the connectors capability is off. */
+  mcp: boolean;
 }
 
 export interface AdapterCapabilities {
@@ -54,12 +72,10 @@ export interface AdapterLogger {
   error(msg: string, fields?: Record<string, unknown>): void;
 }
 
-/** One enabled stdio MCP server as a vendor CLI must launch it. */
-export interface McpServerLaunch {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-}
+/** One enabled MCP server as a vendor CLI must reach it: a stdio command or an http endpoint. */
+export type McpServerLaunch =
+  | { type?: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+  | { type: 'http'; url: string; headers: Record<string, string> };
 
 export interface AdapterDeps {
   logger: AdapterLogger;
@@ -72,6 +88,11 @@ export interface AdapterDeps {
    */
   spawnSubagent?(request: SubagentToolRequest): Promise<SubagentToolResult>;
   /**
+   * Every subagent action other than spawn (status, wait, message, stop, inbox, report).
+   * Returns the text the model reads.
+   */
+  subagentControl?(request: SubagentControlRequest): Promise<string>;
+  /**
    * Runs one of the server-owned tools (`mcp`, `memory`, `config`) for a turn. The
    * harness passes the turn cwd because the server resolves the thread from it. When
    * unset the harness offers no extra tools and a stray call is answered as unavailable.
@@ -81,24 +102,40 @@ export interface AdapterDeps {
    * Enabled stdio MCP servers keyed by unique display name. Vendor CLIs that launch
    * servers themselves read this; harness adapters reach MCP through `extraTool`.
    */
-  mcpServers?: Record<string, McpServerLaunch>;
+  mcpServers?: () => Record<string, McpServerLaunch>;
 }
 
 /** Server-owned harness tools: the adapter only shapes the schema and permission. */
-export type ExtraToolName = 'mcp' | 'memory' | 'config';
+export type ExtraToolName = 'mcp' | 'memory' | 'config' | 'todo' | 'skill' | 'web_fetch';
 
 export type ExtraToolRunner = (
   name: ExtraToolName,
   args: Record<string, unknown>,
-  ctx: { cwd: string },
+  ctx: { cwd: string; threadId?: string },
 ) => Promise<string>;
 
 export interface SubagentToolRequest {
   /** Absolute worktree of the parent turn. */
   cwd: string;
+  /** The parent thread when the harness knows it; preferred over the worktree lookup. */
+  threadId?: string;
   type: SubagentType;
   task: string;
   model?: string;
+}
+
+export type SubagentControlAction = 'status' | 'wait' | 'message' | 'stop' | 'inbox' | 'report';
+
+export interface SubagentControlRequest {
+  action: SubagentControlAction;
+  cwd: string;
+  threadId?: string;
+  /** Child id for message and stop; optional filter for status and wait. */
+  id?: string;
+  text?: string;
+  timeoutSeconds?: number;
+  /** The parent turn's signal, so an interrupted parent stops waiting at once. */
+  signal?: AbortSignal;
 }
 
 export interface SubagentToolResult {

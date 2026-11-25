@@ -137,6 +137,13 @@ export function codexSandboxMode(
   }
 }
 
+const CODEX_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+
+/** `turn/start` effort override; levels Codex does not know are left to its default. */
+export function codexEffort(effort: string | undefined): { effort?: string } {
+  return effort !== undefined && CODEX_EFFORTS.has(effort) ? { effort } : {};
+}
+
 /** Sandbox policy object accepted by `turn/start` overrides. */
 export function codexSandboxPolicy(mode: PermissionMode, cwd: string): Record<string, unknown> {
   switch (mode) {
@@ -409,6 +416,7 @@ class CodexAdapter implements AdapterSession {
       approvalPolicy: codexApprovalPolicy(ctx.permissionMode),
       sandboxPolicy: codexSandboxPolicy(ctx.permissionMode, ctx.cwd),
       ...(model === null ? {} : { model }),
+      ...codexEffort(ctx.reasoningEffort),
     };
   }
 

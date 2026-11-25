@@ -7,21 +7,20 @@ import {
 } from './settings-section';
 
 describe('settings sections', () => {
-  it('keeps the spec order', () => {
+  it('keeps the round 4 order', () => {
     expect(SETTINGS_SECTIONS).toEqual([
       'appearance',
-      'providers',
       'models',
-      'instructions',
+      'your-tuffcode',
+      'capabilities',
+      'notifications',
+      'plugins',
       'agents',
-      'mcp',
       'permissions',
       'terminal',
-      'brain',
       'updates',
       'diagnostics',
       'keybindings',
-      'capabilities',
       'about',
     ]);
   });
@@ -29,23 +28,29 @@ describe('settings sections', () => {
   it('labels every section', () => {
     expect(SETTINGS_SECTIONS.map((id) => SETTINGS_SECTION_LABEL[id])).toEqual([
       'Appearance',
-      'Providers',
       'Models',
-      'Instructions',
+      'Your Tuffcode',
+      'Capabilities',
+      'Notifications',
+      'Plugins',
       'Agents and tools',
-      'MCP',
       'Permissions',
       'Terminal',
-      'Brain',
       'Updates',
       'Diagnostics',
       'Keybindings',
-      'Capabilities',
       'About',
     ]);
     expect(new Set(SETTINGS_SECTIONS.map((id) => SETTINGS_SECTION_LABEL[id])).size).toBe(
       SETTINGS_SECTIONS.length,
     );
+  });
+
+  it('folds the retired sections into their new homes', () => {
+    expect(parseSettingsSection('providers')).toBe('models');
+    expect(parseSettingsSection('instructions')).toBe('your-tuffcode');
+    expect(parseSettingsSection('brain')).toBe('your-tuffcode');
+    expect(parseSettingsSection('mcp')).toBe('plugins');
   });
 
   it('defaults to the first section when the route has none', () => {

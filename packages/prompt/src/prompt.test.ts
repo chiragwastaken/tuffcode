@@ -192,10 +192,10 @@ describe('tool schemas', () => {
 });
 
 describe('extra tool schemas', () => {
-  it('declares mcp, memory, and config in order', () => {
-    expect(EXTRA_TOOL_SCHEMAS).toHaveLength(3);
+  it('declares mcp, memory, config, todo, skill and web_fetch in order', () => {
+    expect(EXTRA_TOOL_SCHEMAS).toHaveLength(6);
     expect(EXTRA_TOOL_SCHEMAS.map((tool) => tool.name)).toEqual([...EXTRA_TOOL_NAMES]);
-    expect(EXTRA_TOOL_NAMES).toEqual(['mcp', 'memory', 'config']);
+    expect(EXTRA_TOOL_NAMES).toEqual(['mcp', 'memory', 'config', 'todo', 'skill', 'web_fetch']);
     expect(EXTRA_TOOL_SCHEMAS[0]).toBe(MCP_TOOL);
     expect(EXTRA_TOOL_SCHEMAS[1]).toBe(MEMORY_TOOL);
     expect(EXTRA_TOOL_SCHEMAS[2]).toBe(CONFIG_TOOL);
@@ -208,7 +208,9 @@ describe('extra tool schemas', () => {
     const serialized = JSON.stringify(EXTRA_TOOL_SCHEMAS);
     const tokens = estimateTokens(serialized);
     console.log(`extra tool schemas: ${tokens} tokens (${serialized.length} chars)`);
-    expect(tokens).toBeLessThan(900);
+    // Six schemas since round 4 (todo, skill and web_fetch joined); the turn sends only
+    // the ones its capabilities enable.
+    expect(tokens).toBeLessThan(1500);
   });
 
   it('keeps every extra schema valid', () => {
@@ -216,7 +218,8 @@ describe('extra tool schemas', () => {
       expect(tool.description.trim().length).toBeGreaterThan(20);
       expect(tool.parameters.type).toBe('object');
       expect(tool.parameters.additionalProperties).toBe(false);
-      expect(tool.parameters.required).toContain('action');
+      const required = { todo: 'op', skill: 'name', web_fetch: 'url' }[tool.name as string] ?? 'action';
+      expect(tool.parameters.required).toContain(required);
       for (const key of tool.parameters.required) {
         expect(tool.parameters.properties).toHaveProperty(key);
       }
@@ -450,7 +453,7 @@ describe('custom instructions', () => {
   });
 
   it('falls back to a word boundary when the cap lands inside one long sentence', () => {
-    const capped = buildCustomInstructions(`${'word '.repeat(400)}end`);
+    const capped = buildCustomInstructions(`${'word '.repeat(2400)}end`);
     expect(estimateTokens(capped ?? '')).toBeLessThanOrEqual(CUSTOM_INSTRUCTION_TOKEN_BUDGET);
     expect(capped?.endsWith('word')).toBe(true);
   });

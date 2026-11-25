@@ -1,6 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { SubagentStatus, SubagentType, SubagentView } from '@tuffcode/contracts';
-import { asRow, integer, nullableText, text, type SqlRow } from '../rows.js';
+import type {
+  SubagentMessage,
+  SubagentMessageDirection,
+  SubagentStatus,
+  SubagentType,
+  SubagentView,
+} from '@tuffcode/contracts';
+import { asRow, integer, nullableInteger, nullableText, text, type SqlRow } from '../rows.js';
 
 export interface CreateSubagentInput {
   childId: string;
@@ -37,9 +43,38 @@ export interface SubagentsRepo {
   finish(childId: string, input: FinishSubagentInput): SubagentRecord | undefined;
   /** Startup recovery: queued and running rows can never resume after a restart. */
   failUnfinished(updatedAt: string, summary: string): number;
+  /** Writes the live counters; called throttled while a child runs and once on settle. */
+  recordTelemetry(childId: string, telemetry: SubagentTelemetry): void;
+  /** A settled done or failed child goes back to running for a follow-up turn. */
+  reopen(childId: string, updatedAt: string): SubagentRecord | undefined;
+  addMessage(input: AddSubagentMessageInput): SubagentMessage;
+  listMessages(childId: string): SubagentMessage[];
+  /** To-parent messages the parent has not read, oldest first. */
+  unreadMessages(childId: string): SubagentMessage[];
+  markRead(childId: string, readAt: string): number;
+}
+
+export interface SubagentTelemetry {
+  toolCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  activity: string | null;
+}
+
+export interface AddSubagentMessageInput {
+  id: string;
+  childId: string;
+  direction: SubagentMessageDirection;
+  text: string;
+  createdAt: string;
 }
 
 const COLUMNS =
+  'child_id, thread_id, child_thread_id, type, provider_id, model, status, task, summary, budget_tokens, created_at, updated_at, tool_count, input_tokens, output_tokens, activity, started_at, finished_at';
+
+const SELECT_COLUMNS = `${COLUMNS}, (SELECT COUNT(*) FROM subagent_messages m WHERE m.child_id = subagents.child_id AND m.direction = 'to-parent' AND m.read_at IS NULL) AS unread`;
+
+const INSERT_COLUMNS =
   'child_id, thread_id, child_thread_id, type, provider_id, model, status, task, summary, budget_tokens, created_at, updated_at';
 
 function mapRecord(row: SqlRow): SubagentRecord {
@@ -56,6 +91,33 @@ function mapRecord(row: SqlRow): SubagentRecord {
     updatedAt: text(row, 'updated_at'),
     childThreadId: nullableText(row, 'child_thread_id'),
     budgetTokens: row['budget_tokens'] === null ? null : integer(row, 'budget_tokens'),
+    ...telemetryOf(row),
+  };
+}
+
+/** Telemetry columns are null on rows from before round 4; those stay unmeasured. */
+function telemetryOf(row: SqlRow): Partial<SubagentView> {
+  const out: Partial<SubagentView> = {};
+  const toolCount = nullableInteger(row, 'tool_count');
+  if (toolCount !== null) {
+    out.toolCount = toolCount;
+    out.inputTokens = nullableInteger(row, 'input_tokens') ?? 0;
+    out.outputTokens = nullableInteger(row, 'output_tokens') ?? 0;
+    out.activity = nullableText(row, 'activity');
+  }
+  out.startedAt = nullableText(row, 'started_at');
+  out.finishedAt = nullableText(row, 'finished_at');
+  if (row['unread'] !== undefined) out.unread = integer(row, 'unread');
+  return out;
+}
+
+function mapMessage(row: SqlRow): SubagentMessage {
+  return {
+    id: text(row, 'id'),
+    childId: text(row, 'child_id'),
+    direction: text(row, 'direction') as SubagentMessageDirection,
+    text: text(row, 'text'),
+    createdAt: text(row, 'created_at'),
   };
 }
 
@@ -71,6 +133,17 @@ export function toSubagentView(record: SubagentRecord): SubagentView {
     status: record.status,
     task: record.task,
     ...(record.summary === undefined ? {} : { summary: record.summary }),
+    ...(record.toolCount === undefined
+      ? {}
+      : {
+          toolCount: record.toolCount,
+          inputTokens: record.inputTokens ?? 0,
+          outputTokens: record.outputTokens ?? 0,
+          activity: record.activity ?? null,
+        }),
+    ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
+    ...(record.finishedAt === undefined ? {} : { finishedAt: record.finishedAt }),
+    ...(record.unread === undefined ? {} : { unread: record.unread }),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -78,18 +151,39 @@ export function toSubagentView(record: SubagentRecord): SubagentView {
 
 export function createSubagentsRepo(db: DatabaseSync): SubagentsRepo {
   const insert = db.prepare(
-    `INSERT INTO subagents (${COLUMNS}) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+    `INSERT INTO subagents (${INSERT_COLUMNS}) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
   );
-  const selectOne = db.prepare(`SELECT ${COLUMNS} FROM subagents WHERE child_id = ?`);
+  const selectOne = db.prepare(`SELECT ${SELECT_COLUMNS} FROM subagents WHERE child_id = ?`);
   const selectByThread = db.prepare(
-    `SELECT ${COLUMNS} FROM subagents WHERE thread_id = ? ORDER BY created_at ASC`,
+    `SELECT ${SELECT_COLUMNS} FROM subagents WHERE thread_id = ? ORDER BY created_at ASC`,
   );
-  const selectAll = db.prepare(`SELECT ${COLUMNS} FROM subagents ORDER BY created_at ASC`);
+  const selectAll = db.prepare(`SELECT ${SELECT_COLUMNS} FROM subagents ORDER BY created_at ASC`);
   const updateRunning = db.prepare(
-    'UPDATE subagents SET status = ?, child_thread_id = ?, updated_at = ? WHERE child_id = ?',
+    'UPDATE subagents SET status = ?, child_thread_id = COALESCE(?, child_thread_id), started_at = COALESCE(started_at, ?), tool_count = COALESCE(tool_count, 0), input_tokens = COALESCE(input_tokens, 0), output_tokens = COALESCE(output_tokens, 0), updated_at = ? WHERE child_id = ?',
   );
   const updateFinished = db.prepare(
-    'UPDATE subagents SET status = ?, summary = COALESCE(?, summary), updated_at = ? WHERE child_id = ?',
+    'UPDATE subagents SET status = ?, summary = COALESCE(?, summary), finished_at = ?, updated_at = ? WHERE child_id = ?',
+  );
+  const updateTelemetry = db.prepare(
+    'UPDATE subagents SET tool_count = ?, input_tokens = ?, output_tokens = ?, activity = ? WHERE child_id = ?',
+  );
+  const updateReopen = db.prepare(
+    "UPDATE subagents SET status = 'running', finished_at = NULL, updated_at = ? WHERE child_id = ? AND status IN ('done','failed')",
+  );
+  const insertMessage = db.prepare(
+    'INSERT INTO subagent_messages (id, child_id, direction, text, created_at, read_at) VALUES (?, ?, ?, ?, ?, NULL)',
+  );
+  const selectMessage = db.prepare(
+    'SELECT id, child_id, direction, text, created_at FROM subagent_messages WHERE id = ?',
+  );
+  const selectMessages = db.prepare(
+    'SELECT id, child_id, direction, text, created_at FROM subagent_messages WHERE child_id = ? ORDER BY created_at ASC, rowid ASC',
+  );
+  const selectUnread = db.prepare(
+    "SELECT id, child_id, direction, text, created_at FROM subagent_messages WHERE child_id = ? AND direction = 'to-parent' AND read_at IS NULL ORDER BY created_at ASC, rowid ASC",
+  );
+  const updateRead = db.prepare(
+    "UPDATE subagent_messages SET read_at = ? WHERE child_id = ? AND direction = 'to-parent' AND read_at IS NULL",
   );
   const failUnfinished = db.prepare(
     "UPDATE subagents SET status = 'failed', summary = COALESCE(summary, ?), updated_at = ? WHERE status IN ('queued','running')",
@@ -122,14 +216,42 @@ export function createSubagentsRepo(db: DatabaseSync): SubagentsRepo {
     listByThread: (threadId) => selectByThread.all(threadId).map((row) => mapRecord(asRow(row))),
     listAll: () => selectAll.all().map((row) => mapRecord(asRow(row))),
     setRunning: (childId, childThreadId, updatedAt) => {
-      updateRunning.run('running', childThreadId, updatedAt, childId);
+      updateRunning.run('running', childThreadId, updatedAt, updatedAt, childId);
       return get(childId);
     },
     finish: (childId, input) => {
-      updateFinished.run(input.status, input.summary ?? null, input.updatedAt, childId);
+      updateFinished.run(
+        input.status,
+        input.summary ?? null,
+        input.updatedAt,
+        input.updatedAt,
+        childId,
+      );
       return get(childId);
     },
     failUnfinished: (updatedAt, summary) =>
       Number(failUnfinished.run(summary, updatedAt).changes ?? 0),
+    recordTelemetry: (childId, telemetry) => {
+      updateTelemetry.run(
+        telemetry.toolCount,
+        telemetry.inputTokens,
+        telemetry.outputTokens,
+        telemetry.activity,
+        childId,
+      );
+    },
+    reopen: (childId, updatedAt) => {
+      updateReopen.run(updatedAt, childId);
+      return get(childId);
+    },
+    addMessage: (input) => {
+      insertMessage.run(input.id, input.childId, input.direction, input.text, input.createdAt);
+      const row = selectMessage.get(input.id);
+      if (row === undefined) throw new Error('subagent message insert did not persist');
+      return mapMessage(asRow(row));
+    },
+    listMessages: (childId) => selectMessages.all(childId).map((row) => mapMessage(asRow(row))),
+    unreadMessages: (childId) => selectUnread.all(childId).map((row) => mapMessage(asRow(row))),
+    markRead: (childId, readAt) => Number(updateRead.run(readAt, childId).changes ?? 0),
   };
 }

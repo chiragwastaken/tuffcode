@@ -50,7 +50,7 @@ describe('subagent harness tool', () => {
     ]);
   });
 
-  it('serializes the type, task, and optional model schema', () => {
+  it('serializes the action, type, task and optional model schema', () => {
     const tools = toOpenAITools(undefined, { subagent: true });
     const subagent = tools.find((tool) => toolNames([tool])[0] === 'subagent');
     expect(subagent).toMatchObject({
@@ -59,11 +59,57 @@ describe('subagent harness tool', () => {
         name: 'subagent',
         parameters: {
           type: 'object',
-          required: ['type', 'task'],
+          required: [],
           additionalProperties: false,
         },
       },
     });
+  });
+
+  it('routes every non-spawn action through the control hook with the thread id', async () => {
+    const seen: unknown[] = [];
+    const deps: AdapterDeps = {
+      logger,
+      resolveCommand: async () => null,
+      env: {},
+      spawnSubagent: async () => ({ childId: 'sub_1', status: 'queued' }),
+      subagentControl: async (request) => {
+        seen.push(request);
+        return 'sub_1 running, 3 tools';
+      },
+    };
+    const ctx = context({ threadId: 'thr_parent' });
+    const status = await executeTool('subagent', { action: 'status' }, ctx, createToolSessionState(), deps);
+    expect(status).toEqual({ output: 'sub_1 running, 3 tools', isError: false });
+    await executeTool(
+      'subagent',
+      { action: 'wait', id: 'sub_1', timeout_s: 5 },
+      ctx,
+      createToolSessionState(),
+      deps,
+    );
+    expect(seen).toEqual([
+      { action: 'status', cwd: ctx.cwd, threadId: 'thr_parent', signal: ctx.signal },
+      {
+        action: 'wait',
+        cwd: ctx.cwd,
+        threadId: 'thr_parent',
+        id: 'sub_1',
+        timeoutSeconds: 5,
+        signal: ctx.signal,
+      },
+    ]);
+    const bad = await executeTool('subagent', { action: 'fork' }, ctx, createToolSessionState(), deps);
+    expect(bad.isError).toBe(true);
+  });
+
+  it('classifies read actions as allowed even in read-only turns', () => {
+    expect(classifySubagentTool('read-only', { action: 'status' })).toBe('allow');
+    expect(classifySubagentTool('read-only', { action: 'report' })).toBe('allow');
+    expect(classifySubagentTool('read-only', { action: 'spawn' })).toBe('deny');
+    expect(classifySubagentTool('ask', { action: 'stop' })).toBe('approve');
+    expect(classifySubagentTool('full-auto', {})).toBe('allow');
+    expect(classifySubagentTool('full-auto', { action: 'nope' })).toBe('deny');
   });
 
   it('spawns through the injected hook and returns the child id immediately', async () => {

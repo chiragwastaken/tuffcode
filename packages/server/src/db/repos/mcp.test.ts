@@ -19,10 +19,14 @@ describe('mcp repo', () => {
     expect(server).toEqual({
       id: server.id,
       label: 'filesystem',
+      transport: 'stdio',
       command: 'npx',
       args: [],
       env: {},
       cwd: null,
+      url: null,
+      hasSecret: false,
+      pluginId: null,
       enabled: true,
       createdAt: server.createdAt,
       updatedAt: server.createdAt,
@@ -30,6 +34,27 @@ describe('mcp repo', () => {
     expect(ctx.repos.mcp.list()).toEqual([server]);
     expect(ctx.repos.mcp.get(server.id)).toEqual(server);
     expect(ctx.repos.mcp.get('mcp_missing')).toBeUndefined();
+  });
+
+  it('stores an http server with a secret reference it never exposes', () => {
+    const server = ctx.repos.mcp.upsert({
+      label: 'remote',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      secretRef: 'mcp-secret-1',
+      pluginId: 'plg_1',
+    });
+    expect(server.transport).toBe('http');
+    expect(server.command).toBe('');
+    expect(server.hasSecret).toBe(true);
+    expect(JSON.stringify(server)).not.toContain('mcp-secret-1');
+    expect(ctx.repos.mcp.secretRef(server.id)).toBe('mcp-secret-1');
+    expect(ctx.repos.mcp.listByPlugin('plg_1')).toEqual([server]);
+    expect(ctx.repos.mcp.setEnabledByPlugin('plg_1', false)).toBe(1);
+    expect(ctx.repos.mcp.get(server.id)?.enabled).toBe(false);
+    const cleared = ctx.repos.mcp.upsert({ id: server.id, label: 'remote', secretRef: null });
+    expect(cleared.hasSecret).toBe(false);
+    expect(cleared.url).toBe('https://mcp.example.com/mcp');
   });
 
   it('updates by id and keeps the fields the caller omits', () => {

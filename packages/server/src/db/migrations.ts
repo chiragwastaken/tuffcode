@@ -335,6 +335,68 @@ CREATE TABLE mcp_servers (
 );
 `;
 
+/**
+ * Round 4: per-thread reasoning level, the todo list, subagent telemetry and mailbox,
+ * http MCP servers owned by plugins, and the plugin tables. Every new column is
+ * nullable or defaulted, so rows written before this migration read as unmeasured
+ * telemetry, stdio servers and no reasoning override.
+ */
+const R4_SQL = `
+ALTER TABLE threads ADD COLUMN reasoning_effort TEXT;
+
+CREATE TABLE todos (
+  thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+  phases TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
+
+ALTER TABLE subagents ADD COLUMN tool_count INTEGER;
+ALTER TABLE subagents ADD COLUMN input_tokens INTEGER;
+ALTER TABLE subagents ADD COLUMN output_tokens INTEGER;
+ALTER TABLE subagents ADD COLUMN activity TEXT;
+ALTER TABLE subagents ADD COLUMN started_at TEXT;
+ALTER TABLE subagents ADD COLUMN finished_at TEXT;
+
+CREATE TABLE subagent_messages (
+  id TEXT PRIMARY KEY,
+  child_id TEXT NOT NULL REFERENCES subagents(child_id) ON DELETE CASCADE,
+  direction TEXT NOT NULL CHECK (direction IN ('to-child','to-parent')),
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  read_at TEXT
+);
+CREATE INDEX idx_subagent_messages_child ON subagent_messages(child_id, created_at);
+
+ALTER TABLE mcp_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'stdio';
+ALTER TABLE mcp_servers ADD COLUMN url TEXT;
+ALTER TABLE mcp_servers ADD COLUMN secret_ref TEXT;
+ALTER TABLE mcp_servers ADD COLUMN plugin_id TEXT;
+
+CREATE TABLE plugins (
+  id TEXT PRIMARY KEY,
+  marketplace_id TEXT,
+  name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  version TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('plugin','skill','connector')),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  install_path TEXT NOT NULL,
+  components TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('marketplace','upload','custom')),
+  installed_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_plugins_name ON plugins(COALESCE(marketplace_id, ''), name);
+
+CREATE TABLE plugin_marketplaces (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  url TEXT NOT NULL UNIQUE,
+  verified INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -380,5 +442,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 9,
     name: 'mcp-servers',
     sql: MCP_SERVERS_SQL,
+  },
+  {
+    version: 10,
+    name: 'r4-todos-subagent-telemetry-plugins',
+    sql: R4_SQL,
   },
 ];

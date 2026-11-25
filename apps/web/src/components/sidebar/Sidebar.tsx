@@ -1,15 +1,8 @@
-import { useNavigate, useRouter } from '@tanstack/react-router';
+import { Link, useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
 import type { Project, SubagentView, Thread } from '@tuffcode/contracts';
-import { Button, EmptyState, IconButton, Input, Kbd } from '@tuffcode/ui';
-import { FolderPlus, Search, SearchX, X } from 'lucide-react';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from 'react';
+import { Button, Kbd, cn } from '@tuffcode/ui';
+import { FolderPlus, Plug, Plus, Search, type LucideIcon } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { useAddProject } from '../../hooks/use-add-project';
 import { useRpc } from '../../rpc/rpc-context';
@@ -18,10 +11,10 @@ import { requestInspectorTab } from '../inspector/panel-requests';
 import { childForThread } from '../subagents/subagent-model';
 import { requestThreadDelete, requestThreadRename } from '../thread/thread-dialogs';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
+import { SearchDialog } from './SearchDialog';
 import { SidebarList, type SidebarItemActions } from './SidebarList';
 import {
   buildSidebarItems,
-  filterGroups,
   groupThreadsByProject,
   isCouncilChild,
   needsVirtualization,
@@ -42,30 +35,25 @@ export function Sidebar() {
   const navigate = useNavigate();
   const router = useRouter();
   const { addProject, adding } = useAddProject();
-
-  const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const onPlugins = pathname === '/plugins' || pathname.startsWith('/plugins/');
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() =>
     readCollapsedProjects(typeof window === 'undefined' ? null : window.localStorage),
   );
   const [creatingProjectId, setCreatingProjectId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
-  const searchRef = useRef<HTMLElement>(null);
 
   const groups = useMemo(
     () => groupThreadsByProject(projects, Object.values(threadsById)),
     [projects, threadsById],
   );
-  const filteredGroups = useMemo(() => filterGroups(groups, query), [groups, query]);
-  const searching = query.trim().length > 0;
-  const isCollapsed = useCallback(
-    (projectId: string) => !searching && collapsed.has(projectId),
-    [collapsed, searching],
-  );
-  const items = useMemo(
-    () => buildSidebarItems(filteredGroups, isCollapsed),
-    [filteredGroups, isCollapsed],
-  );
-  const virtual = needsVirtualization(filteredGroups);
+  const isCollapsed = useCallback((projectId: string) => collapsed.has(projectId), [collapsed]);
+  const items = useMemo(() => buildSidebarItems(groups, isCollapsed), [groups, isCollapsed]);
+  const virtual = needsVirtualization(groups);
+  /** New chat goes to the project of the open thread, else the most recent project. */
+  const newChatProjectId =
+    (activeThreadId === null ? undefined : threadsById[activeThreadId]?.projectId) ?? projects[0]?.id ?? null;
 
   const createThread = useCallback(
     async (projectId: string) => {
@@ -100,10 +88,6 @@ export function Sidebar() {
     [navigate, rpc, setActiveThread, settings, upsertThread],
   );
 
-  const clearSearch = useCallback(() => {
-    setQuery('');
-    searchRef.current?.focus();
-  }, []);
 
   const handleToggleProject = useCallback((projectId: string) => {
     setCollapsed((previous) => {
@@ -237,88 +221,65 @@ export function Sidebar() {
     };
   }, [rpc]);
 
+  // "/" outside a text field, or Ctrl+Shift+F anywhere, opens Search.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== '/' || event.defaultPrevented) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target;
-      if (target instanceof HTMLElement) {
-        if (target.isContentEditable) return;
-        if (target.closest('input, textarea, select, [role="dialog"]')) return;
+      if (event.defaultPrevented) return;
+      const chord = (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'f';
+      if (!chord) {
+        if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+        const target = event.target;
+        if (target instanceof HTMLElement) {
+          if (target.isContentEditable) return;
+          if (target.closest('input, textarea, select, [role="dialog"], .xterm')) return;
+        }
       }
       event.preventDefault();
-      searchRef.current?.focus();
+      setSearchOpen(true);
     }
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    if (query !== '') setQuery('');
-    else event.currentTarget.blur();
-  }
-
   const removeThreadCount = removeTarget
     ? (groups.find((group) => group.project.id === removeTarget.id)?.threads.length ?? 0)
     : 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="px-2 py-2">
-        <div className="relative">
-          <Search
-            aria-hidden="true"
-            strokeWidth={1.75}
-            className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-sidebar-muted-foreground"
-          />
-          <Input
-            ref={searchRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Search projects and threads"
-            aria-label="Search projects and threads"
-            spellCheck={false}
-            autoComplete="off"
-            className="h-8 w-full border-sidebar-border bg-secondary pr-8 pl-7 text-xs"
-          />
-          {query !== '' ? (
-            <IconButton
-              icon={X}
-              label="Clear search"
-              size="sm"
-              onClick={clearSearch}
-              className="absolute top-1/2 right-0 size-6 -translate-y-1/2"
-            />
-          ) : (
-            <Kbd className="pointer-events-none absolute top-1/2 right-1.5 h-4 min-w-4 -translate-y-1/2">
-              /
-            </Kbd>
+      <nav aria-label="Workspace" data-testid="sidebar-nav" className="flex flex-col gap-0.5 px-2 pt-2 pb-1">
+        <NavButton
+          icon={Plus}
+          label="New chat"
+          testId="sidebar-new-chat"
+          disabled={newChatProjectId === null || creatingProjectId !== null}
+          onClick={() => {
+            if (newChatProjectId !== null) void createThread(newChatProjectId);
+          }}
+        />
+        <NavButton
+          icon={Search}
+          label="Search"
+          testId="sidebar-search"
+          onClick={() => setSearchOpen(true)}
+          trailing={<Kbd className="h-4 min-w-4 text-2xs">/</Kbd>}
+        />
+        <Link
+          to="/plugins"
+          data-testid="sidebar-plugins"
+          aria-current={onPlugins ? 'page' : undefined}
+          className={cn(
+            'flex h-8 items-center gap-2 rounded-md px-2 text-sm transition-colors duration-150',
+            onPlugins
+              ? 'bg-sidebar-row-selected text-sidebar-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-row-hover',
           )}
-        </div>
-      </div>
+        >
+          <Plug aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-sidebar-muted-foreground" />
+          Plugins
+        </Link>
+      </nav>
 
-      {projects.length === 0 ? (
-        <div className="min-h-0 flex-1" />
-      ) : filteredGroups.length === 0 ? (
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-          <EmptyState
-            icon={SearchX}
-            title="No matches"
-            action={
-              <Button size="sm" variant="outline" onClick={clearSearch}>
-                Clear search
-              </Button>
-            }
-            className="mt-2 min-h-0 px-3 py-6"
-          />
-        </div>
-      ) : (
-        <SidebarList items={items} virtual={virtual} actions={actions} />
-      )}
+      {projects.length === 0 ? <div className="min-h-0 flex-1" /> : <SidebarList items={items} virtual={virtual} actions={actions} />}
 
       <div className="shrink-0 border-t border-sidebar-border p-2">
         <Button
@@ -340,6 +301,37 @@ export function Sidebar() {
         onClose={closeRemoveDialog}
         onRemoved={handleProjectRemoved}
       />
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
+  );
+}
+
+function NavButton({
+  icon: Icon,
+  label,
+  testId,
+  onClick,
+  disabled = false,
+  trailing,
+}: {
+  icon: LucideIcon;
+  label: string;
+  testId: string;
+  onClick: () => void;
+  disabled?: boolean;
+  trailing?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      disabled={disabled}
+      onClick={onClick}
+      className="flex h-8 items-center gap-2 rounded-md px-2 text-left text-sm text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-row-hover disabled:opacity-50"
+    >
+      <Icon aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-sidebar-muted-foreground" />
+      <span className="flex-1">{label}</span>
+      {trailing}
+    </button>
   );
 }

@@ -1,26 +1,36 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { McpServer } from '@tuffcode/contracts';
+import type { McpServer, McpTransport } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
 import { asRow, boolean, json, nullableText, text, type SqlRow } from '../rows.js';
 
 export interface UpsertMcpServerInput {
   id?: string;
   label: string;
-  command: string;
+  transport?: McpTransport;
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string | null;
+  url?: string | null;
+  /** Secret-bridge reference for the bearer token; `null` clears it. */
+  secretRef?: string | null;
+  pluginId?: string | null;
   enabled?: boolean;
 }
 
 export interface McpRepo {
   list(): McpServer[];
   get(id: string): McpServer | undefined;
+  /** The secret-bridge reference behind `hasSecret`; it never leaves the server. */
+  secretRef(id: string): string | null;
+  listByPlugin(pluginId: string): McpServer[];
   upsert(input: UpsertMcpServerInput): McpServer;
   remove(id: string): void;
+  setEnabledByPlugin(pluginId: string, enabled: boolean): number;
 }
 
-const MCP_COLUMNS = 'id, label, command, args, env, cwd, enabled, created_at, updated_at';
+const MCP_COLUMNS =
+  'id, label, transport, command, args, env, cwd, url, secret_ref, plugin_id, enabled, created_at, updated_at';
 
 function stringArray(row: SqlRow, column: string): string[] {
   const decoded = json(row, column);
@@ -47,10 +57,14 @@ function mapMcpServer(row: SqlRow): McpServer {
   return {
     id: text(row, 'id'),
     label: text(row, 'label'),
+    transport: text(row, 'transport') === 'http' ? 'http' : 'stdio',
     command: text(row, 'command'),
     args: stringArray(row, 'args'),
     env: stringRecord(row, 'env'),
     cwd: nullableText(row, 'cwd'),
+    url: nullableText(row, 'url'),
+    hasSecret: nullableText(row, 'secret_ref') !== null,
+    pluginId: nullableText(row, 'plugin_id'),
     enabled: boolean(row, 'enabled'),
     createdAt: text(row, 'created_at'),
     updatedAt: text(row, 'updated_at'),
@@ -63,12 +77,19 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
   );
   const selectOne = db.prepare(`SELECT ${MCP_COLUMNS} FROM mcp_servers WHERE id = ?`);
   const insert = db.prepare(
-    'INSERT INTO mcp_servers (id, label, command, args, env, cwd, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO mcp_servers (id, label, transport, command, args, env, cwd, url, secret_ref, plugin_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const update = db.prepare(
-    'UPDATE mcp_servers SET label = ?, command = ?, args = ?, env = ?, cwd = ?, enabled = ?, updated_at = ? WHERE id = ?',
+    'UPDATE mcp_servers SET label = ?, transport = ?, command = ?, args = ?, env = ?, cwd = ?, url = ?, secret_ref = ?, enabled = ?, updated_at = ? WHERE id = ?',
   );
   const removeRow = db.prepare('DELETE FROM mcp_servers WHERE id = ?');
+  const selectByPlugin = db.prepare(
+    `SELECT ${MCP_COLUMNS} FROM mcp_servers WHERE plugin_id = ? ORDER BY created_at ASC, rowid ASC`,
+  );
+  const selectSecret = db.prepare('SELECT secret_ref FROM mcp_servers WHERE id = ?');
+  const updateByPlugin = db.prepare(
+    'UPDATE mcp_servers SET enabled = ?, updated_at = ? WHERE plugin_id = ?',
+  );
 
   function get(id: string): McpServer | undefined {
     const row = selectOne.get(id);
@@ -78,20 +99,33 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
   return {
     list: () => selectAll.all().map((row) => mapMcpServer(asRow(row))),
     get,
+    secretRef: (id) => {
+      const row = selectSecret.get(id);
+      return row === undefined ? null : nullableText(asRow(row), 'secret_ref');
+    },
+    listByPlugin: (pluginId) => selectByPlugin.all(pluginId).map((row) => mapMcpServer(asRow(row))),
+    setEnabledByPlugin: (pluginId, enabled) =>
+      Number(updateByPlugin.run(enabled ? 1 : 0, new Date().toISOString(), pluginId).changes ?? 0),
     upsert: (input) => {
       const existing = input.id === undefined ? undefined : get(input.id);
       const now = new Date().toISOString();
       const args = JSON.stringify(input.args ?? existing?.args ?? []);
       const env = JSON.stringify(input.env ?? existing?.env ?? {});
+      const transport = input.transport ?? existing?.transport ?? 'stdio';
+      const command = input.command ?? existing?.command ?? '';
       if (existing === undefined) {
         const id = input.id ?? newId('mcp');
         insert.run(
           id,
           input.label,
-          input.command,
+          transport,
+          command,
           args,
           env,
           input.cwd ?? null,
+          input.url ?? null,
+          input.secretRef ?? null,
+          input.pluginId ?? null,
           input.enabled === false ? 0 : 1,
           now,
           now,
@@ -100,12 +134,16 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
         if (created === undefined) throw new Error('mcp server insert did not persist');
         return created;
       }
+      const currentSecret = nullableText(asRow(selectSecret.get(existing.id)), 'secret_ref');
       update.run(
         input.label,
-        input.command,
+        transport,
+        command,
         args,
         env,
         input.cwd === undefined ? existing.cwd : input.cwd,
+        input.url === undefined ? existing.url : input.url,
+        input.secretRef === undefined ? currentSecret : input.secretRef,
         input.enabled === undefined ? (existing.enabled ? 1 : 0) : input.enabled ? 1 : 0,
         now,
         existing.id,

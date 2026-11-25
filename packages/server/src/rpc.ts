@@ -44,7 +44,14 @@ import { createRunnerHandlers } from './runner/rpc.js';
 import type { Runner } from './runner/runner.js';
 import { createSubagentHandlers } from './subagents/rpc.js';
 import type { Subagents } from './subagents/types.js';
-import { createThread, deleteThread, getThread, listThreads, updateThread } from './threads.js';
+import {
+  createThread,
+  deleteThread,
+  getThread,
+  listThreads,
+  searchThreads,
+  updateThread,
+} from './threads.js';
 
 export interface RpcDeps {
   repos: Repos;
@@ -140,6 +147,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
     emitThread(thread);
     return thread;
   });
+  define('threads.search', ({ query, limit }) => searchThreads(deps.repos, query, limit));
   define('threads.delete', async ({ id, removeWorktree }) => {
     await deps.runner.disposeThread(id);
     await deleteThread(deps.repos, id, removeWorktree ?? false);

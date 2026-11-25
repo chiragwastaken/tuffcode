@@ -46,6 +46,8 @@ export interface BrainRepo {
   get(id: string): BrainEntry | undefined;
   upsert(input: UpsertBrainInput): BrainEntry;
   remove(id: string): void;
+  /** Deletes every entry, or one project's; edges go with them. Returns rows removed. */
+  removeAll(projectId?: string): number;
   touch(ids: string[], at: string): void;
   listEdges(): BrainEdge[];
   upsertEdge(input: UpsertBrainEdgeInput): BrainEdge;
@@ -129,6 +131,8 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
        updated_at = excluded.updated_at`,
   );
   const removeRow = db.prepare('DELETE FROM brain_entries WHERE id = ?');
+  const removeEverything = db.prepare('DELETE FROM brain_entries');
+  const removeProject = db.prepare('DELETE FROM brain_entries WHERE project_id = ?');
   const touchRow = db.prepare(
     'UPDATE brain_entries SET use_count = use_count + 1, last_used_at = ? WHERE id = ?',
   );
@@ -203,6 +207,10 @@ export function createBrainRepo(db: DatabaseSync): BrainRepo {
     remove: (id) => {
       removeRow.run(id);
     },
+    removeAll: (projectId) =>
+      Number(
+        (projectId === undefined ? removeEverything.run() : removeProject.run(projectId)).changes ?? 0,
+      ),
     touch: (ids, at) =>
       transaction(db, () => {
         for (const id of ids) touchRow.run(at, id);

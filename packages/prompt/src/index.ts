@@ -6,6 +6,9 @@ export {
   EXTRA_TOOL_SCHEMAS,
   MCP_TOOL,
   MEMORY_TOOL,
+  SKILL_TOOL,
+  TODO_TOOL,
+  WEB_FETCH_TOOL,
 } from './tools';
 export type {
   ExtraToolName,
@@ -27,8 +30,10 @@ export {
   PLANNER_PROMPT,
   REVIEWER_PROMPT,
   SUBAGENT_PROMPTS,
+  SUBAGENT_ACTIONS,
   SUBAGENT_TOOL,
   SUBAGENT_TOOL_NAME,
+  isSubagentAction,
   SUBAGENT_TYPES,
   WORKER_PROMPT,
   buildSubagentMessage,
@@ -37,6 +42,7 @@ export {
 } from './subagents';
 export type {
   NotetakerFact,
+  SubagentAction,
   SubagentMessageInput,
   SubagentToolDefinition,
   SubagentType,
@@ -45,13 +51,19 @@ export { buildTurnContext, estimateTokens } from './context';
 export type { ExecutionMode, TurnContextInput } from './context';
 export {
   assemblePrompt,
+  ABOUT_USER_HEADING,
   CUSTOM_INSTRUCTIONS_HEADING,
   type AssembledPrompt,
   type PromptAssemblyInput,
   type PromptSection,
   type PromptSectionName,
 } from './assemble';
-export { buildCustomInstructions, CUSTOM_INSTRUCTION_TOKEN_BUDGET } from './custom';
+export {
+  buildCustomInstructions,
+  buildPersonalSection,
+  CUSTOM_INSTRUCTION_TOKEN_BUDGET,
+} from './custom';
+export type { PersonalProfile, ResponseStyleName } from './custom';
 
 import { BASE_SYSTEM_PROMPT } from './base';
 

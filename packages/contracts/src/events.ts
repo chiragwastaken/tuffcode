@@ -4,11 +4,14 @@ import {
   EventRowSchema,
   GoalStateSchema,
   IdSchema,
+  InstalledPluginSchema,
   ProviderViewSchema,
   SeqSchema,
+  SubagentMessageSchema,
   SubagentStatusSchema,
   SubagentTypeSchema,
   ThreadSchema,
+  TodoPhaseSchema,
 } from './entities.js';
 import { SettingsSchema } from './settings.js';
 
@@ -154,6 +157,33 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
       summary: z.string().optional(),
     }),
   ),
+  serverEvent(
+    'subagent.telemetry',
+    z.object({
+      childId: IdSchema,
+      threadId: IdSchema,
+      toolCount: z.number().int().nonnegative(),
+      inputTokens: z.number().int().nonnegative(),
+      outputTokens: z.number().int().nonnegative(),
+      activity: z.string().nullable(),
+    }),
+  ),
+  serverEvent(
+    'subagent.message',
+    z.object({
+      childId: IdSchema,
+      threadId: IdSchema,
+      message: SubagentMessageSchema,
+    }),
+  ),
+  serverEvent(
+    'todo.updated',
+    z.object({
+      threadId: IdSchema,
+      phases: TodoPhaseSchema.array(),
+    }),
+  ),
+  serverEvent('plugins.updated', InstalledPluginSchema.array()),
   serverEvent('providers.updated', ProviderViewSchema.array()),
   serverEvent(
     'provider.login.output',

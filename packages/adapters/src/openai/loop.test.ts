@@ -327,7 +327,7 @@ describe('runTurn', () => {
       }),
     );
 
-    expect(client.requests[0]?.extraTools).toBe(true);
+    expect(client.requests[0]?.toolOptions?.extra).toBe(true);
     expect(events.find((event) => event.type === 'tool.started')).toMatchObject({
       type: 'tool.started',
       toolCallId: 'call_mem',
@@ -367,7 +367,7 @@ describe('runTurn', () => {
       }),
     );
 
-    expect(client.requests[0]?.extraTools).toBeUndefined();
+    expect(client.requests[0]?.toolOptions?.extra).toBe(false);
   });
 });
 

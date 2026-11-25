@@ -6,8 +6,8 @@
  */
 import type { SubagentModelChoice, SubagentModels } from '@tuffcode/contracts';
 
-export const CUSTOM_INSTRUCTIONS_CHAR_LIMIT = 4000;
-export const CUSTOM_INSTRUCTION_TOKEN_BUDGET = 300;
+export const CUSTOM_INSTRUCTIONS_CHAR_LIMIT = 16000;
+export const CUSTOM_INSTRUCTION_TOKEN_BUDGET = 2000;
 export const CHARS_PER_TOKEN = 4;
 
 /** Below the cap the textarea still shows a warning, so a cut never surprises. */
@@ -79,7 +79,10 @@ export function customPromptBudget(text: string): CustomPromptBudget {
  */
 export const PROMPT_SECTION_ORDER = [
   'base',
+  'about-user',
   'custom-instructions',
+  'skills',
+  'available-skills',
   'brain-always',
   'retrieved-memory',
   'turn-context',
@@ -90,7 +93,10 @@ export type PromptSectionName = (typeof PROMPT_SECTION_ORDER)[number];
 
 export const PROMPT_SECTION_LABEL: Record<PromptSectionName, string> = {
   base: 'Base prompt',
+  'about-user': 'About you',
   'custom-instructions': 'Custom instructions',
+  skills: 'Skills for this message',
+  'available-skills': 'Available skills',
   'brain-always': 'Brain always',
   'retrieved-memory': 'Brain retrieved',
   'turn-context': 'Turn context',
@@ -100,7 +106,10 @@ export const PROMPT_SECTION_LABEL: Record<PromptSectionName, string> = {
 /** Segment colours for the total bar; each one is a static class for Tailwind. */
 const PROMPT_SECTION_BAR: Record<PromptSectionName, string> = {
   base: 'bg-primary',
+  'about-user': 'bg-info/60',
   'custom-instructions': 'bg-info',
+  skills: 'bg-success/70',
+  'available-skills': 'bg-success/40',
   'brain-always': 'bg-success',
   'retrieved-memory': 'bg-warning',
   'turn-context': 'bg-muted-foreground',

@@ -1,6 +1,10 @@
 import type { SubagentType, ThreadEventRow } from '@tuffcode/contracts';
-import { Badge, cn, EmptyState, ScrollArea } from '@tuffcode/ui';
-import { Activity, ChevronRight } from 'lucide-react';
+import { Badge, cn, EmptyState, IconButton, Input, ScrollArea } from '@tuffcode/ui';
+import { Activity, ChevronRight, MessageSquare, Square } from 'lucide-react';
+import { toast } from 'sonner';
+import { useRpc } from '../../rpc/rpc-context';
+import { TodoList, todoProgress, useThreadTodos } from '../todos/TodoList';
+import { ActivityContext } from './ActivityContext';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/app-store';
@@ -27,6 +31,8 @@ import {
 
 export interface ActivityPanelProps {
   threadId: string;
+  /** Opens the prompt sections, as `/context` asks. */
+  showPrompt?: boolean;
 }
 
 const EMPTY_EVENTS: readonly ThreadEventRow[] = [];
@@ -50,20 +56,21 @@ function useLiveClock(active: boolean): number {
  * Council section read from its goal; a work thread shows only tools, subagents
  * and the work waiting on the user or a slot.
  */
-export function ActivityPanel({ threadId }: ActivityPanelProps) {
+export function ActivityPanel({ threadId, showPrompt = false }: ActivityPanelProps) {
   const executionMode = useAppStore((state) => state.threads[threadId]?.executionMode);
-  if (executionMode === 'council') return <CouncilActivityPanel threadId={threadId} />;
-  return <ActivityBody threadId={threadId} council={null} councilResolving={false} />;
+  if (executionMode === 'council') return <CouncilActivityPanel threadId={threadId} showPrompt={showPrompt} />;
+  return <ActivityBody threadId={threadId} council={null} councilResolving={false} showPrompt={showPrompt} />;
 }
 
 /** Council threads own a goal, so the status hook lives in this branch only. */
-function CouncilActivityPanel({ threadId }: ActivityPanelProps) {
+function CouncilActivityPanel({ threadId, showPrompt = false }: ActivityPanelProps) {
   const { status, loading } = useCouncilStatus(threadId);
   return (
     <ActivityBody
       threadId={threadId}
       council={councilActivityOf(status)}
       councilResolving={status === null && loading}
+      showPrompt={showPrompt}
     />
   );
 }
@@ -74,6 +81,7 @@ interface ActivityBodyProps {
   council: CouncilActivity | null;
   /** True while a council thread's goal is still being looked up. */
   councilResolving: boolean;
+  showPrompt?: boolean;
 }
 
 /**
@@ -82,8 +90,13 @@ interface ActivityBodyProps {
  * the work waiting on the user or a slot. Rows expand in place; nothing here
  * navigates away from the thread.
  */
-function ActivityBody({ threadId, council, councilResolving }: ActivityBodyProps) {
+function ActivityBody({ threadId, council, councilResolving, showPrompt = false }: ActivityBodyProps) {
+  const rpc = useRpc();
   const events = useAppStore((state) => state.events[threadId]);
+  const todos = useThreadTodos(threadId);
+  const progress = todoProgress(todos);
+  const [messaging, setMessaging] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
   const subagents = useAppStore(
     useShallow((state) => subagentsOfThread(state.subagents, threadId)),
   );
@@ -118,12 +131,43 @@ function ActivityBody({ threadId, council, councilResolving }: ActivityBodyProps
     finished.length === 0 &&
     subagents.length === 0 &&
     waiting.length === 0 &&
+    progress.total === 0 &&
     !councilResolving &&
     !(council?.goalActive ?? false);
 
+  async function sendToChild(childId: string): Promise<void> {
+    const text = draft.trim();
+    if (text.length === 0) return;
+    try {
+      const result = await rpc.request('subagents.message', { childId, text });
+      toast.success(result.delivered === 'queued' ? 'Queued for the subagent.' : 'Subagent reopened with your message.');
+      setDraft('');
+      setMessaging(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not message the subagent.');
+    }
+  }
+
+  async function stopChild(childId: string): Promise<void> {
+    try {
+      await rpc.request('subagents.cancel', { childId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not stop the subagent.');
+    }
+  }
+
   return (
     <ScrollArea className="h-full min-h-0">
-      <div data-testid="activity-panel" className="flex flex-col gap-2 p-2">
+      <div data-testid="activity-panel" className="flex flex-col gap-3 p-2">
+        <ActivityContext threadId={threadId} showPrompt={showPrompt} />
+
+        {progress.total > 0 ? (
+          <section aria-label="Todo" data-testid="activity-todo" className="flex flex-col gap-0.5">
+            <SectionHeading label={`Todo ${progress.done}/${progress.total}`} count={progress.total - progress.done} />
+            <TodoList phases={todos} compact />
+          </section>
+        ) : null}
+
         {idle ? (
           <EmptyState
             variant="inline"
@@ -227,32 +271,80 @@ function ActivityBody({ threadId, council, councilResolving }: ActivityBodyProps
             {subagents.map((child) => {
               const Icon = SUBAGENT_TYPE_ICON[child.type];
               const elapsed = formatDuration(subagentElapsedMs(child, now));
+              const running = isRunningSubagent(child);
+              const usage =
+                child.toolCount === undefined
+                  ? 'usage -'
+                  : `${child.toolCount} tools · ${formatCompact((child.inputTokens ?? 0) + (child.outputTokens ?? 0))} tok`;
               return (
-                <button
-                  key={child.childId}
-                  type="button"
-                  data-testid="activity-subagent-row"
-                  data-status={child.status}
-                  onClick={() => openSubagent(child.childId)}
-                  title={child.task.length === 0 ? SUBAGENT_TYPE_LABEL[child.type] : child.task}
-                  className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left text-xs text-foreground transition-colors duration-150 hover:bg-accent"
-                >
-                  <Icon
-                    aria-hidden="true"
-                    strokeWidth={1.75}
-                    className="size-3 shrink-0 text-muted-foreground"
-                  />
-                  <span className="shrink-0">{SUBAGENT_TYPE_LABEL[child.type]}</span>
-                  <StatusChip status={SUBAGENT_STATUS_TONE[child.status]} className="h-3.5 px-1" />
-                  <span className="min-w-0 flex-1 truncate font-mono text-2xs text-muted-foreground">
-                    {child.model}
-                  </span>
-                  {elapsed === '' ? null : (
-                    <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
-                      {elapsed}
-                    </span>
-                  )}
-                </button>
+                <div key={child.childId} className="flex flex-col rounded-md hover:bg-accent/60">
+                  <div className="flex h-8 min-w-0 items-center gap-1">
+                    <button
+                      type="button"
+                      data-testid="activity-subagent-row"
+                      data-status={child.status}
+                      onClick={() => openSubagent(child.childId)}
+                      title={child.task.length === 0 ? SUBAGENT_TYPE_LABEL[child.type] : child.task}
+                      className="flex h-8 min-w-0 flex-1 items-center gap-1.5 px-1.5 text-left text-xs text-foreground"
+                    >
+                      <Icon aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0 text-muted-foreground" />
+                      <span className="shrink-0">{SUBAGENT_TYPE_LABEL[child.type]}</span>
+                      <StatusChip status={SUBAGENT_STATUS_TONE[child.status]} className="h-3.5 px-1" />
+                      <span data-testid="activity-subagent-usage" className="min-w-0 flex-1 truncate text-2xs tabular-nums text-muted-foreground">
+                        {usage}
+                      </span>
+                      {(child.unread ?? 0) > 0 ? (
+                        <Badge variant="info" size="sm">{child.unread}</Badge>
+                      ) : null}
+                      {elapsed === '' ? null : (
+                        <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">{elapsed}</span>
+                      )}
+                    </button>
+                    {child.status === 'cancelled' ? null : (
+                      <IconButton
+                        icon={MessageSquare}
+                        label="Message subagent"
+                        size="sm"
+                        className="size-6"
+                        data-testid="activity-subagent-message"
+                        onClick={() => setMessaging((current) => (current === child.childId ? null : child.childId))}
+                      />
+                    )}
+                    {running ? (
+                      <IconButton
+                        icon={Square}
+                        label="Stop subagent"
+                        size="sm"
+                        className="size-6"
+                        data-testid="activity-subagent-stop"
+                        onClick={() => void stopChild(child.childId)}
+                      />
+                    ) : null}
+                  </div>
+                  {child.activity && running ? (
+                    <p className="truncate px-6 pb-1 font-mono text-2xs text-muted-foreground" title={child.activity}>
+                      {child.activity}
+                    </p>
+                  ) : null}
+                  {messaging === child.childId ? (
+                    <form
+                      className="flex gap-1 px-1.5 pb-1.5"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void sendToChild(child.childId);
+                      }}
+                    >
+                      <Input
+                        autoFocus
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder={running ? 'Queued for after its current step' : 'Reopens the subagent'}
+                        aria-label="Message for the subagent"
+                        className="h-7 flex-1 text-xs"
+                      />
+                    </form>
+                  ) : null}
+                </div>
               );
             })}
           </section>
@@ -297,6 +389,12 @@ function ActivityBody({ threadId, council, councilResolving }: ActivityBodyProps
       </div>
     </ScrollArea>
   );
+}
+
+function formatCompact(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
 function SectionHeading({ label, count }: { label: string; count: number }) {

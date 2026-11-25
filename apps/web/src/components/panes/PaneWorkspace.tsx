@@ -28,7 +28,8 @@ import {
   MAX_PANE_WIDTH_RATIO,
   MIN_PANE_WIDTH_PX,
   NARROW_PANE_WIDTH_PX,
-  PANE_SURFACE_LABEL,
+  paneSurfaceLabel,
+  threadSurface,
   addPane,
   addTab,
   availableSurfaces,
@@ -48,7 +49,8 @@ import {
   type PaneLayoutPane,
   type PaneSurface,
 } from './pane-model';
-import { PANE_SURFACE_ICON, PaneSurfaceView } from './pane-surfaces';
+import { PaneSurfaceView, paneSurfaceIcon } from './pane-surfaces';
+import { subscribePaneRequests, takePaneRequest } from './pane-requests';
 
 /** The drag payload between pane headers. */
 const PANE_TAB_MIME = 'application/x-tuffcode-pane-tab';
@@ -208,6 +210,29 @@ export function PaneWorkspace({ threadId, thread, projectName }: PaneWorkspacePr
     if (narrow) setNarrowTab('subagent');
   }, [layout, narrow, subagentPaneOpen]);
 
+  // The toolbar's + menu asks for a side chat or a split; open it, or bring it forward.
+  useEffect(
+    () =>
+      subscribePaneRequests(() => {
+        const request = takePaneRequest();
+        if (request === null) return;
+        const surface = request.kind === 'side-chat' ? threadSurface(request.threadId) : request.surface;
+        const owner = paneIdOfSurface(layout, surface);
+        if (owner !== null) {
+          setLayout(selectTab(layout, owner, surface));
+          setFocusedPaneId(owner);
+          return;
+        }
+        if (layout.panes.length < MAX_PANES) {
+          split(surface);
+          return;
+        }
+        const last = layout.panes.at(-1);
+        if (last !== undefined) openTab(last.id, surface);
+      }),
+    [layout, openTab, split],
+  );
+
   const openInTerminal = useCallback(
     (paneId: string, path: string) => {
       openTab(paneId, 'terminal');
@@ -224,7 +249,7 @@ export function PaneWorkspace({ threadId, thread, projectName }: PaneWorkspacePr
       }
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData(PANE_TAB_MIME, JSON.stringify({ paneId, surface }));
-      event.dataTransfer.setData('text/plain', PANE_SURFACE_LABEL[surface]);
+      event.dataTransfer.setData('text/plain', paneSurfaceLabel(surface));
       setDragTab({ paneId, surface });
     },
     [],
@@ -477,7 +502,9 @@ function PaneHeader({
   onDrop,
 }: PaneHeaderProps) {
   const showDropIndicator = dropTarget !== null && dropTarget.paneId === pane.id;
-  const activeLabel = PANE_SURFACE_LABEL[pane.activeTab];
+  const threads = useAppStore((state) => state.threads);
+  const titleOf = (id: string): string | undefined => threads[id]?.title;
+  const activeLabel = paneSurfaceLabel(pane.activeTab, titleOf);
 
   return (
     <div
@@ -522,8 +549,8 @@ function PaneHeader({
         className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
       >
         {pane.tabs.map((surface, index) => {
-          const Icon = PANE_SURFACE_ICON[surface];
-          const label = PANE_SURFACE_LABEL[surface];
+          const Icon = paneSurfaceIcon(surface);
+          const label = paneSurfaceLabel(surface, titleOf);
           const active = surface === pane.activeTab;
           return (
             <Fragment key={surface}>
@@ -653,7 +680,7 @@ function PaneSurfaceMenu({
           <p className="px-2 py-1.5 text-2xs text-muted-foreground">Every surface is open.</p>
         ) : (
           surfaces.map((surface) => {
-            const SurfaceIcon = PANE_SURFACE_ICON[surface];
+            const SurfaceIcon = paneSurfaceIcon(surface);
             return (
               <PopoverClose
                 key={surface}
@@ -669,7 +696,7 @@ function PaneSurfaceMenu({
                   strokeWidth={1.75}
                   className="size-3.5 text-muted-foreground"
                 />
-                {PANE_SURFACE_LABEL[surface]}
+                {paneSurfaceLabel(surface)}
               </PopoverClose>
             );
           })
@@ -727,7 +754,7 @@ function PaneBody({
           <div
             key={surface}
             role="tabpanel"
-            aria-label={PANE_SURFACE_LABEL[surface]}
+            aria-label={paneSurfaceLabel(surface)}
             data-testid="pane-surface"
             data-surface={surface}
             data-active={active ? 'true' : 'false'}

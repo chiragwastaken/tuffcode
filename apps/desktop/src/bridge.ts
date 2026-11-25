@@ -21,13 +21,31 @@ export interface UpdateCheckOutcome {
   checkedAt: string;
 }
 
+/** A desktop notification; `route` is where a click takes the window. */
+export interface NotifyRequest {
+  title: string;
+  body: string;
+  route?: string;
+  silent?: boolean;
+}
+
+export interface PickFileRequest {
+  title?: string;
+  /** Extensions without the dot, for example ['zip', 'skill', 'md']. */
+  extensions: string[];
+}
+
 /** The only surface exposed to the renderer through the preload bridge (spec section 10). */
 export interface TuffcodeBridge {
   getBootstrap(): Promise<BootstrapInfo>;
   pickFolder(): Promise<string | null>;
+  pickFile(request: PickFileRequest): Promise<string | null>;
   onMenuAction(callback: (action: string) => void): () => void;
   setTheme(theme: Theme): void;
   checkForUpdates(): Promise<UpdateCheckOutcome>;
+  notify(request: NotifyRequest): void;
+  setKeepAwake(on: boolean): void;
+  openExternal(url: string): void;
 }
 
 export const BOOTSTRAP_CHANNEL = 'bootstrap:get';
@@ -35,6 +53,54 @@ export const CHECK_UPDATES_CHANNEL = 'updates:check';
 export const PICK_FOLDER_CHANNEL = 'dialog:pick-folder';
 export const MENU_ACTION_CHANNEL = 'menu:action';
 export const SET_THEME_CHANNEL = 'theme:set';
+export const NOTIFY_CHANNEL = 'notify:show';
+export const KEEP_AWAKE_CHANNEL = 'power:keep-awake';
+export const OPEN_EXTERNAL_CHANNEL = 'shell:open-external';
+export const PICK_FILE_CHANNEL = 'dialog:pick-file';
+
+/** Menu action prefix for a notification click: the renderer navigates to the rest. */
+export const NAVIGATE_ACTION_PREFIX = 'navigate:';
+
+const ROUTE = /^\/[A-Za-z0-9/_{}$.-]{0,300}$/;
+
+/** Validates what the renderer asked to show; anything malformed is dropped. */
+export function parseNotifyRequest(value: unknown): NotifyRequest | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const title = typeof record['title'] === 'string' ? record['title'].trim().slice(0, 120) : '';
+  const body = typeof record['body'] === 'string' ? record['body'].trim().slice(0, 400) : '';
+  if (title.length === 0) return null;
+  const route = typeof record['route'] === 'string' && ROUTE.test(record['route']) ? record['route'] : undefined;
+  return {
+    title,
+    body,
+    ...(route === undefined ? {} : { route }),
+    silent: record['silent'] === true,
+  };
+}
+
+/** Only web links leave the app; file:, javascript: and custom schemes are refused. */
+export function isExternalUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2048) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+export function parsePickFileRequest(value: unknown): PickFileRequest | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const raw = Array.isArray(record['extensions']) ? record['extensions'] : [];
+  const extensions = raw
+    .filter((entry): entry is string => typeof entry === 'string' && /^[A-Za-z0-9]{1,10}$/.test(entry))
+    .slice(0, 10);
+  if (extensions.length === 0) return null;
+  const title = typeof record['title'] === 'string' ? record['title'].slice(0, 80) : undefined;
+  return { extensions, ...(title === undefined ? {} : { title }) };
+}
 
 export const THEMES: readonly Theme[] = ['dark', 'light', 'system'];
 

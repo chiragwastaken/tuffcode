@@ -674,3 +674,139 @@ describe('subagent service', () => {
     }
   });
 });
+
+describe('subagent control, telemetry and mailbox', () => {
+  it('counts tool calls and tokens and posts the final answer to the parent', async () => {
+    const harness = createHarness();
+    try {
+      harness.ports.handler = async (input) => {
+        input.onEvent({ type: 'tool.started', turnId: 't', toolCallId: 'c1', name: 'bash', input: { command: 'pnpm test' } });
+        input.onEvent({ type: 'tool.started', turnId: 't', toolCallId: 'c2', name: 'read', input: { path: 'a.ts' } });
+        input.onEvent({ type: 'tool.started', turnId: 't', toolCallId: 'c3', name: 'grep', input: { pattern: 'todo' } });
+        input.onEvent({ type: 'usage', turnId: 't', inputTokens: 300, outputTokens: 40 });
+        input.onEvent({ type: 'usage', turnId: 't', inputTokens: 200, outputTokens: 10 });
+        return { status: 'complete', text: 'found two callers' };
+      };
+      const childId = await spawn(harness, 'explorer', 'map the callers');
+      const view = await harness.subagents.awaitChild(childId);
+      expect(view.status).toBe('done');
+      const stored = harness.subagents.get(childId);
+      expect(stored).toMatchObject({ toolCount: 3, inputTokens: 500, outputTokens: 50, activity: 'grep: todo' });
+      expect(stored.unread).toBe(1);
+      expect(harness.events.some((event) => event.type === 'subagent.telemetry')).toBe(true);
+      const inbox = await harness.subagents.control({ action: 'inbox', cwd: PARENT_WORKTREE, threadId: PARENT_ID });
+      expect(inbox).toContain('found two callers');
+      expect(harness.subagents.get(childId).unread).toBe(0);
+      const status = await harness.subagents.control({ action: 'status', cwd: PARENT_WORKTREE, threadId: PARENT_ID });
+      expect(status).toContain(`${childId} explorer [done]`);
+      expect(status).toContain('3 tools, 500 in / 50 out tokens');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('delivers a message to a running child after its current turn', async () => {
+    const harness = createHarness();
+    try {
+      harness.ports.block = true;
+      const childId = await spawn(harness, 'explorer', 'map the runner');
+      await until(() => harness.ports.turns.length === 1);
+      const sent = await harness.subagents.message(childId, 'also read the tests');
+      expect(sent).toEqual({ delivered: 'queued' });
+      harness.ports.unblockAll();
+      const view = await harness.subagents.awaitChild(childId);
+      expect(view.status).toBe('done');
+      expect(harness.ports.turns).toHaveLength(2);
+      expect(harness.ports.turns[1]?.text).toContain('also read the tests');
+      const directions = harness.subagents.messages(childId).map((message) => message.direction);
+      expect(directions).toEqual(['to-child', 'to-parent', 'to-parent']);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('reopens a settled child for a follow-up and refuses one to a stopped child', async () => {
+    const harness = createHarness();
+    try {
+      const childId = await spawn(harness, 'worker', 'add the flag');
+      await harness.subagents.awaitChild(childId);
+      harness.ports.handler = () => Promise.resolve({ status: 'complete', text: 'tests added too' });
+      const sent = await harness.subagents.message(childId, 'now add tests');
+      expect(sent).toEqual({ delivered: 'started' });
+      await until(() => harness.subagents.get(childId).summary === 'tests added too');
+      expect(harness.subagents.get(childId).status).toBe('done');
+
+      harness.ports.block = true;
+      const other = await spawn(harness, 'explorer', 'map it');
+      await until(() => harness.ports.turns.length === 3);
+      const stopped = await harness.subagents.control({
+        action: 'stop',
+        cwd: PARENT_WORKTREE,
+        threadId: PARENT_ID,
+        id: other,
+      });
+      expect(stopped).toBe(`${other} stopped.`);
+      expect(harness.subagents.get(other).status).toBe('cancelled');
+      await expect(harness.subagents.message(other, 'continue')).rejects.toThrow(/stopped/);
+    } finally {
+      harness.ports.unblockAll();
+      await harness.dispose();
+    }
+  });
+
+  it('waits for children and reports the ones still running after the timeout', async () => {
+    const harness = createHarness();
+    try {
+      harness.ports.block = true;
+      const childId = await spawn(harness, 'explorer', 'slow work');
+      await until(() => harness.ports.turns.length === 1);
+      const pending = await harness.subagents.control({
+        action: 'wait',
+        cwd: PARENT_WORKTREE,
+        threadId: PARENT_ID,
+        timeoutSeconds: 1,
+      });
+      expect(pending).toContain(`Still running after 1s: ${childId}`);
+      setTimeout(() => harness.ports.unblockAll(), 20);
+      const settled = await harness.subagents.control({
+        action: 'wait',
+        cwd: PARENT_WORKTREE,
+        threadId: PARENT_ID,
+        id: childId,
+        timeoutSeconds: 30,
+      });
+      expect(settled).toContain('[done]');
+      expect(settled).toContain('child summary');
+    } finally {
+      harness.ports.unblockAll();
+      await harness.dispose();
+    }
+  });
+
+  it('lets a child report to its parent but not control siblings or spawn', async () => {
+    const harness = createHarness();
+    try {
+      harness.ports.block = true;
+      const childId = await spawn(harness, 'explorer', 'look around');
+      await until(() => harness.ports.turns.length === 1);
+      const childThread = harness.ports.turns[0]?.threadId ?? '';
+      const reported = await harness.subagents.control({
+        action: 'report',
+        cwd: PARENT_WORKTREE,
+        threadId: childThread,
+        text: 'halfway there',
+      });
+      expect(reported).toBe('Report delivered to the parent.');
+      expect(harness.subagents.get(childId).unread).toBe(1);
+      await expect(
+        harness.subagents.control({ action: 'stop', cwd: PARENT_WORKTREE, threadId: childThread, id: childId }),
+      ).rejects.toThrow(/cannot stop/);
+      await expect(
+        harness.subagents.spawnFromTool({ cwd: PARENT_WORKTREE, threadId: childThread, type: 'explorer', task: 'x' }),
+      ).rejects.toThrow(/cannot spawn/);
+    } finally {
+      harness.ports.unblockAll();
+      await harness.dispose();
+    }
+  });
+});

@@ -133,7 +133,7 @@ async function launchOnce(workspace: E2EWorkspace): Promise<{
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
   await page.waitForLoadState('domcontentloaded');
-  // The inspector column only renders at the xl breakpoint; the default window is 1100px.
+  // Set a roomy window so the inspector column and pane assertions have space.
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (window) window.setSize(1440, 900);

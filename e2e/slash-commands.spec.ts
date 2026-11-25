@@ -42,9 +42,9 @@ test('runs slash commands from the composer', async ({ session, workspace, mock,
 
   // /model opens the model picker instead of sending a message.
   await runCommand(page, '/model');
-  await expect(page.getByTestId('model-picker-popup')).toBeVisible();
+  await expect(page.getByTestId('model-menu')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('model-picker-popup')).toBeHidden();
+  await expect(page.getByTestId('model-menu')).toBeHidden();
 
   // /plan switches the thread mode through threads.update.
   await runCommand(page, '/plan');

@@ -9,14 +9,18 @@ import {
   type RpcMethod,
   type RpcParams,
   type RpcResult,
+  type InstalledPlugin,
   type ServerEvent,
   type ThreadEventRow,
+  type TodoPhase,
 } from '@tuffcode/contracts';
 import {
   useAppStore,
   type SubagentEventInput,
   type SubagentFinishedInput,
+  type SubagentMessageInput,
   type SubagentStartedInput,
+  type SubagentTelemetryInput,
 } from '../store/app-store';
 import type { ConnectionStatus } from '../types';
 
@@ -62,6 +66,10 @@ export interface EventSink {
     subagentStarted(input: SubagentStartedInput): void;
     subagentEvent(input: SubagentEventInput): void;
     subagentFinished(input: SubagentFinishedInput): void;
+    subagentTelemetry(input: SubagentTelemetryInput): void;
+    subagentMessage(input: SubagentMessageInput): void;
+    setTodos(threadId: string, phases: TodoPhase[]): void;
+    setPlugins(plugins: InstalledPlugin[]): void;
   };
 }
 
@@ -220,6 +228,18 @@ export function createRpcClient(options: RpcClientOptions): RpcClient {
         break;
       case 'subagent.finished':
         state.subagentFinished(event.payload);
+        break;
+      case 'subagent.telemetry':
+        state.subagentTelemetry(event.payload);
+        break;
+      case 'subagent.message':
+        state.subagentMessage(event.payload);
+        break;
+      case 'todo.updated':
+        state.setTodos(event.payload.threadId, event.payload.phases);
+        break;
+      case 'plugins.updated':
+        state.setPlugins(event.payload);
         break;
       default:
         break;

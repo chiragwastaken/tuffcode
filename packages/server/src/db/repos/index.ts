@@ -8,11 +8,13 @@ import { createCouncilRepo, type CouncilRepo } from './council.js';
 import { createEventsRepo, type EventsRepo } from './events.js';
 import { createMcpRepo, type McpRepo } from './mcp.js';
 import { createMessagesRepo, type MessagesRepo } from './messages.js';
+import { createPluginsRepo, type PluginsRepo } from './plugins.js';
 import { createProjectsRepo, type ProjectsRepo } from './projects.js';
 import { createProvidersRepo, type ProvidersRepo } from './providers.js';
 import { createSettingsRepo, type SettingsRepo } from './settings.js';
 import { createSubagentsRepo, type SubagentsRepo } from './subagents.js';
 import { createThreadsRepo, type ThreadsRepo } from './threads.js';
+import { createTodosRepo, type TodosRepo } from './todos.js';
 import { createTurnsRepo, type TurnsRepo } from './turns.js';
 
 export interface Repos {
@@ -30,6 +32,8 @@ export interface Repos {
   turns: TurnsRepo;
   subagents: SubagentsRepo;
   settings: SettingsRepo;
+  todos: TodosRepo;
+  plugins: PluginsRepo;
   /** Runs `fn` in a transaction on the shared connection; nesting is rejected. */
   transaction<T>(fn: () => T): T;
 }
@@ -51,6 +55,8 @@ export function createRepos(db: DatabaseSync): Repos {
     turns: createTurnsRepo(db),
     subagents: createSubagentsRepo(db),
     settings: createSettingsRepo(db),
+    todos: createTodosRepo(db),
+    plugins: createPluginsRepo(db),
     transaction: (fn) => transaction(db, fn),
   };
 }
@@ -76,6 +82,9 @@ export type {
 export type { EventsRepo } from './events.js';
 export type { McpRepo, UpsertMcpServerInput } from './mcp.js';
 export type { AddMessageInput, MessagesRepo } from './messages.js';
+export { likePattern } from './messages.js';
+export type { MarketplaceRow, PluginsRepo } from './plugins.js';
+export type { TodoRecord, TodosRepo } from './todos.js';
 export type { AddProjectInput, ProjectMeta, ProjectsRepo } from './projects.js';
 export type {
   ProviderRecord,
@@ -85,9 +94,11 @@ export type {
 } from './providers.js';
 export type { SettingsRepo } from './settings.js';
 export type {
+  AddSubagentMessageInput,
   CreateSubagentInput,
   FinishSubagentInput,
   SubagentRecord,
+  SubagentTelemetry,
   SubagentsRepo,
 } from './subagents.js';
 export { toSubagentView } from './subagents.js';

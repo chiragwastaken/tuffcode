@@ -32,6 +32,7 @@ const THREAD: Thread = {
   branch: 'feat/menus',
   baseBranch: 'main',
   prUrl: null,
+  reasoningEffort: null,
   lastSeq: 4,
   createdAt: '2026-11-24T10:00:00.000Z',
   updatedAt: '2026-11-24T10:00:00.000Z',

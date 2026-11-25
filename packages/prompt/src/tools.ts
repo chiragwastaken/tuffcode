@@ -154,7 +154,7 @@ export const TOOL_SCHEMAS: readonly ToolSchema[] = [
   },
 ];
 
-export const EXTRA_TOOL_NAMES = ['mcp', 'memory', 'config'] as const;
+export const EXTRA_TOOL_NAMES = ['mcp', 'memory', 'config', 'todo', 'skill', 'web_fetch'] as const;
 
 export type ExtraToolName = (typeof EXTRA_TOOL_NAMES)[number];
 
@@ -316,4 +316,84 @@ export const CONFIG_TOOL: ExtraToolSchema = {
   },
 };
 
-export const EXTRA_TOOL_SCHEMAS: readonly ExtraToolSchema[] = [MCP_TOOL, MEMORY_TOOL, CONFIG_TOOL];
+/**
+ * OMP-style task list. One op per call; `list` and `items` are JSON strings because
+ * the parameter schema has no array type.
+ */
+export const TODO_TOOL: ExtraToolSchema = {
+  name: 'todo',
+  description:
+    'Track multi-step work as a phased task list the user sees live. One op per call: init replaces the list, start marks one task in progress (others go back to pending), done or drop closes a task, a phase, or everything, rm removes, append adds tasks, view shows the list. Use it for work with three or more steps; keep exactly one task in progress and mark it done right after you verify it.',
+  parameters: {
+    type: 'object',
+    properties: {
+      op: {
+        type: 'string',
+        description: 'One of init, start, done, drop, rm, append, view.',
+      },
+      list: {
+        type: 'string',
+        description:
+          'For init: JSON array of phases, for example [{"phase":"Build","items":["add schema","wire tool"]}].',
+      },
+      items: {
+        type: 'string',
+        description:
+          'For append, or a flat init: JSON array of task strings, for example ["write tests"].',
+      },
+      task: {
+        type: 'string',
+        description: 'Exact task text for start, or to target one task with done, drop, rm.',
+      },
+      phase: {
+        type: 'string',
+        description: 'Phase name: targets a phase for done, drop, rm, or chooses one for append and init.',
+      },
+    },
+    required: ['op'],
+    additionalProperties: false,
+  },
+};
+
+export const SKILL_TOOL: ExtraToolSchema = {
+  name: 'skill',
+  description:
+    'Load the full instructions of one skill listed under Available skills. Load a skill only when its description matches the task; the body is returned as text.',
+  parameters: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Skill name exactly as listed.' },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  },
+};
+
+export const WEB_FETCH_TOOL: ExtraToolSchema = {
+  name: 'web_fetch',
+  description:
+    'Fetch one http or https URL and return its readable text (HTML is stripped). Use it for documentation and issue pages the task needs; never for secrets or private hosts.',
+  parameters: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'Absolute http or https URL.' },
+      max_chars: {
+        type: 'integer',
+        description: 'Maximum characters of text to return. Default 20000.',
+        minimum: 500,
+        maximum: 64000,
+      },
+    },
+    required: ['url'],
+    additionalProperties: false,
+  },
+};
+
+export const EXTRA_TOOL_SCHEMAS: readonly ExtraToolSchema[] = [
+  MCP_TOOL,
+  MEMORY_TOOL,
+  CONFIG_TOOL,
+  TODO_TOOL,
+  SKILL_TOOL,
+  WEB_FETCH_TOOL,
+];

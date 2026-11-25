@@ -63,3 +63,13 @@ export function brainDir(): string {
 export function secretsPath(): string {
   return join(tuffcodeHome(), 'secrets.bin');
 }
+
+/** Installed plugins, one directory per marketplace and plugin name. */
+export function pluginsRoot(): string {
+  return join(tuffcodeHome(), 'plugins');
+}
+
+/** Disposable caches (marketplace catalogs, the model metadata index); safe to delete. */
+export function cacheRoot(): string {
+  return join(tuffcodeHome(), 'cache');
+}

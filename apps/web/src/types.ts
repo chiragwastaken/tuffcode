@@ -16,6 +16,14 @@ export interface UpdateCheckOutcome {
   checkedAt: string;
 }
 
+export interface NotifyRequest {
+  title: string;
+  body: string;
+  /** Where a click on the notification takes the window. */
+  route?: string;
+  silent?: boolean;
+}
+
 export interface TuffcodeBridge {
   getBootstrap(): Promise<BootstrapInfo>;
   pickFolder(): Promise<string | null>;
@@ -23,4 +31,9 @@ export interface TuffcodeBridge {
   setTheme(theme: 'dark' | 'light' | 'system'): void;
   /** Absent when the preload predates the updater, so callers must guard. */
   checkForUpdates?(): Promise<UpdateCheckOutcome>;
+  /** Round 4 additions; absent in a browser test harness, so callers must guard. */
+  pickFile?(request: { title?: string; extensions: string[] }): Promise<string | null>;
+  notify?(request: NotifyRequest): void;
+  setKeepAwake?(on: boolean): void;
+  openExternal?(url: string): void;
 }

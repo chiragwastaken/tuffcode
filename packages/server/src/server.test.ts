@@ -236,7 +236,7 @@ describe('server bootstrap', () => {
     });
     expect(response.ok).toBe(true);
     await vi.waitFor(() => expect(captured).toBeDefined());
-    expect(captured?.mcpServers).toEqual({
+    expect(captured?.mcpServers?.()).toEqual({
       'files-mcp_on': { command: 'node', args: ['server.js'], env: { ROOT: 'C:/work' } },
       'files-mcp_dup': { command: 'npx', args: [], env: {} },
       solo: { command: 'solo-mcp', args: ['--x'], env: {} },

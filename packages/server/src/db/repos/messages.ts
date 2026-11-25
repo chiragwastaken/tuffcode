@@ -22,6 +22,13 @@ export interface MessagesRepo {
   removeByThread(threadId: string): number;
   /** Deletes the given message ids; returns the number of rows removed. */
   removeMany(ids: readonly string[]): number;
+  /** Newest user and assistant messages containing `query`, case-insensitive, one per thread. */
+  search(query: string, limit: number): Message[];
+}
+
+/** Escapes LIKE wildcards so the query matches literally; paired with `ESCAPE '\\'`. */
+export function likePattern(query: string): string {
+  return `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 }
 
 const MESSAGE_COLUMNS = 'id, thread_id, role, content, created_at';
@@ -49,6 +56,9 @@ export function createMessagesRepo(db: DatabaseSync): MessagesRepo {
   );
   const deleteByThread = db.prepare('DELETE FROM messages WHERE thread_id = ?');
   const deleteOne = db.prepare('DELETE FROM messages WHERE id = ?');
+  const searchRows = db.prepare(
+    `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE role IN ('user','assistant') AND content LIKE ? ESCAPE '\\' ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+  );
 
   function readBack(id: string): Message {
     const row = selectOne.get(id);
@@ -74,6 +84,20 @@ export function createMessagesRepo(db: DatabaseSync): MessagesRepo {
       let removed = 0;
       for (const id of ids) removed += Number(deleteOne.run(id).changes);
       return removed;
+    },
+    search: (query, limit) => {
+      const cap = Math.max(1, Math.min(50, Math.floor(limit)));
+      const seen = new Set<string>();
+      const out: Message[] = [];
+      // Over-fetch so one chatty thread cannot crowd every other thread out of the result.
+      for (const row of searchRows.all(likePattern(query), cap * 8)) {
+        const message = mapMessage(asRow(row));
+        if (seen.has(message.threadId)) continue;
+        seen.add(message.threadId);
+        out.push(message);
+        if (out.length >= cap) break;
+      }
+      return out;
     },
   };
 }

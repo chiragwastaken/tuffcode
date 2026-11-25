@@ -104,6 +104,36 @@ function capResult(text: string): string {
   return text.length > MCP_RESULT_LIMIT ? text.slice(0, MCP_RESULT_LIMIT) : text;
 }
 
+/** Tools from a `tools/list` result; malformed entries are skipped. Shared by both transports. */
+export function parseToolsResult(raw: unknown): McpTool[] {
+  const result = ToolsResultSchema.safeParse(raw);
+  const entries = result.success ? (result.data.tools ?? []) : [];
+  const tools: McpTool[] = [];
+  for (const entry of entries) {
+    const parsed = ToolSchema.safeParse(entry);
+    if (!parsed.success) continue;
+    const inputSchema = InputSchema.safeParse(parsed.data.inputSchema);
+    tools.push({
+      name: parsed.data.name,
+      description: parsed.data.description ?? '',
+      inputSchema: inputSchema.success ? inputSchema.data : {},
+    });
+  }
+  return tools;
+}
+
+/** The text of a `tools/call` result, non-text parts as JSON, capped. */
+export function parseCallResult(raw: unknown): string {
+  const result = ContentResultSchema.safeParse(raw);
+  const content = result.success ? (result.data.content ?? []) : [];
+  const parts: string[] = [];
+  for (const entry of content) {
+    const text = TextContentSchema.safeParse(entry);
+    parts.push(text.success ? text.data.text : JSON.stringify(entry));
+  }
+  return capResult(parts.join(''));
+}
+
 /**
  * Kills the whole child tree on Windows, where `kill()` leaves grandchildren such as
  * a wrapper script's real server running; every other platform gets a plain kill.
@@ -279,35 +309,10 @@ export function createMcpClient(server: McpServer, options: McpClientOptions = {
       return initPromise;
     },
 
-    listTools: async () => {
-      const result = ToolsResultSchema.safeParse(await request('tools/list', {}));
-      const raw = result.success ? (result.data.tools ?? []) : [];
-      const tools: McpTool[] = [];
-      for (const entry of raw) {
-        const parsed = ToolSchema.safeParse(entry);
-        if (!parsed.success) continue;
-        const inputSchema = InputSchema.safeParse(parsed.data.inputSchema);
-        tools.push({
-          name: parsed.data.name,
-          description: parsed.data.description ?? '',
-          inputSchema: inputSchema.success ? inputSchema.data : {},
-        });
-      }
-      return tools;
-    },
+    listTools: async () => parseToolsResult(await request('tools/list', {})),
 
-    callTool: async (name, args) => {
-      const result = ContentResultSchema.safeParse(
-        await request('tools/call', { name, arguments: args }),
-      );
-      const content = result.success ? (result.data.content ?? []) : [];
-      const parts: string[] = [];
-      for (const entry of content) {
-        const text = TextContentSchema.safeParse(entry);
-        parts.push(text.success ? text.data.text : JSON.stringify(entry));
-      }
-      return capResult(parts.join(''));
-    },
+    callTool: async (name, args) =>
+      parseCallResult(await request('tools/call', { name, arguments: args })),
 
     close: async () => {
       shutdown('MCP client closed');

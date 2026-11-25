@@ -9,16 +9,22 @@
  */
 import { BASE_SYSTEM_PROMPT } from './base';
 import { buildTurnContext, estimateTokens, type TurnContextInput } from './context';
-import { buildCustomInstructions } from './custom';
+import { buildCustomInstructions, buildPersonalSection, type PersonalProfile, type ResponseStyleName } from './custom';
 
 export const CUSTOM_INSTRUCTIONS_HEADING = '## Custom instructions';
+export const ABOUT_USER_HEADING = '## About the user';
 
 const BRAIN_NOTES_HEADING = '## Brain notes';
 const RETRIEVED_MEMORY_HEADING = '## Retrieved memory';
+const SKILLS_HEADING = '## Skills for this message';
+const AVAILABLE_SKILLS_HEADING = '## Available skills';
 
 export type PromptSectionName =
   | 'base'
+  | 'about-user'
   | 'custom-instructions'
+  | 'skills'
+  | 'available-skills'
   | 'brain-always'
   | 'retrieved-memory'
   | 'turn-context'
@@ -33,10 +39,17 @@ export interface PromptSection {
 export interface PromptAssemblyInput {
   /** Raw `settings.customInstructions`; trimmed and capped here. */
   customInstructions?: string;
+  /** Your Tuffcode profile; empty fields are left out. */
+  profile?: PersonalProfile;
+  responseStyle?: ResponseStyleName;
   /** Rendered brain always block: identity, rules, preferences, project, note. */
   brainAlways?: string;
   /** Rendered memory entries retrieved for this turn. */
   retrievedMemory?: string;
+  /** Bodies of the skills the message mentions with `$name`, already rendered. */
+  skills?: string;
+  /** Name and description lines of the other skills the `skill` tool can load. */
+  availableSkills?: string;
   turnContext: TurnContextInput;
   userMessage: string;
 }
@@ -57,10 +70,28 @@ export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
   const custom = buildCustomInstructions(input.customInstructions ?? '');
   const brainAlways = input.brainAlways?.trim() ?? '';
   const retrieved = input.retrievedMemory?.trim() ?? '';
+  const skills = input.skills?.trim() ?? '';
+  const available = input.availableSkills?.trim() ?? '';
 
   const sections = [section('base', BASE_SYSTEM_PROMPT)];
+  const personal =
+    input.profile === undefined ? undefined : buildPersonalSection(input.profile, input.responseStyle);
+  if (personal !== undefined) {
+    sections.push(section('about-user', `${ABOUT_USER_HEADING}\n${personal}`));
+  }
   if (custom !== undefined) {
     sections.push(section('custom-instructions', `${CUSTOM_INSTRUCTIONS_HEADING}\n${custom}`));
+  }
+  if (skills.length > 0) {
+    sections.push(section('skills', `${SKILLS_HEADING}\n${skills}`));
+  }
+  if (available.length > 0) {
+    sections.push(
+      section(
+        'available-skills',
+        `${AVAILABLE_SKILLS_HEADING}\nLoad one with the skill tool only when its description matches the task.\n${available}`,
+      ),
+    );
   }
   if (brainAlways.length > 0) {
     sections.push(section('brain-always', `${BRAIN_NOTES_HEADING}\n${brainAlways}`));

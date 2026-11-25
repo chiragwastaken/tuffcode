@@ -41,6 +41,65 @@ export const emptySubagentModels = (): SubagentModels => ({
   planner: {},
 });
 
+/** "Your Tuffcode": who the user is, rendered into the prompt as a short About section. */
+export const ProfileSchema = z.object({
+  name: z.string().max(80),
+  role: z.string().max(120),
+  about: z.string().max(2000),
+});
+export type Profile = z.infer<typeof ProfileSchema>;
+
+export const ResponseStyleSchema = z.enum(['default', 'concise', 'detailed']);
+export type ResponseStyle = z.infer<typeof ResponseStyleSchema>;
+
+/**
+ * Feature switches. Brain memory has its own `brainEnabled` field (older than this
+ * object), so it is not repeated here; the Capabilities section writes that field.
+ */
+export const CapabilitiesSchema = z.object({
+  skills: z.boolean(),
+  connectors: z.boolean(),
+  subagents: z.boolean(),
+  todo: z.boolean(),
+  worktrees: z.boolean(),
+  webFetch: z.boolean(),
+  browser: z.boolean(),
+});
+export type Capabilities = z.infer<typeof CapabilitiesSchema>;
+
+export const DEFAULT_CAPABILITIES: Capabilities = {
+  skills: true,
+  connectors: true,
+  subagents: true,
+  todo: true,
+  worktrees: true,
+  webFetch: true,
+  browser: true,
+};
+
+export const NotificationSettingsSchema = z.object({
+  turnFinished: z.boolean(),
+  approvalNeeded: z.boolean(),
+  subagentFinished: z.boolean(),
+  councilEscalation: z.boolean(),
+  sound: z.boolean(),
+  /** Only notify while the window is not focused. */
+  onlyWhenUnfocused: z.boolean(),
+});
+export type NotificationSettings = z.infer<typeof NotificationSettingsSchema>;
+
+export const DEFAULT_NOTIFICATIONS: NotificationSettings = {
+  turnFinished: true,
+  approvalNeeded: true,
+  subagentFinished: true,
+  councilEscalation: true,
+  sound: true,
+  onlyWhenUnfocused: true,
+};
+
+/** Custom instructions are stored up to this length; the prompt budget is in the prompt package. */
+export const CUSTOM_INSTRUCTIONS_MAX_CHARS = 16000;
+
 const SettingsFields = {
   theme: ThemeSchema,
   shell: z.string().nullable(),
@@ -62,7 +121,15 @@ const SettingsFields = {
   terminalFontSize: z.number().int().min(11).max(20),
   cursorStyle: CursorStyleSchema,
   checkUpdatesOnStart: z.boolean(),
-  customInstructions: z.string().max(4000),
+  customInstructions: z.string().max(CUSTOM_INSTRUCTIONS_MAX_CHARS),
+  profile: ProfileSchema,
+  responseStyle: ResponseStyleSchema,
+  /** False pauses automatic memory capture; recall keeps working while `brainEnabled` is on. */
+  brainCapture: z.boolean(),
+  capabilities: CapabilitiesSchema,
+  notifications: NotificationSettingsSchema,
+  /** Block system sleep while any agent turn is running. */
+  keepAwake: z.boolean(),
   subagentModels: SubagentModelsSchema,
   subagentConcurrency: z.number().int().min(1).max(8),
   contextWarningThreshold: z.number().min(0.5).max(0.95),
@@ -101,6 +168,12 @@ export const SettingsSchema = z.object({
   cursorStyle: SettingsFields.cursorStyle.default('bar'),
   checkUpdatesOnStart: SettingsFields.checkUpdatesOnStart.default(true),
   customInstructions: SettingsFields.customInstructions.default(''),
+  profile: SettingsFields.profile.default(() => ({ name: '', role: '', about: '' })),
+  responseStyle: SettingsFields.responseStyle.default('default'),
+  brainCapture: SettingsFields.brainCapture.default(true),
+  capabilities: SettingsFields.capabilities.default(() => ({ ...DEFAULT_CAPABILITIES })),
+  notifications: SettingsFields.notifications.default(() => ({ ...DEFAULT_NOTIFICATIONS })),
+  keepAwake: SettingsFields.keepAwake.default(false),
   subagentModels: SettingsFields.subagentModels.default(emptySubagentModels),
   subagentConcurrency: SettingsFields.subagentConcurrency.default(4),
   contextWarningThreshold: SettingsFields.contextWarningThreshold.default(0.8),

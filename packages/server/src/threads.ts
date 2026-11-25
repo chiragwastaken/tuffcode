@@ -3,6 +3,7 @@ import { newId, worktreesRoot } from '@tuffcode/shared';
 import type { Repos } from './db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from './errors.js';
 import { provisionWorktree, removeWorktree } from './git/worktree.js';
+import { DEFAULT_THREAD_TITLE } from './titles.js';
 
 export interface CreateThreadRequest {
   projectId: string;
@@ -17,7 +18,9 @@ export interface CreateThreadRequest {
 export interface UpdateThreadRequest {
   id: string;
   title?: string;
+  providerId?: string;
   modelId?: string;
+  reasoningEffort?: string | null;
   executionMode?: ExecutionMode;
   permissionMode?: PermissionMode;
 }
@@ -39,7 +42,32 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
 
   const id = newId('thr');
   const baseBranch = request.baseBranch ?? project.defaultBranch;
-  const root = repos.settings.get().worktreeRoot ?? worktreesRoot();
+  const settings = repos.settings.get();
+  const now = new Date().toISOString();
+  const row = {
+    id,
+    projectId: project.id,
+    parentThreadId: null,
+    // The first message replaces the placeholder with a derived one-line title.
+    title: request.title?.trim() || DEFAULT_THREAD_TITLE,
+    providerId: provider.id,
+    modelId: request.modelId,
+    executionMode: request.executionMode,
+    permissionMode: request.permissionMode,
+    status: 'idle' as const,
+    createdAt: now,
+    updatedAt: now,
+  };
+  // With the Worktrees capability off the thread works in the project checkout itself.
+  if (!settings.capabilities.worktrees) {
+    return repos.threads.create({
+      ...row,
+      worktreePath: project.path,
+      branch: null,
+      baseBranch,
+    });
+  }
+  const root = settings.worktreeRoot ?? worktreesRoot();
   const worktree = await provisionWorktree({
     repoPath: project.path,
     baseBranch,
@@ -47,18 +75,9 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
     threadId: id,
     worktreesRoot: root,
   });
-  const now = new Date().toISOString();
   try {
     return repos.threads.create({
-      id,
-      projectId: project.id,
-      parentThreadId: null,
-      title: request.title?.trim() || `Thread ${id.slice(4, 12)}`,
-      providerId: provider.id,
-      modelId: request.modelId,
-      executionMode: request.executionMode,
-      permissionMode: request.permissionMode,
-      status: 'idle',
+      ...row,
       worktreePath: worktree.path,
       branch: worktree.branch,
       baseBranch: worktree.baseBranch,
@@ -69,6 +88,65 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
     await removeWorktree(project.path, worktree.path).catch(() => undefined);
     throw error;
   }
+}
+
+export interface ThreadSearchHit {
+  threadId: string;
+  projectId: string;
+  title: string;
+  snippet: string;
+  matchedIn: 'title' | 'message';
+}
+
+function snippetAround(text: string, needle: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const at = flat.toLowerCase().indexOf(needle);
+  if (at < 0) return flat.slice(0, 120);
+  const start = Math.max(0, at - 40);
+  const end = Math.min(flat.length, at + needle.length + 80);
+  return `${start > 0 ? '...' : ''}${flat.slice(start, end)}${end < flat.length ? '...' : ''}`;
+}
+
+/** Title matches first, then the newest message match per other thread. */
+export function searchThreads(repos: Repos, query: string, limit = 20): ThreadSearchHit[] {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return [];
+  const cap = Math.max(1, Math.min(50, limit));
+  const threads = repos.threads.list();
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  const hits: ThreadSearchHit[] = threads
+    .filter((thread) => thread.title.toLowerCase().includes(needle))
+    .slice(0, cap)
+    .map((thread) => ({
+      threadId: thread.id,
+      projectId: thread.projectId,
+      title: thread.title,
+      snippet: thread.title,
+      matchedIn: 'title',
+    }));
+  const seen = new Set(hits.map((hit) => hit.threadId));
+  for (const message of repos.messages.search(query.trim(), cap)) {
+    if (hits.length >= cap) break;
+    const thread = byId.get(message.threadId);
+    if (thread === undefined || seen.has(thread.id)) continue;
+    seen.add(thread.id);
+    hits.push({
+      threadId: thread.id,
+      projectId: thread.projectId,
+      title: thread.title,
+      snippet: snippetAround(message.content, needle),
+      matchedIn: 'message',
+    });
+  }
+  return hits;
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const trimmed = value.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    return process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
+  };
+  return normalize(left) === normalize(right);
 }
 
 export function getThread(repos: Repos, id: string): Thread {
@@ -85,8 +163,25 @@ export function updateThread(repos: Repos, request: UpdateThreadRequest): Thread
   const existing = getThread(repos, request.id);
   const title = request.title === undefined ? undefined : request.title.trim();
   if (title !== undefined && title.length === 0) throw badRequest('title is required');
+  if (request.providerId !== undefined && request.providerId !== existing.providerId) {
+    const provider = repos.providers.get(request.providerId);
+    if (provider === undefined) throw notFound('provider not found');
+    if (!provider.enabled) throw new RpcError('provider-unavailable', 'provider is disabled');
+    if (existing.status === 'running' || existing.status === 'needs-approval') {
+      throw conflict('stop the running turn before switching providers');
+    }
+    // A model id belongs to its provider, so a move must name the model on the new one.
+    if (request.modelId === undefined || request.modelId.trim().length === 0) {
+      throw badRequest('a model id is required when switching providers');
+    }
+  }
+  if (request.modelId !== undefined && request.modelId.trim().length === 0) {
+    throw badRequest('model id is required');
+  }
   const updated = repos.threads.update(existing.id, {
     title,
+    ...(request.providerId === undefined ? {} : { providerId: request.providerId }),
+    ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
     modelId: request.modelId,
     executionMode: request.executionMode,
     permissionMode: request.permissionMode,
@@ -108,7 +203,8 @@ export async function deleteThread(
   const thread = getThread(repos, id);
   if (removeWorktreeFlag && thread.worktreePath !== null) {
     const project = repos.projects.get(thread.projectId);
-    if (project !== undefined) {
+    // A thread that ran in the project checkout (worktrees off) owns no worktree.
+    if (project !== undefined && !samePath(project.path, thread.worktreePath)) {
       await removeWorktree(project.path, thread.worktreePath);
     }
   }

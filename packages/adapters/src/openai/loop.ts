@@ -17,7 +17,12 @@ import {
   type ToolExecResult,
   type ToolSessionState,
 } from './tools.js';
-import { effectiveToolIterations, isToolDisabled } from '../tool-policy.js';
+import {
+  effectiveToolIterations,
+  isServerToolOffered,
+  isToolDisabled,
+  resolveToolOptions,
+} from '../tool-policy.js';
 import { isExtraToolName } from '../extra-tools.js';
 import { redactToolInput } from '../redact.js';
 
@@ -155,6 +160,7 @@ function parseChunk(value: unknown): ChunkDelta | null {
 export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEvent> {
   const { ctx, client, messages, state, deps, signal } = options;
   const turnId = ctx.turnId;
+  const toolOptions = resolveToolOptions(ctx, deps);
   const maxIterations = effectiveToolIterations(
     ctx.maxToolIterations,
     options.maxIterations,
@@ -178,10 +184,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
             messages: requestMessages(ctx, messages),
             ...(ctx.maxOutputTokens !== undefined ? { maxTokens: ctx.maxOutputTokens } : {}),
             ...(ctx.toolAllowlist !== undefined ? { toolAllowlist: ctx.toolAllowlist } : {}),
-            ...(deps.spawnSubagent !== undefined && ctx.permissionMode !== 'read-only'
-              ? { subagentTool: true }
-              : {}),
-            ...(deps.extraTool !== undefined ? { extraTools: true } : {}),
+            toolOptions,
+            ...(ctx.reasoningEffort !== undefined ? { reasoningEffort: ctx.reasoningEffort } : {}),
           },
           signal,
         );
@@ -300,8 +304,10 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
         const name = call.function.name;
         if (parseError !== null) {
           result = { output: parseError, isError: true };
+        } else if (!isServerToolOffered(name, toolOptions)) {
+          result = { output: 'tool "' + name + '" is not available in this turn', isError: true };
         } else if (name === SUBAGENT_TOOL_NAME) {
-          decision = classifySubagentTool(ctx.permissionMode);
+          decision = classifySubagentTool(ctx.permissionMode, args ?? {});
         } else if (isExtraToolName(name)) {
           decision = classifyExtraTool(name, args ?? {}, ctx.permissionMode);
         } else if (!isToolName(name)) {

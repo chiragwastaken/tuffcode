@@ -12,6 +12,7 @@ import {
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
 import { mapSdkMessage, type ClaudeMappingState } from './map.js';
+import { classifyTuffcodeTool, tuffcodeServer } from './tuffcode-tools.js';
 
 /** Permission modes understood by the Claude Agent SDK. */
 export type ClaudePermissionMode =
@@ -51,11 +52,16 @@ export interface ClaudeQueryOptions {
   abortController: AbortController;
   allowDangerouslySkipPermissions?: boolean;
   canUseTool: ClaudeCanUseTool;
+  effort?: ClaudeEffort;
   mcpServers?: Record<
     string,
-    { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+    | { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+    | { type: 'http'; url: string; headers: Record<string, string> }
+    | unknown
   >;
 }
+
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ClaudeQueryHandle extends AsyncIterable<unknown> {
   interrupt?: () => Promise<unknown>;
@@ -71,7 +77,10 @@ export interface ClaudeAdapterOverrides {
   queryFn?: ClaudeQueryFn;
 }
 
-const defaultQueryFn: ClaudeQueryFn = ({ prompt, options }) => query({ prompt, options });
+// The local option type mirrors the SDK fields this adapter sets; in-process servers are
+// opaque instances the SDK built, so the cast stays at this single boundary.
+const defaultQueryFn: ClaudeQueryFn = ({ prompt, options }) =>
+  query({ prompt, options: options as Parameters<typeof query>[0]['options'] });
 
 type TurnReason = 'complete' | 'interrupted' | 'error';
 
@@ -186,9 +195,24 @@ class ClaudeAdapter implements AdapterSession {
           pathToClaudeCodeExecutable: this.executable,
           abortController: turn.controller,
           ...(ctx.permissionMode === 'full-auto' ? { allowDangerouslySkipPermissions: true } : {}),
-          canUseTool: (toolName, input, options) =>
-            this.requestApproval(turn, queue, toolName, input, options),
-          ...mcpServerOptions(this.deps.mcpServers),
+          canUseTool: (toolName, input, options) => {
+            // Tuffcode's own tools follow the harness ladder: reads and the task list
+            // never ask, spawning and stopping children do in ask mode.
+            const decision = classifyTuffcodeTool(toolName, input, ctx.permissionMode);
+            if (decision === 'allow') return Promise.resolve({ behavior: 'allow' as const });
+            if (decision === 'deny') {
+              return Promise.resolve({
+                behavior: 'deny' as const,
+                message: `${toolName} is not allowed in ${ctx.permissionMode} mode`,
+              });
+            }
+            return this.requestApproval(turn, queue, toolName, input, options);
+          },
+          ...claudeEffort(ctx.reasoningEffort),
+          ...mcpServerOptions(
+            ctx.toolOptions?.mcp === false ? undefined : this.deps.mcpServers?.(),
+            tuffcodeServer(this.deps, ctx),
+          ),
         },
       });
       turn.query = handle;
@@ -395,19 +419,36 @@ function appendSystemPrompt(ctx: TurnContext): string {
     .join('\n\n');
 }
 
-/** Stdio MCP servers for the SDK, omitted entirely when none are configured. */
+const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
+/** The SDK's effort ladder; `minimal` rounds up to low and `none` keeps the CLI default. */
+export function claudeEffort(effort: string | undefined): Pick<ClaudeQueryOptions, 'effort'> {
+  if (effort === undefined) return {};
+  const mapped = effort === 'minimal' ? 'low' : effort;
+  return CLAUDE_EFFORTS.has(mapped) ? { effort: mapped as ClaudeEffort } : {};
+}
+
+/**
+ * MCP servers for the SDK: the user's stdio and http servers plus Tuffcode's own
+ * in-process server (todo, subagent, memory, skill, web_fetch). Omitted when empty.
+ */
 function mcpServerOptions(
   servers: Record<string, McpServerLaunch> | undefined,
+  inProcess: Record<string, unknown> | undefined,
 ): Pick<ClaudeQueryOptions, 'mcpServers'> {
   const entries = Object.entries(servers ?? {});
-  if (entries.length === 0) return {};
+  const extra = Object.entries(inProcess ?? {});
+  if (entries.length === 0 && extra.length === 0) return {};
   return {
-    mcpServers: Object.fromEntries(
-      entries.map(([name, server]) => [
+    mcpServers: Object.fromEntries([
+      ...entries.map(([name, server]) => [
         name,
-        { type: 'stdio' as const, command: server.command, args: server.args, env: server.env },
+        server.type === 'http'
+          ? { type: 'http' as const, url: server.url, headers: server.headers }
+          : { type: 'stdio' as const, command: server.command, args: server.args, env: server.env },
       ]),
-    ),
+      ...extra,
+    ]),
   };
 }
 

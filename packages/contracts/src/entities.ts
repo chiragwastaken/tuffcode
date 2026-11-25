@@ -114,6 +114,9 @@ export type SubagentType = z.infer<typeof SubagentTypeSchema>;
 export const SubagentStatusSchema = z.enum(['queued', 'running', 'done', 'failed', 'cancelled']);
 export type SubagentStatus = z.infer<typeof SubagentStatusSchema>;
 
+/** A reasoning level name: the built-in ladder or a custom provider level such as `max`. */
+export const ReasoningLevelSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,23}$/);
+
 export const ProjectSchema = z.object({
   id: IdSchema,
   name: z.string(),
@@ -138,6 +141,8 @@ export const ThreadSchema = z.object({
   branch: z.string().nullable(),
   baseBranch: z.string().nullable(),
   prUrl: z.string().nullable(),
+  /** Per-thread reasoning level; null inherits the provider or model default. */
+  reasoningEffort: ReasoningLevelSchema.nullable().default(null),
   lastSeq: SeqSchema,
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
@@ -194,7 +199,8 @@ export const ModelCapabilitiesSchema = z.object({
 });
 export type ModelCapabilities = z.infer<typeof ModelCapabilitiesSchema>;
 
-export const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high']);
+/** The built-in ladder. The UI labels `none` as "off"; `xhigh` reaches the providers that have it. */
+export const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
 /**
@@ -234,17 +240,34 @@ export const ModelSchema = z.object({
 });
 export type Model = z.infer<typeof ModelSchema>;
 
+export const McpTransportSchema = z.enum(['stdio', 'http']);
+export type McpTransport = z.infer<typeof McpTransportSchema>;
+
 export const McpServerSchema = z.object({
   id: IdSchema,
   label: z.string().min(1),
-  command: z.string().min(1),
+  /** stdio servers need a command; http servers leave it empty and set `url`. */
+  transport: McpTransportSchema.default('stdio'),
+  command: z.string(),
   args: z.string().array(),
   env: z.record(z.string(), z.string()),
   cwd: z.string().nullable(),
+  /** Streamable HTTP endpoint for an http server. */
+  url: z.string().nullable().default(null),
+  /** True when a bearer token is stored in the secret bridge. The value never leaves it. */
+  hasSecret: z.boolean().default(false),
+  /** The installed plugin that owns this server, or null for one the user added. */
+  pluginId: IdSchema.nullable().default(null),
   enabled: z.boolean(),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
-});
+}).refine(
+  (server) =>
+    server.transport === 'stdio'
+      ? server.command.trim().length > 0
+      : (server.url ?? '').trim().length > 0,
+  { message: 'a stdio server needs a command and an http server needs a url' },
+);
 export type McpServer = z.infer<typeof McpServerSchema>;
 
 export const McpToolSchema = z.object({
@@ -274,10 +297,57 @@ export const SubagentViewSchema = z.object({
   status: SubagentStatusSchema,
   task: z.string(),
   summary: z.string().optional(),
+  /**
+   * Live telemetry. Absent means not measured (a row from before telemetry existed), which
+   * the UI shows as "usage -" instead of a guessed zero.
+   */
+  toolCount: z.number().int().nonnegative().optional(),
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  /** The current or most recent tool call, one line. */
+  activity: z.string().nullable().optional(),
+  startedAt: IsoDateTimeSchema.nullable().optional(),
+  finishedAt: IsoDateTimeSchema.nullable().optional(),
+  /** Messages from the child the parent has not read yet. */
+  unread: z.number().int().nonnegative().optional(),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
 });
 export type SubagentView = z.infer<typeof SubagentViewSchema>;
+
+export const SubagentMessageDirectionSchema = z.enum(['to-child', 'to-parent']);
+export type SubagentMessageDirection = z.infer<typeof SubagentMessageDirectionSchema>;
+
+export const SubagentMessageSchema = z.object({
+  id: IdSchema,
+  childId: IdSchema,
+  direction: SubagentMessageDirectionSchema,
+  text: z.string(),
+  createdAt: IsoDateTimeSchema,
+});
+export type SubagentMessage = z.infer<typeof SubagentMessageSchema>;
+
+export const TodoStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'abandoned']);
+export type TodoStatus = z.infer<typeof TodoStatusSchema>;
+
+export const TodoItemSchema = z.object({
+  content: z.string().min(1).max(500),
+  status: TodoStatusSchema,
+});
+export type TodoItem = z.infer<typeof TodoItemSchema>;
+
+export const TodoPhaseSchema = z.object({
+  name: z.string().min(1).max(80),
+  tasks: TodoItemSchema.array(),
+});
+export type TodoPhase = z.infer<typeof TodoPhaseSchema>;
+
+export const TodoListSchema = z.object({
+  threadId: IdSchema,
+  phases: TodoPhaseSchema.array(),
+  updatedAt: IsoDateTimeSchema.nullable(),
+});
+export type TodoList = z.infer<typeof TodoListSchema>;
 
 export const BrainEntrySchema = z.object({
   id: IdSchema,
@@ -379,11 +449,17 @@ export const CommandSchema = z.object({
 });
 export type Command = z.infer<typeof CommandSchema>;
 
+export const SkillSourceSchema = z.enum(['project', 'user', 'plugin', 'claude-project']);
+export type SkillSource = z.infer<typeof SkillSourceSchema>;
+
 export const SkillSchema = z.object({
   name: z.string(),
   description: z.string(),
   body: z.string(),
   path: z.string(),
+  /** Where the skill was discovered; project skills shadow user and plugin skills. */
+  source: SkillSourceSchema.default('project'),
+  pluginId: IdSchema.nullable().default(null),
 });
 export type Skill = z.infer<typeof SkillSchema>;
 
@@ -406,6 +482,88 @@ export const TerminalSessionSchema = z.object({
   createdAt: IsoDateTimeSchema,
 });
 export type TerminalSession = z.infer<typeof TerminalSessionSchema>;
+
+export const PluginKindSchema = z.enum(['plugin', 'skill', 'connector']);
+export type PluginKind = z.infer<typeof PluginKindSchema>;
+
+/** What an installed plugin contributes. Agents and hooks are listed but never executed. */
+export const PluginComponentsSchema = z.object({
+  skills: z.string().array(),
+  commands: z.string().array(),
+  mcpServers: z.string().array(),
+  agents: z.string().array(),
+  hooks: z.boolean(),
+});
+export type PluginComponents = z.infer<typeof PluginComponentsSchema>;
+
+export const MarketplaceSchema = z.object({
+  id: IdSchema,
+  label: z.string(),
+  /** A GitHub `owner/repo` slug or an https URL to a marketplace.json file. */
+  url: z.string(),
+  verified: z.boolean(),
+  builtIn: z.boolean(),
+  fetchedAt: IsoDateTimeSchema.nullable(),
+  error: z.string().nullable(),
+  /** Entries the last fetch skipped because they did not parse. */
+  skipped: z.number().int().nonnegative(),
+});
+export type Marketplace = z.infer<typeof MarketplaceSchema>;
+
+export const CatalogEntrySchema = z.object({
+  /** `<marketplaceId>/<name>`, stable across refreshes. */
+  id: z.string().min(1),
+  marketplaceId: IdSchema,
+  name: z.string().min(1),
+  displayName: z.string(),
+  description: z.string(),
+  category: z.string(),
+  author: z.string().nullable(),
+  homepage: z.string().nullable(),
+  /** `owner/repo` of the source, for the card's repo label. */
+  repo: z.string().nullable(),
+  kind: PluginKindSchema,
+  verified: z.boolean(),
+  /** Component names the catalog declares; null when the catalog does not say. */
+  components: PluginComponentsSchema.partial().nullable(),
+  installed: z.boolean(),
+});
+export type CatalogEntry = z.infer<typeof CatalogEntrySchema>;
+
+export const InstalledPluginSourceSchema = z.enum(['marketplace', 'upload', 'custom']);
+export type InstalledPluginSource = z.infer<typeof InstalledPluginSourceSchema>;
+
+export const InstalledPluginSchema = z.object({
+  id: IdSchema,
+  marketplaceId: IdSchema.nullable(),
+  name: z.string().min(1),
+  displayName: z.string(),
+  description: z.string(),
+  version: z.string().nullable(),
+  kind: PluginKindSchema,
+  enabled: z.boolean(),
+  installPath: z.string(),
+  components: PluginComponentsSchema,
+  source: InstalledPluginSourceSchema,
+  installedAt: IsoDateTimeSchema,
+});
+export type InstalledPlugin = z.infer<typeof InstalledPluginSchema>;
+
+/** One MCP registry server, reduced to what the connectors tab shows and installs. */
+export const ConnectorEntrySchema = z.object({
+  name: z.string().min(1),
+  title: z.string(),
+  description: z.string(),
+  version: z.string().nullable(),
+  /** Streamable HTTP endpoint when the server is hosted. */
+  remoteUrl: z.string().nullable(),
+  /** npm package for a local stdio server. */
+  npmPackage: z.string().nullable(),
+  /** Environment variables the server declares as required. */
+  requiredEnv: z.string().array(),
+  repository: z.string().nullable(),
+});
+export type ConnectorEntry = z.infer<typeof ConnectorEntrySchema>;
 
 export const AttachmentSchema = z.object({
   name: z.string(),
