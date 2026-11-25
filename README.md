@@ -21,7 +21,7 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
   popup or settings; refresh on demand; type a model id when a gateway returns nothing. The
   provider form has an Advanced section for the same values.
 - **Modes.** Work, Plan, and Council, plus read-only, ask, accept-edits, and full-auto
-  permissions. Work and Council switch from the thread topbar.
+  permissions. Work and Council switch from the centered app topbar.
 - **Subagents.** Explorer, reviewer, notetaker, worker, and planner types, each with its own
   prompt, model, and fallback model. Child threads nest under their parent in the sidebar and
   stream into a side pane; workers get isolated worktrees. The dock above the composer is a
