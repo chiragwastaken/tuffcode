@@ -29,7 +29,7 @@ const CONNECTION_META: Record<ConnectionStatus, { dot: string; label: string }> 
 };
 
 /** The inspector is a column at this width and an overlay sheet below it. */
-const WIDE_LAYOUT_QUERY = '(min-width: 1280px)';
+const WIDE_LAYOUT_QUERY = '(min-width: 1024px)';
 
 /** Everything the sheet's focus trap cycles through. */
 const FOCUSABLE_SELECTOR = [
@@ -63,7 +63,7 @@ export function AppShell() {
   const showModeSwitch = hasThread && !visibility.backToWorkspace;
   const showInspectorToggle = visibility.inspector && hasThread;
   const inspectorVisible = showInspectorToggle && inspectorOpen;
-  /** Below xl the inspector is an overlay sheet, which behaves as a modal dialog. */
+  /** Below 1024px the inspector is an overlay sheet, which behaves as a modal dialog. */
   const sheetOpen = inspectorVisible && !wide;
 
   useLayoutEffect(() => {
@@ -309,7 +309,7 @@ export function AppShell() {
                   type="button"
                   aria-label="Close inspector"
                   data-testid="inspector-backdrop"
-                  className="fixed inset-0 z-30 bg-black/40 xl:hidden"
+                  className="fixed inset-0 z-30 bg-black/40 min-[1024px]:hidden"
                   onClick={() => setInspectorOpen(false)}
                 />
               ) : null}
@@ -327,9 +327,9 @@ export function AppShell() {
                   // Below the topbar: its top-right corner is reserved for the native
                   // caption buttons, so the sheet's own header and collapse control
                   // must stay under it. The backdrop still covers the whole window.
-                  'max-xl:fixed max-xl:top-[var(--topbar-height)] max-xl:right-0 max-xl:bottom-0',
-                  'max-xl:w-[min(26rem,92vw)] max-xl:border-l max-xl:shadow-2xl',
-                  'xl:static xl:w-[var(--right-panel-width)] xl:max-w-[var(--right-panel-max-width)] xl:shrink-0 xl:border-l',
+                  'max-[1024px]:fixed max-[1024px]:top-[var(--topbar-height)] max-[1024px]:right-0 max-[1024px]:bottom-0',
+                  'max-[1024px]:w-[min(26rem,92vw)] max-[1024px]:border-l max-[1024px]:shadow-2xl',
+                  'min-[1024px]:static min-[1024px]:w-[var(--right-panel-width)] min-[1024px]:max-w-[var(--right-panel-max-width)] min-[1024px]:shrink-0 min-[1024px]:border-l',
                   // Kept mounted while hidden so the terminal and tab choice survive.
                   inspectorVisible ? 'flex' : 'hidden',
                 )}
