@@ -230,6 +230,136 @@ export function McpSection() {
         }
       />
 
+      {draft ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{draft.id ? 'Edit server' : 'Add server'}</CardTitle>
+            <CardDescription>
+              The command runs as a local stdio process with these arguments.
+            </CardDescription>
+          </CardHeader>
+          <form
+            className="flex flex-col border-t border-border"
+            onSubmit={(event) => void handleSubmit(event)}
+            noValidate
+          >
+            <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto p-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField label="Label" htmlFor="mcp-label" error={errors.label}>
+                  <Input
+                    id="mcp-label"
+                    data-testid="mcp-label-input"
+                    value={draft.label}
+                    onChange={(event) => updateDraft('label', event.target.value)}
+                    placeholder="Filesystem"
+                    aria-invalid={Boolean(errors.label)}
+                    aria-describedby={errors.label ? 'mcp-label-error' : undefined}
+                  />
+                </FormField>
+                <FormField
+                  label="Command"
+                  htmlFor="mcp-command"
+                  hint="For example npx or node."
+                  error={errors.command}
+                >
+                  <Input
+                    id="mcp-command"
+                    data-testid="mcp-command-input"
+                    value={draft.command}
+                    onChange={(event) => updateDraft('command', event.target.value)}
+                    placeholder="npx"
+                    spellCheck={false}
+                    className="font-mono text-xs"
+                    aria-invalid={Boolean(errors.command)}
+                    aria-describedby={errors.command ? 'mcp-command-error' : undefined}
+                  />
+                </FormField>
+              </div>
+
+              <FormField
+                label="Arguments"
+                htmlFor="mcp-args"
+                hint="Space separated; one argument per line also works."
+              >
+                <Textarea
+                  id="mcp-args"
+                  value={draft.args}
+                  onChange={(event) => updateDraft('args', event.target.value)}
+                  placeholder="-y @modelcontextprotocol/server-filesystem C:/work"
+                  spellCheck={false}
+                  rows={2}
+                  className="min-h-0 font-mono text-xs"
+                />
+              </FormField>
+
+              <FormField
+                label="Environment"
+                htmlFor="mcp-env"
+                hint='Optional JSON object of string values, for example {"TOKEN": "abc"}.'
+                error={errors.env}
+              >
+                <Textarea
+                  id="mcp-env"
+                  value={draft.env}
+                  onChange={(event) => updateDraft('env', event.target.value)}
+                  placeholder={'{\n  "TOKEN": "abc"\n}'}
+                  spellCheck={false}
+                  rows={3}
+                  className="min-h-0 font-mono text-xs"
+                  aria-invalid={Boolean(errors.env)}
+                  aria-describedby={errors.env ? 'mcp-env-error' : undefined}
+                />
+              </FormField>
+
+              <div className="grid items-center gap-3 sm:grid-cols-2">
+                <FormField
+                  label="Working directory"
+                  htmlFor="mcp-cwd"
+                  hint="Optional absolute path the server starts in."
+                  error={errors.cwd}
+                >
+                  <Input
+                    id="mcp-cwd"
+                    value={draft.cwd}
+                    onChange={(event) => updateDraft('cwd', event.target.value)}
+                    placeholder="Default"
+                    spellCheck={false}
+                    className="font-mono text-xs"
+                    aria-invalid={Boolean(errors.cwd)}
+                    aria-describedby={errors.cwd ? 'mcp-cwd-error' : undefined}
+                  />
+                </FormField>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded-sm border border-input accent-primary"
+                    checked={draft.enabled}
+                    onChange={(event) => updateDraft('enabled', event.target.checked)}
+                  />
+                  Enabled
+                </label>
+              </div>
+            </div>
+
+            {formError ? (
+              <div className="border-t border-border p-3">
+                <InlineAlert>{formError}</InlineAlert>
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2 border-t border-border p-3">
+              <Button type="button" variant="ghost" size="sm" onClick={closeForm} disabled={saving}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" disabled={saving}>
+                {saving ? <Spinner size="sm" /> : null}
+                {draft.id ? 'Save changes' : 'Add server'}
+              </Button>
+            </div>
+          </form>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-3">
           <div className="min-w-0">
@@ -339,130 +469,6 @@ export function McpSection() {
           </ul>
         ) : null}
       </Card>
-
-      {draft ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>{draft.id ? 'Edit server' : 'Add server'}</CardTitle>
-            <CardDescription>
-              The command runs as a local stdio process with these arguments.
-            </CardDescription>
-          </CardHeader>
-          <form
-            className="flex flex-col gap-3 border-t border-border p-3"
-            onSubmit={(event) => void handleSubmit(event)}
-            noValidate
-          >
-            <div className="grid gap-3 sm:grid-cols-2">
-              <FormField label="Label" htmlFor="mcp-label" error={errors.label}>
-                <Input
-                  id="mcp-label"
-                  data-testid="mcp-label-input"
-                  value={draft.label}
-                  onChange={(event) => updateDraft('label', event.target.value)}
-                  placeholder="Filesystem"
-                  aria-invalid={Boolean(errors.label)}
-                  aria-describedby={errors.label ? 'mcp-label-error' : undefined}
-                />
-              </FormField>
-              <FormField
-                label="Command"
-                htmlFor="mcp-command"
-                hint="For example npx or node."
-                error={errors.command}
-              >
-                <Input
-                  id="mcp-command"
-                  data-testid="mcp-command-input"
-                  value={draft.command}
-                  onChange={(event) => updateDraft('command', event.target.value)}
-                  placeholder="npx"
-                  spellCheck={false}
-                  className="font-mono text-xs"
-                  aria-invalid={Boolean(errors.command)}
-                  aria-describedby={errors.command ? 'mcp-command-error' : undefined}
-                />
-              </FormField>
-            </div>
-
-            <FormField
-              label="Arguments"
-              htmlFor="mcp-args"
-              hint="Space separated; one argument per line also works."
-            >
-              <Textarea
-                id="mcp-args"
-                value={draft.args}
-                onChange={(event) => updateDraft('args', event.target.value)}
-                placeholder="-y @modelcontextprotocol/server-filesystem C:/work"
-                spellCheck={false}
-                rows={2}
-                className="font-mono text-xs"
-              />
-            </FormField>
-
-            <FormField
-              label="Environment"
-              htmlFor="mcp-env"
-              hint='Optional JSON object of string values, for example {"TOKEN": "abc"}.'
-              error={errors.env}
-            >
-              <Textarea
-                id="mcp-env"
-                value={draft.env}
-                onChange={(event) => updateDraft('env', event.target.value)}
-                placeholder={'{\n  "TOKEN": "abc"\n}'}
-                spellCheck={false}
-                rows={3}
-                className="font-mono text-xs"
-                aria-invalid={Boolean(errors.env)}
-                aria-describedby={errors.env ? 'mcp-env-error' : undefined}
-              />
-            </FormField>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <FormField
-                label="Working directory"
-                htmlFor="mcp-cwd"
-                hint="Optional absolute path the server starts in."
-                error={errors.cwd}
-              >
-                <Input
-                  id="mcp-cwd"
-                  value={draft.cwd}
-                  onChange={(event) => updateDraft('cwd', event.target.value)}
-                  placeholder="Default"
-                  spellCheck={false}
-                  className="font-mono text-xs"
-                  aria-invalid={Boolean(errors.cwd)}
-                  aria-describedby={errors.cwd ? 'mcp-cwd-error' : undefined}
-                />
-              </FormField>
-              <label className="flex items-end gap-2 pb-2 text-sm text-foreground">
-                <input
-                  type="checkbox"
-                  className="size-4 rounded-sm border border-input accent-primary"
-                  checked={draft.enabled}
-                  onChange={(event) => updateDraft('enabled', event.target.checked)}
-                />
-                Enabled
-              </label>
-            </div>
-
-            {formError ? <InlineAlert>{formError}</InlineAlert> : null}
-
-            <div className="flex items-center justify-end gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={closeForm} disabled={saving}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary" size="sm" disabled={saving}>
-                {saving ? <Spinner size="sm" /> : null}
-                {draft.id ? 'Save changes' : 'Add server'}
-              </Button>
-            </div>
-          </form>
-        </Card>
-      ) : null}
 
       <ConfirmDialog
         open={removeTarget !== null}
