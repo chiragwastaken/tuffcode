@@ -5,6 +5,7 @@ import {
   type AdapterEvent,
   type AdapterSession,
   type ApprovalChoice,
+  type McpServerLaunch,
   type PermissionMode,
   type ProviderConfig,
   type TurnContext,
@@ -50,6 +51,10 @@ export interface ClaudeQueryOptions {
   abortController: AbortController;
   allowDangerouslySkipPermissions?: boolean;
   canUseTool: ClaudeCanUseTool;
+  mcpServers?: Record<
+    string,
+    { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+  >;
 }
 
 export interface ClaudeQueryHandle extends AsyncIterable<unknown> {
@@ -183,6 +188,7 @@ class ClaudeAdapter implements AdapterSession {
           ...(ctx.permissionMode === 'full-auto' ? { allowDangerouslySkipPermissions: true } : {}),
           canUseTool: (toolName, input, options) =>
             this.requestApproval(turn, queue, toolName, input, options),
+          ...mcpServerOptions(this.deps.mcpServers),
         },
       });
       turn.query = handle;
@@ -387,6 +393,22 @@ function appendSystemPrompt(ctx: TurnContext): string {
   return [ctx.systemPrompt.trim(), ctx.brainSlice.trim()]
     .filter((part) => part.length > 0)
     .join('\n\n');
+}
+
+/** Stdio MCP servers for the SDK, omitted entirely when none are configured. */
+function mcpServerOptions(
+  servers: Record<string, McpServerLaunch> | undefined,
+): Pick<ClaudeQueryOptions, 'mcpServers'> {
+  const entries = Object.entries(servers ?? {});
+  if (entries.length === 0) return {};
+  return {
+    mcpServers: Object.fromEntries(
+      entries.map(([name, server]) => [
+        name,
+        { type: 'stdio' as const, command: server.command, args: server.args, env: server.env },
+      ]),
+    ),
+  };
 }
 
 function abortSignalPromise(signal: AbortSignal): Promise<void> {

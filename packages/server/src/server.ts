@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import type { McpServerLaunch } from '@tuffcode/contracts';
 import { createLogger, dbPath as defaultDbPath, logsDir, serverJsonPath, type Logger } from '@tuffcode/shared';
 import {
   createAdapterDeps,
@@ -135,10 +136,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   // The runner needs adapter deps and the subagent service needs the runner, so the
   // harness hook resolves the service through a holder assigned right after creation.
   let subagentsRef: Subagents | undefined;
+  // Claude launches MCP servers itself, so it gets the enabled stdio configs keyed by
+  // a unique name; a label shared by two servers takes the server id as a suffix.
+  const enabledServers = repos.mcp.list().filter((server) => server.enabled);
+  const labelCounts = new Map<string, number>();
+  for (const server of enabledServers) {
+    labelCounts.set(server.label, (labelCounts.get(server.label) ?? 0) + 1);
+  }
+  const mcpServers: Record<string, McpServerLaunch> = {};
+  for (const server of enabledServers) {
+    const key =
+      (labelCounts.get(server.label) ?? 0) > 1 ? `${server.label}-${server.id}` : server.label;
+    mcpServers[key] = { command: server.command, args: server.args, env: server.env };
+  }
   const adapterDeps = createAdapterDeps({
     logger: adapterLogger,
     resolveCommand,
     extraTool: extraTools.run,
+    mcpServers,
     spawnSubagent: async (request) => {
       if (subagentsRef === undefined) throw new Error('subagent service is not ready');
       return subagentsRef.spawnFromTool(request);

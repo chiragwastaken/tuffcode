@@ -54,6 +54,13 @@ export interface AdapterLogger {
   error(msg: string, fields?: Record<string, unknown>): void;
 }
 
+/** One enabled stdio MCP server as a vendor CLI must launch it. */
+export interface McpServerLaunch {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
 export interface AdapterDeps {
   logger: AdapterLogger;
   resolveCommand(name: string): Promise<string | null>;
@@ -70,6 +77,11 @@ export interface AdapterDeps {
    * unset the harness offers no extra tools and a stray call is answered as unavailable.
    */
   extraTool?: ExtraToolRunner;
+  /**
+   * Enabled stdio MCP servers keyed by unique display name. Vendor CLIs that launch
+   * servers themselves read this; harness adapters reach MCP through `extraTool`.
+   */
+  mcpServers?: Record<string, McpServerLaunch>;
 }
 
 /** Server-owned harness tools: the adapter only shapes the schema and permission. */

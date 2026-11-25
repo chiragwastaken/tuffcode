@@ -1,7 +1,8 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import type { AdapterDeps, AdapterSession } from '@tuffcode/contracts';
 import { serverJsonPath } from '@tuffcode/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { closeDb, migrate, openDb } from './db/index.js';
 import { createRepos } from './db/repos/index.js';
 import { dispatch } from './rpc.js';
@@ -70,6 +71,48 @@ function seedOrphan(dbFile: string): void {
     injectedIds: [],
     createdAt: ISO,
   });
+  closeDb(db);
+}
+
+/** Seeds one idle thread plus MCP servers: two sharing a label, one solo, one disabled. */
+function seedMcpServers(dbFile: string, root: string): void {
+  const db = openDb(dbFile);
+  migrate(db);
+  const repos = createRepos(db);
+  repos.projects.add({
+    id: 'prj_a',
+    name: 'alpha',
+    path: root,
+    defaultBranch: 'main',
+    createdAt: ISO,
+  });
+  repos.providers.upsert({ id: 'prv_a', kind: 'claude', label: 'Test', config: {} });
+  repos.threads.create({
+    id: 'thr_a',
+    projectId: 'prj_a',
+    parentThreadId: null,
+    title: 'thread',
+    providerId: 'prv_a',
+    modelId: 'model-x',
+    executionMode: 'work',
+    permissionMode: 'ask',
+    status: 'idle',
+    worktreePath: root,
+    branch: null,
+    baseBranch: null,
+    createdAt: ISO,
+    updatedAt: ISO,
+  });
+  repos.mcp.upsert({
+    id: 'mcp_on',
+    label: 'files',
+    command: 'node',
+    args: ['server.js'],
+    env: { ROOT: 'C:/work' },
+  });
+  repos.mcp.upsert({ id: 'mcp_dup', label: 'files', command: 'npx' });
+  repos.mcp.upsert({ id: 'mcp_solo', label: 'solo', command: 'solo-mcp', args: ['--x'] });
+  repos.mcp.upsert({ id: 'mcp_off', label: 'off', command: 'node', enabled: false });
   closeDb(db);
 }
 
@@ -154,6 +197,50 @@ describe('server bootstrap', () => {
     await expect(
       dispatch(running.handlers, { id: 'mcp-list', method: 'mcp.list', params: {} }),
     ).resolves.toEqual({ id: 'mcp-list', ok: true, result: [] });
+  });
+
+  it('passes only enabled MCP servers to the adapter with unique keys', async () => {
+    env = createTempEnv();
+    const dbFile = join(env.root, 'server.db');
+    seedMcpServers(dbFile, env.root);
+
+    let captured: AdapterDeps | undefined;
+    const session: AdapterSession = {
+      id: 'sess_mcp',
+      providerId: 'prv_a',
+      capabilities: { tools: true, approvals: true, resume: false, models: false },
+      send: () => ({
+        [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }),
+      }),
+      approve: () => undefined,
+      interrupt: async () => undefined,
+      dispose: async () => undefined,
+    };
+    running = await startServer({
+      dbFile,
+      writeServerJson: false,
+      adapterOverrides: {
+        factories: {
+          claude: async (_provider, deps) => {
+            captured = deps;
+            return session;
+          },
+        },
+      },
+    });
+
+    const response = await dispatch(running.handlers, {
+      id: 'send',
+      method: 'threads.send',
+      params: { id: 'thr_a', text: 'hello' },
+    });
+    expect(response.ok).toBe(true);
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    expect(captured?.mcpServers).toEqual({
+      'files-mcp_on': { command: 'node', args: ['server.js'], env: { ROOT: 'C:/work' } },
+      'files-mcp_dup': { command: 'npx', args: [], env: {} },
+      solo: { command: 'solo-mcp', args: ['--x'], env: {} },
+    });
   });
 
   it('wires the secret bridge and the runner from a parent port', async () => {
