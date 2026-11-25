@@ -20,6 +20,7 @@ import {
   barWidthPercent,
   contextBarTone,
   contextMeterTone,
+  contextTokenLine,
   contextTooltip,
   formatPercent,
   formatSegmentPercent,
@@ -44,6 +45,7 @@ function usageFromUpdate(update: ContextUpdate, previous: ContextUsage | null): 
     usedTokens: update.usedTokens,
     maxTokens: update.maxTokens,
     percent: update.percent,
+    limitSource: update.limitSource,
     segments,
     ...(previous?.compactedAt ? { compactedAt: previous.compactedAt } : {}),
   };
@@ -72,6 +74,7 @@ export function ContextMeter({ threadId, threshold }: ContextMeterProps) {
             usedTokens: result.usedTokens,
             maxTokens: result.maxTokens,
             percent: result.percent,
+            limitSource: result.limitSource,
             segments: result.segments,
             ...(result.compactedAt ? { compactedAt: result.compactedAt } : {}),
           });
@@ -162,9 +165,7 @@ export function ContextMeter({ threadId, threshold }: ContextMeterProps) {
             {formatPercent(percent)}
           </span>
         </div>
-        <p className="px-0.5 text-2xs text-muted-foreground">
-          {formatTokenCount(usage.usedTokens)} of {formatTokenCount(usage.maxTokens)} tokens
-        </p>
+        <p className="px-0.5 text-2xs text-muted-foreground">{contextTokenLine(usage)}</p>
 
         <div aria-hidden="true" className="mt-1.5 h-1 overflow-hidden rounded-full bg-border">
           <div

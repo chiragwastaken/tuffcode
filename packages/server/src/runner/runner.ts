@@ -184,6 +184,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         usedTokens: usage.usedTokens,
         maxTokens: usage.maxTokens,
         percent: usage.percent,
+        limitSource: usage.limitSource,
         compacted: options.compacted,
       },
     });

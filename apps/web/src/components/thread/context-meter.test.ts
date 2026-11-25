@@ -6,11 +6,13 @@ import {
   barWidthPercent,
   contextBarTone,
   contextMeterTone,
+  contextTokenLine,
   contextTooltip,
   formatPercent,
   formatSegmentPercent,
   formatTokenCount,
   isContextWarning,
+  limitSourceLabel,
   segmentPercent,
   usagePercent,
   type ContextUsage,
@@ -21,6 +23,7 @@ function usage(overrides: Partial<ContextUsage> = {}): ContextUsage {
     usedTokens: 42_000,
     maxTokens: 200_000,
     percent: 0.21,
+    limitSource: 'model',
     segments: [
       { name: 'system', tokens: 640 },
       { name: 'messages', tokens: 41_360 },
@@ -82,7 +85,9 @@ describe('context tooltip and segments', () => {
   });
 
   it('omits the segment line when the server reported none', () => {
-    expect(contextTooltip(usage({ segments: [] }))).toBe('42k of 200k tokens (21%)');
+    expect(contextTooltip(usage({ segments: [] }))).toBe(
+      '42k of 200k tokens (21%)\nLimit source: model',
+    );
   });
 
   it('computes each segment share of the window', () => {
@@ -98,6 +103,40 @@ describe('context tooltip and segments', () => {
     expect(formatSegmentPercent(segmentPercent(20_000, 200_000))).toBe('10%');
     expect(formatSegmentPercent(segmentPercent(0, 33_000))).toBe('0%');
     expect(formatSegmentPercent(0.0001)).toBe('<0.1%');
+  });
+});
+
+describe('context limit source', () => {
+  it('names every precedence step', () => {
+    expect(limitSourceLabel('model')).toBe('model');
+    expect(limitSourceLabel('config')).toBe('provider config');
+    expect(limitSourceLabel('settings')).toBe('settings');
+    expect(limitSourceLabel('default')).toBe('assumed default');
+  });
+
+  it('reads a server that sends no source as the model window', () => {
+    expect(limitSourceLabel(undefined)).toBe('model');
+  });
+
+  it('spells the assumption out on the token line only for a defaulted window', () => {
+    expect(contextTokenLine(usage({ limitSource: 'default' }))).toBe(
+      '42k of 200k tokens (assumed default)',
+    );
+    expect(contextTokenLine(usage({ limitSource: 'model' }))).toBe('42k of 200k tokens');
+    expect(contextTokenLine(usage({ limitSource: 'config' }))).toBe('42k of 200k tokens');
+    expect(contextTokenLine(usage({ limitSource: 'settings' }))).toBe('42k of 200k tokens');
+    expect(contextTokenLine(usage({ limitSource: undefined }))).toBe('42k of 200k tokens');
+  });
+
+  it('keeps the source in the tooltip for every step', () => {
+    expect(contextTooltip(usage({ limitSource: 'default' }))).toContain(
+      'Limit source: assumed default',
+    );
+    expect(contextTooltip(usage({ limitSource: 'config' }))).toContain(
+      'Limit source: provider config',
+    );
+    expect(contextTooltip(usage({ limitSource: 'settings' }))).toContain('Limit source: settings');
+    expect(contextTooltip(usage({ limitSource: undefined }))).toContain('Limit source: model');
   });
 });
 

@@ -179,6 +179,12 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
       usedTokens: z.number().int().nonnegative(),
       maxTokens: z.number().int().positive(),
       percent: z.number().min(0).max(1),
+      /**
+       * Which precedence step supplied `maxTokens` (D46). Every emitter sends it, so the
+       * inferred type is required; a frame from a server that predates the field still
+       * parses and reads as the model's own window.
+       */
+      limitSource: z.enum(['model', 'config', 'settings', 'default']).default('model'),
       compacted: z.boolean(),
     }),
   ),
