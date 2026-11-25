@@ -6,6 +6,7 @@ import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
 import { toast } from 'sonner';
 import { useAppStore } from '../../store/app-store';
 import { runAction, type ActionContext } from '../actions';
+import { CouncilThreadBoard } from '../council/CouncilThreadBoard';
 import { activityCount } from '../inspector/activity-model';
 import { requestInspectorTab } from '../inspector/panel-requests';
 import { useActionPorts } from '../menu/action-context';
@@ -248,6 +249,10 @@ export function ThreadView({
               onEditUserMessage={editUserMessage}
             />
           )}
+
+          {thread?.executionMode === 'council' ? (
+            <CouncilThreadBoard threadId={threadId} />
+          ) : null}
 
           <div ref={dockRef} className="flex shrink-0 flex-col">
             {hasSubagents ? <SubagentStrip threadId={threadId} onOpen={openSubagent} /> : null}
