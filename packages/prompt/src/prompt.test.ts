@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BASE_SYSTEM_PROMPT,
+  CONFIG_TOOL,
   COUNCIL_PLANNER_PROMPT,
   COUNCIL_REVIEWER_PROMPT,
   COUNCIL_WORKER_BRIEF_TEMPLATE,
   CUSTOM_INSTRUCTION_TOKEN_BUDGET,
   CUSTOM_INSTRUCTIONS_HEADING,
+  EXTRA_TOOL_NAMES,
+  EXTRA_TOOL_SCHEMAS,
+  MCP_TOOL,
+  MEMORY_TOOL,
   TOOL_NAMES,
   TOOL_SCHEMAS,
   assemblePrompt,
@@ -49,9 +54,9 @@ describe('base system prompt', () => {
   it('fits the token budget', () => {
     const tokens = estimateTokens(BASE_SYSTEM_PROMPT);
     console.log(`base system prompt: ${tokens} tokens (${BASE_SYSTEM_PROMPT.length} chars)`);
-    expect(tokens).toBeGreaterThanOrEqual(600);
-    expect(tokens).toBeLessThanOrEqual(900);
-    expect(tokens).toBeLessThan(1000);
+    expect(tokens).toBeGreaterThanOrEqual(1000);
+    expect(tokens).toBeLessThanOrEqual(1500);
+    expect(tokens).toBeLessThan(1600);
   });
 
   it('is ASCII only', () => {
@@ -61,18 +66,45 @@ describe('base system prompt', () => {
   it('covers the required rules', () => {
     for (const phrase of [
       'Tuffcode',
-      'Think before acting',
+      'Operating loop',
+      'Investigation',
+      'Delegation',
+      'Memory',
+      'Safety',
       'Read before you edit',
-      'Batch independent tool calls',
       'Never fabricate output',
-      'Stay in scope',
       'pwsh.exe',
-      'ConPTY',
       'CRLF',
       '248 characters',
+      'taskkill /T /F',
+      'ConPTY',
+      'subagent',
+      'memory',
     ]) {
       expect(BASE_SYSTEM_PROMPT).toContain(phrase);
     }
+  });
+
+  it('orders the eleven sections', () => {
+    const headings = [
+      '# Operating loop',
+      '# Investigation',
+      '# Editing',
+      '# Verification',
+      '# Delegation',
+      '# Memory',
+      '# Communication',
+      '# Safety',
+      '# Windows',
+      '# Output',
+    ];
+    let previous = -1;
+    for (const heading of headings) {
+      const at = BASE_SYSTEM_PROMPT.indexOf(heading);
+      expect(at, heading).toBeGreaterThan(previous);
+      previous = at;
+    }
+    expect(BASE_SYSTEM_PROMPT.indexOf('You are Tuffcode')).toBeLessThan(previous);
   });
 });
 
@@ -140,6 +172,85 @@ describe('tool schemas', () => {
   });
 });
 
+describe('extra tool schemas', () => {
+  it('declares mcp, memory, and config in order', () => {
+    expect(EXTRA_TOOL_SCHEMAS).toHaveLength(3);
+    expect(EXTRA_TOOL_SCHEMAS.map((tool) => tool.name)).toEqual([...EXTRA_TOOL_NAMES]);
+    expect(EXTRA_TOOL_NAMES).toEqual(['mcp', 'memory', 'config']);
+    expect(EXTRA_TOOL_SCHEMAS[0]).toBe(MCP_TOOL);
+    expect(EXTRA_TOOL_SCHEMAS[1]).toBe(MEMORY_TOOL);
+    expect(EXTRA_TOOL_SCHEMAS[2]).toBe(CONFIG_TOOL);
+    for (const name of EXTRA_TOOL_NAMES) {
+      expect(TOOL_NAMES as readonly string[]).not.toContain(name);
+    }
+  });
+
+  it('serializes under the extra token budget', () => {
+    const serialized = JSON.stringify(EXTRA_TOOL_SCHEMAS);
+    const tokens = estimateTokens(serialized);
+    console.log(`extra tool schemas: ${tokens} tokens (${serialized.length} chars)`);
+    expect(tokens).toBeLessThan(900);
+  });
+
+  it('keeps every extra schema valid', () => {
+    for (const tool of EXTRA_TOOL_SCHEMAS) {
+      expect(tool.description.trim().length).toBeGreaterThan(20);
+      expect(tool.parameters.type).toBe('object');
+      expect(tool.parameters.additionalProperties).toBe(false);
+      expect(tool.parameters.required).toContain('action');
+      for (const key of tool.parameters.required) {
+        expect(tool.parameters.properties).toHaveProperty(key);
+      }
+      for (const property of Object.values(tool.parameters.properties)) {
+        expect(['string', 'integer', 'boolean']).toContain(property.type);
+      }
+    }
+  });
+
+  it('documents the action values in the descriptions', () => {
+    const mcpAction = MCP_TOOL.parameters.properties.action?.description ?? '';
+    expect(mcpAction).toContain('list');
+    expect(mcpAction).toContain('call');
+    expect(MCP_TOOL.parameters.properties.arguments?.type).toBe('string');
+
+    const memoryAction = MEMORY_TOOL.parameters.properties.action?.description ?? '';
+    expect(memoryAction).toContain('search');
+    expect(memoryAction).toContain('add');
+    const kind = MEMORY_TOOL.parameters.properties.kind?.description ?? '';
+    for (const value of ['identity', 'preference', 'rule', 'project', 'memory', 'working-note']) {
+      expect(kind).toContain(value);
+    }
+
+    const configAction = CONFIG_TOOL.parameters.properties.action?.description ?? '';
+    for (const value of ['provider.add', 'provider.model.add', 'mcp.add', 'settings.set']) {
+      expect(configAction).toContain(value);
+    }
+    expect(Object.keys(CONFIG_TOOL.parameters.properties)).toEqual([
+      'action',
+      'providerId',
+      'kind',
+      'label',
+      'baseUrl',
+      'apiKey',
+      'modelId',
+      'contextWindow',
+      'maxOutputTokens',
+      'capabilities',
+      'reasoning',
+      'command',
+      'args',
+      'env',
+      'key',
+      'value',
+    ]);
+    expect(CONFIG_TOOL.parameters.properties.contextWindow?.type).toBe('integer');
+    expect(CONFIG_TOOL.parameters.properties.maxOutputTokens?.type).toBe('integer');
+    expect(CONFIG_TOOL.parameters.properties.capabilities?.type).toBe('string');
+    expect(CONFIG_TOOL.parameters.properties.args?.type).toBe('string');
+    expect(CONFIG_TOOL.parameters.properties.env?.type).toBe('string');
+  });
+});
+
 describe('council prompts', () => {
   it('contains every worker brief heading', () => {
     for (const heading of COUNCIL_HEADINGS) {
@@ -159,6 +270,33 @@ describe('council prompts', () => {
   it('keeps the planner machine readable', () => {
     expect(COUNCIL_PLANNER_PROMPT).toContain('"tasks"');
     expect(COUNCIL_PLANNER_PROMPT).toContain('"question"');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('1 to 12 tasks');
+  });
+
+  it('allows read-only grounding and forbids edits in the planner', () => {
+    expect(COUNCIL_PLANNER_PROMPT).toContain('read-only commands');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('never edit files');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('never open pull requests');
+    expect(COUNCIL_PLANNER_PROMPT).not.toContain('never run commands');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('acceptance check');
+    expect(COUNCIL_PLANNER_PROMPT).toContain('evidence the worker must produce');
+  });
+
+  it('requires a verify step and a stop line in the worker brief', () => {
+    expect(COUNCIL_WORKER_BRIEF_TEMPLATE).toContain('VERIFY:');
+    expect(COUNCIL_WORKER_BRIEF_TEMPLATE).toContain('output tail');
+    expect(COUNCIL_WORKER_BRIEF_TEMPLATE).toContain('STOP AND REPORT:');
+    const done = COUNCIL_WORKER_BRIEF_TEMPLATE.indexOf('DEFINITION OF DONE');
+    expect(COUNCIL_WORKER_BRIEF_TEMPLATE.indexOf('VERIFY:')).toBeGreaterThan(done);
+    expect(COUNCIL_WORKER_BRIEF_TEMPLATE.indexOf('EVIDENCE')).toBeGreaterThan(
+      COUNCIL_WORKER_BRIEF_TEMPLATE.indexOf('STOP AND REPORT:'),
+    );
+  });
+
+  it('makes the reviewer check evidence and stay read-only', () => {
+    expect(COUNCIL_REVIEWER_PROMPT).toContain('Author evidence');
+    expect(COUNCIL_REVIEWER_PROMPT).toContain('never edit the files');
+    expect(COUNCIL_REVIEWER_PROMPT).toContain('Read-only');
   });
 });
 
@@ -330,6 +468,7 @@ describe('character hygiene', () => {
       COUNCIL_WORKER_BRIEF_TEMPLATE,
       COUNCIL_REVIEWER_PROMPT,
       JSON.stringify(TOOL_SCHEMAS),
+      JSON.stringify(EXTRA_TOOL_SCHEMAS),
       buildSystemPrompt({ extraRules: ['plain rule'] }),
       buildTurnContext({
         date: '2026-11-24',
