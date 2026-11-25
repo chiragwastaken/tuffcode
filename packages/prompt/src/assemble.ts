@@ -13,6 +13,9 @@ import { buildCustomInstructions } from './custom';
 
 export const CUSTOM_INSTRUCTIONS_HEADING = '## Custom instructions';
 
+const BRAIN_NOTES_HEADING = '## Brain notes';
+const RETRIEVED_MEMORY_HEADING = '## Retrieved memory';
+
 export type PromptSectionName =
   | 'base'
   | 'custom-instructions'
@@ -59,8 +62,12 @@ export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
   if (custom !== undefined) {
     sections.push(section('custom-instructions', `${CUSTOM_INSTRUCTIONS_HEADING}\n${custom}`));
   }
-  if (brainAlways.length > 0) sections.push(section('brain-always', brainAlways));
-  if (retrieved.length > 0) sections.push(section('retrieved-memory', retrieved));
+  if (brainAlways.length > 0) {
+    sections.push(section('brain-always', `${BRAIN_NOTES_HEADING}\n${brainAlways}`));
+  }
+  if (retrieved.length > 0) {
+    sections.push(section('retrieved-memory', `${RETRIEVED_MEMORY_HEADING}\n${retrieved}`));
+  }
   sections.push(section('turn-context', buildTurnContext(input.turnContext)));
   sections.push(section('user-message', input.userMessage));
 

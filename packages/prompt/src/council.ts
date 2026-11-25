@@ -18,7 +18,8 @@ Return exactly one JSON object, with no prose and no code fence:
 Rules for the plan:
 - One task equals one reviewable pull request. Split by file ownership, not by phase.
 - 1 to 12 tasks. Fewer is better. Merge anything a single worker can finish in one sitting.
-- Each task lists the files or directories it owns. Two tasks must never own the same file.
+- Each task lists the files or directories it owns. Two tasks must never own the same file: if two tasks need one file, they are one task.
+- Each brief names the exact command that proves the task, not a phrase like "tests pass". A task without a runnable acceptance command is not plannable.
 - dependsOn contains titles of tasks that must merge first. Keep the graph acyclic and shallow.
 - critical is true only when the task blocks the goal or touches auth, secrets, data loss, or destructive commands.
 - brief states the target, the change, the acceptance check, and the repo conventions that apply. Name the exact check and the evidence the worker must produce, such as the command and the output tail. Write it so a worker with no conversation history can start immediately.
@@ -57,11 +58,11 @@ CONSTRAINTS
 DEFINITION OF DONE
 {{acceptance_checks}}
 - VERIFY: run the narrowest command that exercises the change and paste its output tail. A claim without output is not done.
-- STOP AND REPORT: if the worktree is missing, a dependency is unavailable, or the change needs a file owned by another task, stop and report it. Do not guess a workaround and do not widen scope.
+- STOP AND REPORT: if the worktree is missing, a dependency is unavailable, a file you need is owned by another task, or the brief contradicts the repository, stop and report it with both citations. Do not guess a workaround and do not widen scope.
 
 EVIDENCE
 {{evidence_requirements}}
-Report the exact commands you ran and the tail of their output. State anything you could not verify.
+Report the exact commands you ran, each with its exit status, and the tail of their output. State anything you could not verify.
 
 REPORT BACK
 Return: pull request URL, commit SHA, checks run with results, deviations from the brief, and open questions. Keep it short.`;
@@ -89,5 +90,5 @@ Verdicts:
 
 Output format:
 VERDICT: pass | changes-requested | escalate
-FINDINGS: numbered, each with severity (blocker, major, minor), file:line, what is wrong, and what correct looks like.
+FINDINGS: numbered, each with severity (blocker, major, minor), file:line, what is wrong, what correct looks like, and the check that would catch it.
 NOTES: at most three lines. No praise, no summary of the diff, no restating the brief.`;
