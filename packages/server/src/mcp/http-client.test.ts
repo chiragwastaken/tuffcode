@@ -14,6 +14,7 @@ interface Recorded {
   session: string | undefined;
   protocol: string | undefined;
   auth: string | undefined;
+  apiKey: string | undefined;
 }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -25,9 +26,10 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown> |
 
 function startServer(
   mode: 'json' | 'sse',
-  options: { unauthorized?: boolean } = {},
+  options: { unauthorized?: boolean; rejectFirst?: number } = {},
 ): Promise<{ url: string; server: Server; seen: Recorded[] }> {
   const seen: Recorded[] = [];
+  let rejected = 0;
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
       const message = await body(request);
@@ -37,8 +39,10 @@ function startServer(
         session: request.headers['mcp-session-id'] as string | undefined,
         protocol: request.headers['mcp-protocol-version'] as string | undefined,
         auth: request.headers.authorization,
+        apiKey: request.headers['x-api-key'] as string | undefined,
       });
-      if (options.unauthorized === true) {
+      if (options.unauthorized === true || rejected < (options.rejectFirst ?? 0)) {
+        rejected += 1;
         response.writeHead(401, { 'www-authenticate': 'Bearer resource_metadata="x"' });
         response.end();
         return;
@@ -110,6 +114,56 @@ describe('http MCP client', () => {
     servers.push(server);
     const client = createHttpMcpClient({ url });
     await expect(client.initialize()).rejects.toThrow(OAUTH_REQUIRED_MESSAGE);
+  });
+
+  it('sends the configured header from the auth provider', async () => {
+    const { url, server, seen } = await startServer('json');
+    servers.push(server);
+    const client = createHttpMcpClient({
+      url,
+      auth: { headers: async () => ({ 'x-api-key': 'key-1' }) },
+    });
+    await client.initialize();
+    await client.close();
+    expect(seen[0]?.apiKey).toBe('key-1');
+    expect(seen[0]?.auth).toBeUndefined();
+    expect(seen.every((entry) => entry.apiKey === 'key-1')).toBe(true);
+  });
+
+  it('refreshes once after a 401 and retries the request', async () => {
+    const { url, server, seen } = await startServer('json', { rejectFirst: 1 });
+    servers.push(server);
+    let token = 'stale';
+    const client = createHttpMcpClient({
+      url,
+      auth: {
+        headers: async () => ({ authorization: `Bearer ${token}` }),
+        refresh: async () => {
+          token = 'fresh';
+          return true;
+        },
+      },
+    });
+    await client.initialize();
+    expect(seen.map((entry) => entry.auth)).toEqual([
+      'Bearer stale',
+      'Bearer fresh',
+      'Bearer fresh',
+    ]);
+  });
+
+  it('reports a failed refresh as a sign-in requirement', async () => {
+    const { url, server } = await startServer('json', { unauthorized: true });
+    servers.push(server);
+    const client = createHttpMcpClient({
+      url,
+      auth: {
+        headers: async () => ({ authorization: 'Bearer stale' }),
+        refresh: async () => false,
+      },
+    });
+    await expect(client.initialize()).rejects.toThrow(/sign in again/i);
+    await expect(client.initialize()).rejects.toMatchObject({ code: 'mcp_auth_required' });
   });
 
   it('times out a server that never answers', async () => {

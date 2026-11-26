@@ -6,6 +6,7 @@ import {
   IdSchema,
   InstalledPluginSchema,
   IsoDateTimeSchema,
+  McpServerSchema,
   ProviderViewSchema,
   SeqSchema,
   SubagentMessageSchema,
@@ -187,6 +188,8 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     }),
   ),
   serverEvent('plugins.updated', InstalledPluginSchema.array()),
+  /** One connector changed: saved, removed, or finished an OAuth sign-in. */
+  serverEvent('mcp.updated', McpServerSchema),
   serverEvent('providers.updated', ProviderViewSchema.array()),
   serverEvent(
     'provider.login.output',

@@ -397,6 +397,18 @@ CREATE TABLE plugin_marketplaces (
 );
 `;
 
+/**
+ * Round 5: connector auth modes. `auth_mode` records how a server authenticates and
+ * `auth_header` names the header that carries the credential. Rows that already had a
+ * secret read as bearer connectors, which is exactly what they were. Credentials
+ * themselves stay in the OS keychain; only the reference and the mode live here.
+ */
+const MCP_AUTH_SQL = `
+ALTER TABLE mcp_servers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE mcp_servers ADD COLUMN auth_header TEXT;
+UPDATE mcp_servers SET auth_mode = 'bearer' WHERE secret_ref IS NOT NULL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -447,5 +459,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 10,
     name: 'r4-todos-subagent-telemetry-plugins',
     sql: R4_SQL,
+  },
+  {
+    version: 11,
+    name: 'mcp-connector-auth',
+    sql: MCP_AUTH_SQL,
   },
 ];

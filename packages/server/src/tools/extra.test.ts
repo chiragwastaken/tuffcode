@@ -89,6 +89,15 @@ describe('extra tools', () => {
         callCalls.push({ id, tool, args });
         return options.callResult ?? 'called';
       },
+      oauthStart: async () => ({ flowId: 'flow', authorizeUrl: 'https://auth.example.com/authorize' }),
+      oauthStatus: async () => ({
+        connected: false,
+        needsAuth: false,
+        expiresAt: null,
+        authorizationServer: null,
+      }),
+      oauthDisconnect: async () => undefined,
+      dispose: () => undefined,
     };
 
     const brain: ExtraToolBrain = {

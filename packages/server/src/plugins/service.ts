@@ -140,7 +140,10 @@ export function createPluginsService(deps: PluginsServiceDeps): PluginsService {
                 pluginId,
                 enabled,
                 ...(server.headers['Authorization'] ?? server.headers['authorization']
-                  ? { secret: (server.headers['Authorization'] ?? server.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '') }
+                  ? {
+                      secret: (server.headers['Authorization'] ?? server.headers['authorization'] ?? '').replace(/^Bearer\s+/i, ''),
+                      secretPrefix: 'Bearer ',
+                    }
                   : {}),
               })
             : await deps.mcp.save({
@@ -388,7 +391,9 @@ export function createPluginsService(deps: PluginsServiceDeps): PluginsService {
           label,
           transport: 'http',
           url: entry.remoteUrl,
-          ...(secret === undefined || secret.length === 0 ? {} : { secret }),
+          ...(secret === undefined || secret.length === 0
+            ? {}
+            : { secret, secretPrefix: 'Bearer ' }),
         });
       }
       if (entry.npmPackage === null) throw badRequest('this connector has no endpoint or package to run');
