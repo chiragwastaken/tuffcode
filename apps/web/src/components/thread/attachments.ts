@@ -179,7 +179,12 @@ export async function encodeImageFile(file: File): Promise<ImageEncodeResult> {
   } catch {
     return { ok: false, reason: `${file.name} could not be decoded as an image.` };
   }
-  const dataUrl = await readDataUrl(prepared.blob);
+  let dataUrl: string;
+  try {
+    dataUrl = await readDataUrl(prepared.blob);
+  } catch {
+    return { ok: false, reason: `${file.name} could not be read after decoding.` };
+  }
   const data = stripDataUrl(dataUrl);
   if (data.length === 0) {
     return { ok: false, reason: `${file.name} produced no image data.` };

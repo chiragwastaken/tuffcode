@@ -1,5 +1,6 @@
 import type { ExecutionMode, PermissionMode, Thread } from '@tuffcode/contracts';
 import { newId, worktreesRoot } from '@tuffcode/shared';
+import { removeStoredAttachments } from './attachments/store.js';
 import type { Repos } from './db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from './errors.js';
 import { provisionWorktree, removeWorktree, samePath } from './git/worktree.js';
@@ -233,7 +234,14 @@ export async function deleteThread(
       });
     }
   }
+  // The thread's rows cascade on delete, so the ids have to be read first. Bytes that
+  // another message still references stay, because the store is content-addressed.
+  const candidates = repos.messages.attachmentIdsOfThread(thread.id);
   repos.threads.remove(id);
+  if (candidates.length > 0) {
+    const kept = new Set(repos.messages.attachmentIds());
+    await removeStoredAttachments(candidates.filter((id) => !kept.has(id)));
+  }
 }
 
 /** Messages kept verbatim when a thread is compacted; the rest fold into a digest. */

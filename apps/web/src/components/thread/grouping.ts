@@ -1,6 +1,6 @@
 import type { ApprovalChoice, Attachment, Message, ThreadEventRow } from '@tuffcode/contracts';
 
-export type LocalMessageStatus = 'pending' | 'sent' | 'failed';
+export type LocalMessageStatus = 'pending' | 'sent' | 'queued' | 'failed';
 
 export interface LocalUserMessage {
   id: string;
@@ -158,7 +158,7 @@ function persistedUserMessage(message: Message): LocalUserMessage {
     threadId: message.threadId,
     turnId: turnIdForMessage(message),
     text: message.content,
-    attachments: [],
+    attachments: message.attachments ?? [],
     status: 'sent',
     createdAt: message.createdAt,
   };

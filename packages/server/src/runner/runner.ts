@@ -4,12 +4,20 @@ import {
   type AdapterSession,
   type ApprovalChoice,
   type Attachment,
+  type Project,
   type Settings,
   type Thread,
   type ThreadStatus,
   type TurnContext,
 } from '@tuffcode/contracts';
+import { SUBAGENT_TOOL_PROFILES } from '@tuffcode/prompt';
 import { newId, resolveWithin, type Logger } from '@tuffcode/shared';
+import {
+  MAX_ATTACHMENT_BASE64_CHARS,
+  MAX_SEND_BASE64_CHARS,
+  persistAttachments,
+  readStoredAttachment,
+} from '../attachments/store.js';
 import { captureStandingRules } from '../brain/rules.js';
 import { threadLimits, threadVision, type ModelLimits } from '../context/limits.js';
 import { measureContext } from '../context/service.js';
@@ -20,8 +28,11 @@ import type { EventBus } from '../events.js';
 import { planPrompt } from '../prompt/service.js';
 import { deriveTitle, isPlaceholderTitle } from '../titles.js';
 import {
+  HANDOFF_TOKEN_BUDGET,
   buildHandoffDigest,
+  handoffChildren,
   isCouncilThread,
+  subagentChildFor,
   turnReasoningEffort,
   turnToolPolicy,
 } from './turn-options.js';
@@ -43,7 +54,12 @@ export interface ActiveRunInfo {
 }
 
 export interface Runner {
-  send(threadId: string, text: string, attachments?: Attachment[]): Promise<{ turnId: string }>;
+  /** `queued` marks a send that joined the backlog of a thread with a live turn. */
+  send(
+    threadId: string,
+    text: string,
+    attachments?: Attachment[],
+  ): Promise<{ turnId: string; queued?: boolean }>;
   interrupt(threadId: string): Promise<void>;
   approve(threadId: string, approvalId: string, decision: ApprovalChoice): Promise<void>;
   disposeThread(threadId: string): Promise<void>;
@@ -62,6 +78,17 @@ interface ActiveRun {
   turnId: string;
   controller: AbortController;
   adapterKey: string;
+}
+
+/**
+ * A message accepted while another turn owned the thread. The turn id and the user
+ * message row are allocated at send time, so delivery only has to start the run.
+ */
+interface QueuedTurn {
+  turnId: string;
+  text: string;
+  attachments: Attachment[];
+  createdAt: string;
 }
 
 /**
@@ -90,6 +117,9 @@ interface DeltaBuffer {
 
 /** How long a streamed delta may wait for company before it is written on its own. */
 const DELTA_FLUSH_MS = 50;
+
+/** A backlog deeper than this is a runaway client, not a user typing ahead. */
+const MAX_QUEUED_TURNS = 8;
 
 type SettleReason = 'complete' | 'interrupted' | 'error';
 
@@ -127,6 +157,8 @@ export interface TurnStartInput {
   turnId: string;
   text: string;
   injectedIds: string[];
+  /** Stored form of the user's attachments; omitted when the message carried none. */
+  attachments?: readonly Attachment[];
   createdAt: string;
 }
 
@@ -151,6 +183,7 @@ export function recordTurnStart(repos: Repos, input: TurnStartInput): void {
       threadId: input.threadId,
       role: 'user',
       content: input.text,
+      ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
       createdAt: input.createdAt,
     });
   });
@@ -158,39 +191,63 @@ export function recordTurnStart(repos: Repos, input: TurnStartInput): void {
 
 /**
  * Resolves each attachment into the shape an adapter reads. A path attachment must stay
- * inside the worktree; an inline attachment is already bytes and only needs its kind.
+ * inside the worktree; an inline attachment is already bytes and only needs its kind; a
+ * stored id is read back from the attachment store so a retry or replay still works.
  */
-function resolveAttachments(
+async function resolveAttachments(
   worktreePath: string,
   attachments: readonly Attachment[],
-): TurnContext['attachments'] {
-  return attachments.map((attachment) => {
+): Promise<TurnContext['attachments']> {
+  const resolved: TurnContext['attachments'] = [];
+  let inlineChars = 0;
+  const charge = (data: string, name: string): void => {
+    if (data.length > MAX_ATTACHMENT_BASE64_CHARS) {
+      throw badRequest(`attachment is too large: ${name}`);
+    }
+    inlineChars += data.length;
+    if (inlineChars > MAX_SEND_BASE64_CHARS) {
+      throw badRequest('the attachments in this message are too large together');
+    }
+  };
+  for (const attachment of attachments) {
     const kind = attachment.mimeType?.startsWith('image/') === true ? 'image' : 'file';
     const name = attachment.name.length > 0 ? { name: attachment.name } : {};
     if (attachment.data !== undefined) {
-      return {
+      charge(attachment.data, attachment.name);
+      resolved.push({
         ...name,
         data: attachment.data,
         ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
         kind,
-      };
+      });
+      continue;
+    }
+    if (attachment.id !== undefined) {
+      const stored = await readStoredAttachment(attachment.id, attachment.mimeType);
+      if (stored === null) {
+        throw badRequest(`stored attachment is missing: ${attachment.name}`);
+      }
+      charge(stored.data, attachment.name);
+      resolved.push({ ...name, data: stored.data, mimeType: stored.mimeType, kind });
+      continue;
     }
     if (attachment.path === undefined) {
       throw badRequest(`attachment has neither a path nor inline data: ${attachment.name}`);
     }
-    let resolved: string;
+    let target: string;
     try {
-      resolved = resolveWithin(worktreePath, attachment.path);
+      target = resolveWithin(worktreePath, attachment.path);
     } catch {
       throw badRequest(`attachment escapes the worktree: ${attachment.name}`);
     }
-    return {
+    resolved.push({
       ...name,
-      path: resolved,
+      path: target,
       ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
       kind,
-    };
-  });
+    });
+  }
+  return resolved;
 }
 
 /**
@@ -205,6 +262,8 @@ export function createRunner(deps: RunnerDeps): Runner {
   const { repos, bus, logger } = deps;
   const sessions = new Map<string, CachedSession>();
   const active = new Map<string, ActiveRun>();
+  /** Messages accepted while a turn was live, drained in order as each turn settles. */
+  const queued = new Map<string, QueuedTurn[]>();
   /** Streamed text plus settlement and cancellation state per in-flight turn. */
   const turnState = new Map<string, TurnState>();
   /** Streamed deltas waiting to be written as one row, keyed by turn. */
@@ -488,6 +547,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       } catch {
         logger.warn('context accounting failed after turn', { threadId: thread.id, turnId });
       }
+      // Only the run that owned the slot may advance the queue: an interrupt followed by
+      // a send leaves a newer turn in the map, and that turn owns the next delivery.
+      if (current?.turnId === turnId) deliverQueued(thread);
     }
   }
 
@@ -506,26 +568,26 @@ export function createRunner(deps: RunnerDeps): Runner {
     throw new Error('adapter creation failed');
   }
 
-  return {
-    async send(threadId, text, attachments = []) {
-      const thread = repos.threads.get(threadId);
-      if (thread === undefined) throw notFound('thread not found');
-      const project = repos.projects.get(thread.projectId);
-      if (project === undefined) throw notFound('project not found');
-      const provider = repos.providers.get(thread.providerId);
-      if (provider === undefined) throw notFound('provider not found');
-      if (!provider.enabled) throw new RpcError('provider-unavailable', 'provider is disabled');
-      if (active.has(thread.id)) throw conflict('thread already has an active turn');
-      if (text.trim().length === 0 && attachments.length === 0) {
-        throw badRequest('message text is empty');
-      }
-      const worktreePath = thread.worktreePath;
-      if (worktreePath === null) throw conflict('thread has no worktree');
-
-      const turnAttachments = resolveAttachments(worktreePath, attachments);
-      const now = new Date();
-      const createdAt = now.toISOString();
-      const turnId = newId('turn');
+  /**
+   * The one turn-start path: every guard has passed and the ids are already allocated.
+   * `send` calls it directly, and the queue calls it again with the ids it allocated at
+   * send time, so assembling, persisting, and launching a turn exist once.
+   */
+  async function startTurn(input: {
+    thread: Thread;
+    project: Project;
+    provider: ProviderRecord;
+    worktreePath: string;
+    text: string;
+    attachments: readonly Attachment[];
+    turnId: string;
+    createdAt: string;
+  }): Promise<{ turnId: string }> {
+      const { thread, project, provider, worktreePath, text, attachments, turnId, createdAt } =
+        input;
+      const turnAttachments = await resolveAttachments(worktreePath, attachments);
+      const storedAttachments = await persistAttachments(turnAttachments);
+      const now = new Date(createdAt);
       const settings = deps.settings();
       const limits = threadLimits(repos, thread, settings);
       const { assembly, brain } = planPrompt(repos, {
@@ -548,6 +610,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         turnId,
         text,
         injectedIds: brain.injectedIds,
+        ...(storedAttachments.length === 0 ? {} : { attachments: storedAttachments }),
         createdAt,
       });
       // The first message names a thread that still carries its placeholder title; a
@@ -643,9 +706,18 @@ export function createRunner(deps: RunnerDeps): Runner {
       const handoff = freshSession
         ? buildHandoffDigest(
             repos.messages.list(thread.id).filter((message) => message.id !== excludeMessageId),
+            HANDOFF_TOKEN_BUDGET,
+            handoffChildren(repos, thread.id),
           )
         : null;
-      const policy = turnToolPolicy({ settings, council: isCouncilThread(repos, thread) });
+      const subagentChild = subagentChildFor(repos, thread.id);
+      const policy = turnToolPolicy({
+        settings,
+        council: isCouncilThread(repos, thread),
+        ...(subagentChild === undefined
+          ? {}
+          : { profile: SUBAGENT_TOOL_PROFILES[subagentChild.type] }),
+      });
       const effort = turnReasoningEffort(thread, provider.config);
       const ctx: TurnContext = {
         turnId,
@@ -653,6 +725,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         cwd: worktreePath,
         systemPrompt:
           handoff === null ? assembly.systemPrompt : `${assembly.systemPrompt}\n\n${handoff}`,
+        systemPromptStatic: assembly.staticPrefix,
         permissionMode: thread.permissionMode,
         model: thread.modelId,
         brainSlice: '',
@@ -661,6 +734,7 @@ export function createRunner(deps: RunnerDeps): Runner {
         signal: controller.signal,
         ...(policy.toolAllowlist === undefined ? {} : { toolAllowlist: policy.toolAllowlist }),
         toolOptions: policy.toolOptions,
+        ...(policy.profile === undefined ? {} : { toolProfile: policy.profile }),
         ...(effort === undefined ? {} : { reasoningEffort: effort }),
         maxOutputTokens: limits.maxOutputTokens,
       };
@@ -680,11 +754,141 @@ export function createRunner(deps: RunnerDeps): Runner {
         limits,
       );
       return { turnId };
+  }
+
+  /**
+   * Starts the next message that arrived while this thread had a live turn. Only the run
+   * that owned the slot calls this, and only after it cleared that slot.
+   */
+  function deliverQueued(thread: Thread): void {
+    if (active.has(thread.id)) return;
+    const backlog = queued.get(thread.id);
+    const next = backlog?.shift();
+    if (next === undefined) {
+      queued.delete(thread.id);
+      return;
+    }
+    if (backlog !== undefined && backlog.length === 0) queued.delete(thread.id);
+    const project = repos.projects.get(thread.projectId);
+    const provider = repos.providers.get(thread.providerId);
+    const worktreePath = thread.worktreePath;
+    if (project === undefined || provider === undefined || worktreePath === null) {
+      failQueued(thread, next, 'the thread can no longer start a turn');
+      return;
+    }
+    void startTurn({
+      thread,
+      project,
+      provider,
+      worktreePath,
+      text: next.text,
+      attachments: next.attachments,
+      turnId: next.turnId,
+      createdAt: next.createdAt,
+    }).catch((error: unknown) => {
+      logger.warn('queued message could not start', {
+        threadId: thread.id,
+        turnId: next.turnId,
+        reason: errorMessage(error),
+      });
+      const turn = repos.turns.get(next.turnId);
+      if (turn === undefined || turn.finishedAt === null) {
+        failQueued(thread, next, errorMessage(error));
+      }
+      // One failed delivery must not strand the rest of the backlog; the queue is
+      // bounded, so this recursion ends.
+      deliverQueued(repos.threads.get(thread.id) ?? thread);
+    });
+  }
+
+  /**
+   * Drops a thread's backlog and the user rows written for it at send time. A queued
+   * message the user cancelled must not stay in the transcript as an unanswered prompt.
+   */
+  function dropQueue(threadId: string): void {
+    const entries = queued.get(threadId);
+    if (entries === undefined) return;
+    queued.delete(threadId);
+    repos.messages.removeMany(entries.map((entry) => userMessageId(entry.turnId)));
+  }
+
+  /**
+   * Fails a queued message whose turn never started. Its user row is already written, so
+   * the turn row is created first: the thread must not read as running without one.
+   */
+  function failQueued(thread: Thread, entry: QueuedTurn, reason: string): void {
+    recordTurnStart(repos, {
+      threadId: thread.id,
+      turnId: entry.turnId,
+      text: entry.text,
+      injectedIds: [],
+      createdAt: entry.createdAt,
+    });
+    appendEvent(thread.id, {
+      type: 'error',
+      message: `queued message could not start: ${reason}`,
+      retryable: false,
+    });
+    settleTurn(thread, entry.turnId, 'error', undefined);
+  }
+
+  return {
+    async send(threadId, text, attachments = []) {
+      const thread = repos.threads.get(threadId);
+      if (thread === undefined) throw notFound('thread not found');
+      const project = repos.projects.get(thread.projectId);
+      if (project === undefined) throw notFound('project not found');
+      const provider = repos.providers.get(thread.providerId);
+      if (provider === undefined) throw notFound('provider not found');
+      if (!provider.enabled) throw new RpcError('provider-unavailable', 'provider is disabled');
+      if (text.trim().length === 0 && attachments.length === 0) {
+        throw badRequest('message text is empty');
+      }
+      const worktreePath = thread.worktreePath;
+      if (worktreePath === null) throw conflict('thread has no worktree');
+
+      if (active.has(thread.id)) {
+        // The live turn owns the adapter stream, so this message waits its turn. Its row
+        // is written now so it cannot be lost, and the queue starts it on settle.
+        const backlog = queued.get(thread.id) ?? [];
+        if (backlog.length >= MAX_QUEUED_TURNS) {
+          throw conflict(`thread already has ${MAX_QUEUED_TURNS} queued messages`);
+        }
+        const turnId = newId('turn');
+        const createdAt = nowIso();
+        const stored = await persistAttachments(
+          await resolveAttachments(worktreePath, attachments),
+        );
+        repos.messages.addIfAbsent({
+          id: userMessageId(turnId),
+          threadId: thread.id,
+          role: 'user',
+          content: text,
+          ...(stored.length === 0 ? {} : { attachments: stored }),
+          createdAt,
+        });
+        backlog.push({ turnId, text, attachments, createdAt });
+        queued.set(thread.id, backlog);
+        return { turnId, queued: true };
+      }
+
+      return startTurn({
+        thread,
+        project,
+        provider,
+        worktreePath,
+        text,
+        attachments,
+        turnId: newId('turn'),
+        createdAt: nowIso(),
+      });
     },
 
     async interrupt(threadId) {
       const thread = repos.threads.get(threadId);
       if (thread === undefined) throw notFound('thread not found');
+      // A user who stops a turn does not want the backlog to fire next.
+      dropQueue(threadId);
       const run = active.get(threadId);
       if (run === undefined) {
         if (thread.status === 'running' || thread.status === 'needs-approval') {
@@ -736,6 +940,8 @@ export function createRunner(deps: RunnerDeps): Runner {
 
     async disposeThread(threadId) {
       denyPending(threadId);
+      // A disposed thread (clear, compact, delete, shutdown) must not keep a backlog.
+      dropQueue(threadId);
       const run = active.get(threadId);
       if (run !== undefined) {
         await run.session.interrupt().catch(() => undefined);
@@ -752,7 +958,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     },
 
     async disposeAll() {
-      const ids = new Set([...active.keys(), ...sessions.keys()]);
+      const ids = new Set([...active.keys(), ...sessions.keys(), ...queued.keys()]);
       for (const id of ids) {
         await this.disposeThread(id);
       }
