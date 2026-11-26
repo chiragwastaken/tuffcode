@@ -1,5 +1,6 @@
 import { ClientRequestSchema, methods, type ThreadEventRow } from '@tuffcode/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createAppStore } from '../store/app-store';
 import { createRpcClient, reconnectDelay, type EventSink, type RpcSocket } from './client';
 
 class FakeSocket implements RpcSocket {
@@ -94,6 +95,23 @@ function replayRow(seq: number): ThreadEventRow {
     seq,
     type: 'text.delta',
     payload: { type: 'text.delta', turnId: `turn-${Math.ceil(seq / 200)}`, text: `chunk ${seq}` },
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function structuralRow(seq: number): ThreadEventRow {
+  return {
+    id: seq + 1,
+    threadId: 'thread-1',
+    seq,
+    type: 'tool.started',
+    payload: {
+      type: 'tool.started',
+      turnId: `turn-${seq}`,
+      toolCallId: `call_${seq}`,
+      name: 'bash',
+      input: {},
+    },
     createdAt: '2026-01-01T00:00:00.000Z',
   };
 }
@@ -259,6 +277,47 @@ describe('rpc client', () => {
     await expect(pending).resolves.toEqual({ hasMore: false });
     expect(socket.sent).toHaveLength(1);
     expect(appended).toHaveLength(0);
+    client.close();
+  });
+
+  it('replays 6000 structural events across 30 pages and keeps every row', async () => {
+    const store = createAppStore();
+    const client = createRpcClient({
+      url: 'ws://127.0.0.1:9999/ws',
+      token: 'test-token',
+      socketFactory: (url, protocols) => new FakeSocket(url, protocols),
+      requestTimeoutMs: 1000,
+      logger: { warn: vi.fn() },
+      store,
+    });
+    const socket = lastSocket();
+    socket.open();
+
+    const pages = 30;
+    const pageSize = 200;
+    const pending = client.replay('thread-1', 0);
+    for (let page = 0; page < pages; page += 1) {
+      const start = page * pageSize + 1;
+      const events = Array.from({ length: pageSize }, (_, offset) => structuralRow(start + offset));
+      await respondToFrame(socket, page, { events, hasMore: page < pages - 1 });
+    }
+
+    await expect(pending).resolves.toEqual({ hasMore: false });
+    const rows = store.getState().events['thread-1'] ?? [];
+    expect(rows).toHaveLength(pages * pageSize);
+    expect(rows[0]?.seq).toBe(1);
+    expect(rows.at(-1)?.seq).toBe(pages * pageSize);
+    // Structural rows are exempt from the 5000-row cap, so all 6000 survive:
+    // this proves replay drained every page, not that trimming kept the tail.
+    expect(rows.every((row) => row.type === 'tool.started')).toBe(true);
+
+    const requests = socket.sent.map((_, index) =>
+      ClientRequestSchema.parse(sentFrame(socket, index)),
+    );
+    const cursors = requests.map(
+      (request) => methods['threads.events'].params.parse(request.params).sinceSeq,
+    );
+    expect(cursors).toEqual(Array.from({ length: pages }, (_, page) => page * pageSize));
     client.close();
   });
 });
