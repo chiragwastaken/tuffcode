@@ -5,6 +5,7 @@ import {
   GoalStateSchema,
   IdSchema,
   InstalledPluginSchema,
+  IsoDateTimeSchema,
   ProviderViewSchema,
   SeqSchema,
   SubagentMessageSchema,
@@ -114,6 +115,8 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('thread.event'),
     threadId: IdSchema,
     seq: SeqSchema,
+    // The persisted row's timestamp, so a live frame and the replayed row agree.
+    createdAt: IsoDateTimeSchema,
     payload: AdapterEventSchema,
   }),
   serverEvent('approval.requested', ApprovalSchema),

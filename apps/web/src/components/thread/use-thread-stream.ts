@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import type { ConnectionStatus } from '../../types';
 import { persistedTurnIds } from './grouping';
 import { pruneResolvedLocalUserMessages, setApprovalDecision } from './local-messages';
 import { createStreamBatcher } from './stream-batcher';
@@ -17,7 +18,106 @@ function toRow(event: ThreadEventFrame): ThreadEventRow {
     seq: event.seq,
     type: event.payload.type,
     payload: event.payload,
-    createdAt: new Date().toISOString(),
+    // The server stamps the row once, so a live frame and its replayed row agree.
+    createdAt: event.createdAt,
+  };
+}
+
+/** The slice of the RPC client the replay controller reads. */
+export interface ConnectionSource {
+  getStatus(): ConnectionStatus;
+  onStatus(callback: (status: ConnectionStatus) => void): () => void;
+}
+
+export interface ThreadReplayOptions {
+  connection: ConnectionSource;
+  /** Drains every `threads.events` page from a cursor into the store. */
+  replay: (sinceSeq: number) => Promise<{ hasMore: boolean }>;
+  /** The newest stored seq, read at call time so a reconnect drains from there. */
+  lastSeq: () => number;
+  /** Releases live frames buffered while the first replay was in flight. */
+  onInitialReplay: () => void;
+  onInitialError: (error: unknown) => void;
+  logger?: Pick<Console, 'warn'>;
+}
+
+export interface ThreadReplayController {
+  /** Starts the first replay once; later calls are ignored. */
+  start(sinceSeq: number): void;
+  dispose(): void;
+}
+
+/**
+ * Runs the first replay and every reconnect replay one at a time. A socket that
+ * reopens after a drop drains whatever the store missed while offline, so a
+ * `turn.finished` broadcast during the gap is not lost and a spinner cannot hang.
+ */
+export function createThreadReplayController({
+  connection,
+  replay,
+  lastSeq,
+  onInitialReplay,
+  onInitialError,
+  logger = console,
+}: ThreadReplayOptions): ThreadReplayController {
+  let started = false;
+  let settled = false;
+  let running = false;
+  let queued = false;
+  let disposed = false;
+  let previousStatus = connection.getStatus();
+
+  async function run(cursor: number, initial: boolean): Promise<void> {
+    running = true;
+    try {
+      await replay(cursor);
+      if (disposed) return;
+      if (initial) {
+        settled = true;
+        onInitialReplay();
+      }
+    } catch (error) {
+      if (disposed) return;
+      if (initial) {
+        settled = true;
+        onInitialReplay();
+        onInitialError(error);
+      } else {
+        // A reconnect replay is best effort: the next open retries from the store.
+        logger.warn('[thread] Could not replay events after a reconnect.', error);
+      }
+    } finally {
+      running = false;
+      if (queued && !disposed) {
+        queued = false;
+        void run(lastSeq(), false);
+      }
+    }
+  }
+
+  const unsubscribe = connection.onStatus((status) => {
+    const wasOpen = previousStatus === 'open';
+    previousStatus = status;
+    if (disposed || status !== 'open' || wasOpen) return;
+    // The first replay owns the drain until it settles; live frames stay buffered.
+    if (!settled) return;
+    if (running) {
+      queued = true;
+      return;
+    }
+    void run(lastSeq(), false);
+  });
+
+  return {
+    start(sinceSeq) {
+      if (started || disposed) return;
+      started = true;
+      void run(sinceSeq, true);
+    },
+    dispose() {
+      disposed = true;
+      unsubscribe();
+    },
   };
 }
 
@@ -94,19 +194,20 @@ export function useThreadStream(threadId: string): void {
       }
     });
 
-    void rpc.replay(threadId, sinceSeq).then(
-      () => {
-        if (!disposed) release();
-      },
-      (error: unknown) => {
-        if (disposed) return;
-        release();
+    const replayController = createThreadReplayController({
+      connection: rpc,
+      replay: (cursor) => rpc.replay(threadId, cursor),
+      lastSeq: () => useAppStore.getState().events[threadId]?.at(-1)?.seq ?? 0,
+      onInitialReplay: release,
+      onInitialError: (error) => {
         toast.error(error instanceof Error ? error.message : 'Could not load thread history.');
       },
-    );
+    });
+    replayController.start(sinceSeq);
 
     return () => {
       disposed = true;
+      replayController.dispose();
       unsubscribe();
       batcher.dispose();
     };

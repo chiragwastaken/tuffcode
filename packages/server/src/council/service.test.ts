@@ -252,6 +252,7 @@ function approvalRunner(bus: EventBus, titles: Map<string, string>): Runner {
           type: 'thread.event',
           threadId,
           seq: 1,
+          createdAt: new Date().toISOString(),
           payload: { type: 'text.delta', turnId, text },
         });
         bus.emit({
@@ -259,6 +260,7 @@ function approvalRunner(bus: EventBus, titles: Map<string, string>): Runner {
           type: 'thread.event',
           threadId,
           seq: 2,
+          createdAt: new Date().toISOString(),
           payload: { type: 'turn.finished', turnId, reason: 'complete' },
         });
       });

@@ -1281,6 +1281,7 @@ describe('server events', () => {
       type: 'thread.event',
       threadId: 't1',
       seq: 7,
+      createdAt: '2026-01-01T00:00:00.000Z',
       payload: { type: 'text.delta', turnId: 'turn-1', text: 'hello' },
     };
     const parsed = ServerEventSchema.parse(frame);
@@ -1302,6 +1303,7 @@ describe('server events', () => {
         type: 'thread.event',
         threadId: 't1',
         seq: 8,
+        createdAt: '2026-01-01T00:00:00.000Z',
         payload: { type: 'turn.started', turnId: 'turn-2' },
       },
       { kind: 'event', type: 'approval.requested', payload: approval },

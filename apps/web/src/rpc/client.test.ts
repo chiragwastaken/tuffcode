@@ -1,4 +1,4 @@
-import type { ThreadEventRow } from '@tuffcode/contracts';
+import { ClientRequestSchema, methods, type ThreadEventRow } from '@tuffcode/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRpcClient, reconnectDelay, type EventSink, type RpcSocket } from './client';
 
@@ -63,6 +63,53 @@ function sentFrame(socket: FakeSocket, index = 0): Record<string, unknown> {
   const frame = socket.sent[index];
   if (!frame) throw new Error(`Expected sent frame ${index}.`);
   return JSON.parse(frame) as Record<string, unknown>;
+}
+
+function sinkClient(appended: ThreadEventRow[]) {
+  return createRpcClient({
+    url: 'ws://127.0.0.1:9999/ws',
+    token: 'test-token',
+    socketFactory: (url, protocols) => new FakeSocket(url, protocols),
+    requestTimeoutMs: 1000,
+    logger: { warn: vi.fn() },
+    store: {
+      getState: () => ({
+        appendEvent: (_threadId: string, event: ThreadEventRow) => appended.push(event),
+        subagentStarted: () => undefined,
+        subagentEvent: () => undefined,
+        subagentFinished: () => undefined,
+        subagentTelemetry: () => undefined,
+        subagentMessage: () => undefined,
+        setTodos: () => undefined,
+        setPlugins: () => undefined,
+      }),
+    },
+  });
+}
+
+function replayRow(seq: number): ThreadEventRow {
+  return {
+    id: seq + 1,
+    threadId: 'thread-1',
+    seq,
+    type: 'text.delta',
+    payload: { type: 'text.delta', turnId: `turn-${Math.ceil(seq / 200)}`, text: `chunk ${seq}` },
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+/** Waits for the client to send frame `index`, then answers it. */
+async function respondToFrame(
+  socket: FakeSocket,
+  index: number,
+  result: unknown,
+): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 20 && socket.sent.length <= index; attempt += 1) {
+    await Promise.resolve();
+  }
+  const frame = sentFrame(socket, index);
+  socket.message({ id: frame.id, ok: true, result });
+  return frame;
 }
 
 afterEach(() => {
@@ -143,25 +190,7 @@ describe('rpc client', () => {
 
   it('replays thread events into the store', async () => {
     const appended: ThreadEventRow[] = [];
-    const client = createRpcClient({
-      url: 'ws://127.0.0.1:9999/ws',
-      token: 'test-token',
-      socketFactory: (url, protocols) => new FakeSocket(url, protocols),
-      requestTimeoutMs: 1000,
-      logger: { warn: vi.fn() },
-      store: {
-        getState: () => ({
-          appendEvent: (_threadId, event) => appended.push(event),
-          subagentStarted: () => undefined,
-          subagentEvent: () => undefined,
-          subagentFinished: () => undefined,
-          subagentTelemetry: () => undefined,
-          subagentMessage: () => undefined,
-          setTodos: () => undefined,
-          setPlugins: () => undefined,
-        }),
-      },
-    });
+    const client = sinkClient(appended);
     const socket = lastSocket();
     socket.open();
 
@@ -184,6 +213,52 @@ describe('rpc client', () => {
 
     await expect(pending).resolves.toEqual({ hasMore: false });
     expect(appended).toEqual([event]);
+    client.close();
+  });
+
+  it('drains three replay pages and advances the cursor to each last row', async () => {
+    const appended: ThreadEventRow[] = [];
+    const client = sinkClient(appended);
+    const socket = lastSocket();
+    socket.open();
+
+    const pageSizes = [200, 200, 50];
+    let next = 1;
+    const pending = client.replay('thread-1', 0);
+    for (const [index, size] of pageSizes.entries()) {
+      const events = Array.from({ length: size }, (_, offset) => replayRow(next + offset));
+      next += size;
+      await respondToFrame(socket, index, {
+        events,
+        hasMore: index < pageSizes.length - 1,
+      });
+    }
+
+    await expect(pending).resolves.toEqual({ hasMore: false });
+    expect(appended).toHaveLength(450);
+    expect(appended.at(-1)?.seq).toBe(450);
+    const requests = socket.sent.map((_, index) =>
+      ClientRequestSchema.parse(sentFrame(socket, index)),
+    );
+    const cursors = requests.map(
+      (request) => methods['threads.events'].params.parse(request.params).sinceSeq,
+    );
+    expect(cursors).toEqual([0, 200, 400]);
+    client.close();
+  });
+
+  it('stops a replay when a page returns no events even if the server reports more', async () => {
+    const appended: ThreadEventRow[] = [];
+    const client = sinkClient(appended);
+    const socket = lastSocket();
+    socket.open();
+
+    const pending = client.replay('thread-1', 5);
+    await respondToFrame(socket, 0, { events: [], hasMore: true });
+
+    await expect(pending).resolves.toEqual({ hasMore: false });
+    expect(socket.sent).toHaveLength(1);
+    expect(appended).toHaveLength(0);
     client.close();
   });
 });
