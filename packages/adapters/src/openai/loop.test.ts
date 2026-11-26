@@ -251,6 +251,34 @@ describe('runTurn', () => {
     });
   });
 
+  it('runs a read-only command in read-only mode and refuses a write', async () => {
+    const client = new FakeClient([
+      streamOf(
+        multiToolCallPayload([
+          { id: 'call_ls', name: 'bash', args: { command: 'ls' } },
+          { id: 'call_commit', name: 'bash', args: { command: 'git commit -m x' } },
+        ]),
+      ),
+      streamOf([{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }]),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ permissionMode: 'read-only' }),
+        client,
+        messages: [{ role: 'user', content: 'map the repo' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+    const finished = events.filter((event) => event.type === 'tool.finished');
+    expect(finished).toHaveLength(2);
+    expect(finished[0]).toMatchObject({ toolCallId: 'call_ls', isError: false });
+    expect(finished[1]).toMatchObject({ toolCallId: 'call_commit', isError: true });
+    expect(finished[1]?.output).toContain('not allowed in read-only mode');
+  });
+
   it('serializes the step when one call needs approval', async () => {
     const order: string[] = [];
     let inFlight = 0;
