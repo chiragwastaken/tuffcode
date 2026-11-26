@@ -2,6 +2,7 @@ import {
   AdapterUnavailableError,
   type AdapterLogger,
   type ProviderConfig,
+  type ToolProfile,
 } from '@tuffcode/contracts';
 import type { HarnessToolSchema, ToolListOptions } from '../tool-policy.js';
 import { allowedToolSchemas } from '../tool-policy.js';
@@ -70,6 +71,8 @@ export interface AnthropicRequestBody {
   toolAllowlist?: string[];
   /** Server tools offered this turn; unset offers none. */
   toolOptions?: ToolListOptions;
+  /** A subagent child's profile; unset offers the full harness list. */
+  toolProfile?: ToolProfile;
   /** Reasoning level mapped to a thinking budget; `none` or unset leaves thinking off. */
   reasoningEffort?: string;
 }
@@ -116,6 +119,8 @@ export const DEFAULT_MAX_TOKENS = 8192;
 const MAX_ERROR_BYTES = 4096;
 const MAX_RETRY_DELAY = 10000;
 const DEFAULT_RETRY_DELAY = 500;
+/** One request plus two retries, with the same backoff the OpenAI client uses. */
+const MAX_ATTEMPTS = 3;
 
 export class AnthropicRequestError extends Error {
   readonly status: number;
@@ -177,8 +182,9 @@ export function readAnthropicConfig(provider: ProviderConfig): AnthropicClientCo
 export function toAnthropicTools(
   allowlist?: readonly string[],
   options: ToolListOptions = {},
+  profile?: ToolProfile,
 ): unknown[] {
-  return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
+  return allowedToolSchemas(allowlist, options, profile).map((schema: HarnessToolSchema) => ({
     name: schema.name,
     description: schema.description,
     input_schema: schema.parameters,
@@ -198,7 +204,11 @@ function buildBody(
   const system = [request.system?.trim() ?? '', inlineSystem]
     .filter((part) => part.length > 0)
     .join('\n\n');
-  const tools = toAnthropicTools(request.toolAllowlist, request.toolOptions ?? {});
+  const tools = toAnthropicTools(
+    request.toolAllowlist,
+    request.toolOptions ?? {},
+    request.toolProfile,
+  );
   const budget = thinkingBudget(request.reasoningEffort);
   // The API needs max_tokens above the thinking budget and rejects a custom temperature
   // while thinking is on, so both are adjusted only when a budget applies.
@@ -239,7 +249,7 @@ async function mapResponseError(response: Response): Promise<AnthropicRequestErr
   return new AnthropicRequestError('request failed with status ' + status + detail, status, false);
 }
 
-function retryDelay(response: Response): number {
+function retryDelay(response: Response, attempt: number): number {
   const header = response.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
@@ -247,7 +257,7 @@ function retryDelay(response: Response): number {
       return Math.min(seconds * 1000, MAX_RETRY_DELAY);
     }
   }
-  return DEFAULT_RETRY_DELAY;
+  return Math.min(DEFAULT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RETRY_DELAY);
 }
 
 export class AnthropicClient implements MessagesStreamer {
@@ -287,9 +297,9 @@ export class AnthropicClient implements MessagesStreamer {
         status: response.status,
         retryable: error.retryable,
       });
-      if (!error.retryable || attempt >= 1) throw error;
+      if (!error.retryable || attempt >= MAX_ATTEMPTS - 1) throw error;
       attempt += 1;
-      await this.sleep(retryDelay(response));
+      await this.sleep(retryDelay(response, attempt));
     }
   }
 

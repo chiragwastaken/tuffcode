@@ -2,6 +2,7 @@ import {
   AdapterUnavailableError,
   type AdapterLogger,
   type ProviderConfig,
+  type ToolProfile,
 } from '@tuffcode/contracts';
 import type { HarnessToolSchema, ToolListOptions } from '../tool-policy.js';
 import { allowedToolSchemas } from '../tool-policy.js';
@@ -35,6 +36,8 @@ export interface ChatRequestBody {
   toolAllowlist?: string[];
   /** Server tools offered this turn; unset offers none. */
   toolOptions?: ToolListOptions;
+  /** A subagent child's profile; unset offers the full harness list. */
+  toolProfile?: ToolProfile;
   /** Reasoning level; `none` asks the provider not to think. Unset sends nothing. */
   reasoningEffort?: string;
 }
@@ -99,6 +102,12 @@ export class OpenAIRequestError extends Error {
 const MAX_ERROR_BYTES = 4096;
 const MAX_RETRY_DELAY = 10000;
 const DEFAULT_RETRY_DELAY = 500;
+/**
+ * One request plus two retries. A shared provider key under concurrent load answers
+ * 429 or 502 for a few seconds; a single retry gives up inside that window and the
+ * whole turn fails. Backoff doubles per attempt, and Retry-After still wins.
+ */
+const MAX_ATTEMPTS = 3;
 
 export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
   const rawBase = provider.config.baseUrl;
@@ -146,8 +155,9 @@ export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
 export function toOpenAITools(
   allowlist?: readonly string[],
   options: ToolListOptions = {},
+  profile?: ToolProfile,
 ): unknown[] {
-  return allowedToolSchemas(allowlist, options).map((schema: HarnessToolSchema) => ({
+  return allowedToolSchemas(allowlist, options, profile).map((schema: HarnessToolSchema) => ({
     type: 'function',
     function: {
       name: schema.name,
@@ -162,7 +172,7 @@ function buildBody(
   request: ChatRequestBody,
   field: MaxTokensField,
 ): Record<string, unknown> {
-  const tools = toOpenAITools(request.toolAllowlist, request.toolOptions ?? {});
+  const tools = toOpenAITools(request.toolAllowlist, request.toolOptions ?? {}, request.toolProfile);
   const maxTokens = request.maxTokens ?? config.maxTokens;
   return {
     model: request.model,
@@ -201,7 +211,7 @@ function errorFor(status: number, excerpt: string): OpenAIRequestError {
   return new OpenAIRequestError('request failed with status ' + status + detail, status, false);
 }
 
-function retryDelay(response: Response): number {
+function retryDelay(response: Response, attempt: number): number {
   const header = response.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
@@ -209,7 +219,7 @@ function retryDelay(response: Response): number {
       return Math.min(seconds * 1000, MAX_RETRY_DELAY);
     }
   }
-  return DEFAULT_RETRY_DELAY;
+  return Math.min(DEFAULT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RETRY_DELAY);
 }
 
 export class OpenAIClient implements ChatStreamer {
@@ -259,9 +269,9 @@ export class OpenAIClient implements ChatStreamer {
         status: response.status,
         retryable: error.retryable,
       });
-      if (!error.retryable || attempt >= 1) throw error;
+      if (!error.retryable || attempt >= MAX_ATTEMPTS - 1) throw error;
       attempt += 1;
-      await this.sleep(retryDelay(response));
+      await this.sleep(retryDelay(response, attempt));
     }
   }
 
