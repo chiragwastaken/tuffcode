@@ -9,6 +9,7 @@ import type {
 } from '@tuffcode/contracts';
 import { BASE_SYSTEM_PROMPT } from '@tuffcode/prompt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { storeAttachmentBytes } from '../attachments/store.js';
 import type { ProviderRecord } from '../db/repos/index.js';
 import { createEventBus, type EventBus } from '../events.js';
 import { planPrompt } from '../prompt/service.js';
@@ -822,6 +823,19 @@ describe('thread runner', () => {
     const f = setup();
     const { turnId } = await f.runner.send('thr_a', '', [
       { name: 'pasted.png', data: 'AAAA', mimeType: 'image/png' },
+    ]);
+    expect(turnId).toMatch(/^turn_/);
+    expect(f.adapter.sends[0]?.ctx.attachments).toEqual([
+      { name: 'pasted.png', data: 'AAAA', mimeType: 'image/png', kind: 'image' },
+    ]);
+    f.adapter.end();
+  });
+
+  it('reads a stored attachment id back for a retry or a replayed message', async () => {
+    const f = setup();
+    const id = await storeAttachmentBytes('AAAA', 'image/png');
+    const { turnId } = await f.runner.send('thr_a', 'try again', [
+      { name: 'pasted.png', id, mimeType: 'image/png' },
     ]);
     expect(turnId).toMatch(/^turn_/);
     expect(f.adapter.sends[0]?.ctx.attachments).toEqual([

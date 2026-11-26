@@ -230,7 +230,7 @@ function buildBody(
     : [
         { type: 'text', text: staticSystem, cache_control: { type: 'ephemeral' } },
         ...(system.length > staticSystem.length
-          ? [{ type: 'text', text: system.slice(staticSystem.length).trimStart() }]
+          ? [{ type: 'text', text: system.slice(staticSystem.length) }]
           : []),
       ];
   return {

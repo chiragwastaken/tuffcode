@@ -487,9 +487,16 @@ describe('custom instructions', () => {
     expect(buildCustomInstructions(text)).toBe(text);
   });
 
-  it('caps at 300 tokens and cuts on a sentence boundary', () => {
+  it('keeps a custom prompt at the full 16,000 character UI limit', () => {
+    const text = 'x'.repeat(16_000);
+    const kept = buildCustomInstructions(text);
+    expect(kept).toBe(text);
+    expect(kept?.length).toBe(16_000);
+  });
+
+  it('caps at the token budget and cuts on a sentence boundary', () => {
     const sentence = 'Always run the narrow test before claiming a change works. ';
-    const text = sentence.repeat(60);
+    const text = sentence.repeat(300);
     const capped = buildCustomInstructions(text);
     expect(capped).toBeDefined();
     expect(estimateTokens(capped ?? '')).toBeLessThanOrEqual(CUSTOM_INSTRUCTION_TOKEN_BUDGET);
@@ -498,7 +505,7 @@ describe('custom instructions', () => {
   });
 
   it('falls back to a word boundary when the cap lands inside one long sentence', () => {
-    const capped = buildCustomInstructions(`${'word '.repeat(2400)}end`);
+    const capped = buildCustomInstructions(`${'word '.repeat(4000)}end`);
     expect(estimateTokens(capped ?? '')).toBeLessThanOrEqual(CUSTOM_INSTRUCTION_TOKEN_BUDGET);
     expect(capped?.endsWith('word')).toBe(true);
   });
@@ -545,6 +552,29 @@ describe('assemblePrompt', () => {
     expect(system.indexOf('tests live in packages')).toBeLessThan(system.indexOf('<context>'));
     expect(system).not.toContain('run the tests');
     expect(assembly.total).toBe(assembly.sections.reduce((sum, entry) => sum + entry.tokens, 0));
+  });
+
+  it('keeps the cached prefix identical when the message changes rules and skills', () => {
+    const first = assemblePrompt({
+      projectRules: '- alpha rule',
+      skills: 'alpha skill body',
+      availableSkills: '- alpha: does alpha',
+      turnContext,
+      userMessage: 'first message',
+    });
+    const second = assemblePrompt({
+      projectRules: '- beta rule',
+      skills: 'beta skill body',
+      availableSkills: '- beta: does beta',
+      turnContext,
+      userMessage: 'second message',
+    });
+
+    expect(first.staticPrefix).toBe(second.staticPrefix);
+    expect(first.staticPrefix).not.toContain('alpha rule');
+    expect(first.staticPrefix).not.toContain('alpha skill');
+    expect(first.dynamicPrompt).toContain('alpha rule');
+    expect(second.dynamicPrompt).toContain('beta rule');
   });
 
   it('adds the plan mode rubric only on a plan turn', () => {

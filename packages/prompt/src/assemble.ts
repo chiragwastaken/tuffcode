@@ -126,14 +126,13 @@ export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
   sections.push(section('user-message', input.userMessage));
 
   const systemSections = sections.filter((entry) => entry.name !== 'user-message');
-  // Everything from the first per-turn block on is dynamic. Splitting only on
-  // `brain-always` would misclassify retrieved memory when the brain has no pinned
-  // rules, which is the common case and would defeat the cache breakpoint.
-  const splitAt = systemSections.findIndex(
-    (entry) =>
-      entry.name === 'brain-always' ||
-      entry.name === 'retrieved-memory' ||
-      entry.name === 'turn-context',
+  // Only base, plan mode, the profile and custom instructions are stable per thread.
+  // Project rules with globs, skill mentions, the available-skill list and everything
+  // from the brain on are message-dependent, so they must sit after the cache breakpoint.
+  const splitAt = systemSections.findIndex((entry) =>
+    ['project-rules', 'skills', 'available-skills', 'brain-always', 'retrieved-memory', 'turn-context'].includes(
+      entry.name,
+    ),
   );
   const staticSections = splitAt === -1 ? systemSections : systemSections.slice(0, splitAt);
   const dynamicSections = splitAt === -1 ? [] : systemSections.slice(splitAt);

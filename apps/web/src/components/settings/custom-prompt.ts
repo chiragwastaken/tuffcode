@@ -7,7 +7,7 @@
 import type { ReasoningEffort, SubagentModelChoice, SubagentModels } from '@tuffcode/contracts';
 
 export const CUSTOM_INSTRUCTIONS_CHAR_LIMIT = 16000;
-export const CUSTOM_INSTRUCTION_TOKEN_BUDGET = 2000;
+export const CUSTOM_INSTRUCTION_TOKEN_BUDGET = 4000;
 export const CHARS_PER_TOKEN = 4;
 
 /** Below the cap the textarea still shows a warning, so a cut never surprises. */

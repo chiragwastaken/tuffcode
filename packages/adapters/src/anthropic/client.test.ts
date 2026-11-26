@@ -145,8 +145,10 @@ describe('AnthropicClient', () => {
 
     expect(bodies[0]?.system).toEqual([
       { type: 'text', text: staticHead, cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: dynamic },
+      { type: 'text', text: `\n\n${dynamic}` },
     ]);
+    const blocks = bodies[0]?.system as { text: string }[];
+    expect(blocks.map((block) => block.text).join('')).toBe(`${staticHead}\n\n${dynamic}`);
     const tools = bodies[0]?.tools as { name: string; cache_control?: unknown }[];
     expect(tools.at(-1)?.cache_control).toEqual({ type: 'ephemeral' });
     expect(tools[0]?.cache_control).toBeUndefined();

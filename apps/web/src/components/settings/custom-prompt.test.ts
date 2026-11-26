@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, emptySubagentModels, type Settings } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  CUSTOM_INSTRUCTIONS_CHAR_LIMIT,
   CUSTOM_INSTRUCTION_TOKEN_BUDGET,
   INHERIT_MODEL_VALUE,
   PARENT_PROVIDER_VALUE,
@@ -178,6 +179,12 @@ describe('subagent model payload building', () => {
     expect(modelIdFromSelect(INHERIT_MODEL_VALUE)).toBeUndefined();
     expect(modelIdFromSelect(null)).toBeUndefined();
     expect(modelIdFromSelect('big')).toBe('big');
+  });
+});
+
+describe('custom instruction budget', () => {
+  it('accepts exactly the text the UI limit allows', () => {
+    expect(CUSTOM_INSTRUCTIONS_CHAR_LIMIT).toBe(CUSTOM_INSTRUCTION_TOKEN_BUDGET * 4);
   });
 });
 
