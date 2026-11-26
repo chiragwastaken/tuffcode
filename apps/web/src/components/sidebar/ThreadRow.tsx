@@ -11,6 +11,7 @@ import {
 import { THREAD_MENU, type ActionContext } from '../actions';
 import { useActionPorts } from '../menu/action-context';
 import { useContextMenuTrigger } from '../menu/Menu';
+import { THREAD_DRAG_MIME } from '../panes/pane-model';
 import { SUBAGENT_TYPE_ICON } from '../subagents/subagent-model';
 import { StatusChip } from '../thread/status-chip';
 import { elapsedMs, formatDuration } from '../thread/turn-blocks';
@@ -68,6 +69,13 @@ export function ThreadRow({
       onClick={() => onSelect(thread.id)}
       aria-current={selected ? 'page' : undefined}
       title={title}
+      draggable
+      onDragStart={(event) => {
+        // A row dropped on a tile's edge opens the thread as a side chat there.
+        event.dataTransfer.effectAllowed = 'copyMove';
+        event.dataTransfer.setData(THREAD_DRAG_MIME, thread.id);
+        event.dataTransfer.setData('text/plain', title);
+      }}
       {...menuProps}
       className={cn(
         'flex h-12 flex-col justify-center gap-1 rounded-md px-2 py-1',
