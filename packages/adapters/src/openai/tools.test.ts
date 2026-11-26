@@ -4,12 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type {
-  AdapterDeps,
-  AdapterLogger,
-  ExtraToolRunner,
-  TurnContext,
-} from '@tuffcode/contracts';
+import type { AdapterDeps, AdapterLogger, ExtraToolRunner, TurnContext } from '@tuffcode/contracts';
 import {
   classifyExtraTool,
   classifyTool,
@@ -98,13 +93,7 @@ describe('read and edit', () => {
 
   it('rejects paths outside the worktree root', async () => {
     const state = createToolSessionState();
-    const result = await executeTool(
-      'read',
-      { path: '../outside.txt' },
-      context(),
-      state,
-      deps,
-    );
+    const result = await executeTool('read', { path: '../outside.txt' }, context(), state, deps);
     expect(result.isError).toBe(true);
     expect(result.output).toBe('path escapes root: ../outside.txt');
   });
@@ -550,7 +539,7 @@ describe('grep through ripgrep', () => {
 describe('bash', () => {
   // These are integration tests against real child processes: the watchdog lives in
   // the parent but the output that resets it comes from another process, so fake
-  // timers cannot drive them. The windows are kept short (0.8s to 1.6s).
+  // timers cannot drive them. The windows are kept short (100ms to 1.6s).
   it('runs a command and captures output', async () => {
     const result = await executeTool(
       'bash',
@@ -670,6 +659,36 @@ describe('bash', () => {
     expect(result.output).toContain('timed out');
     expect(result.output).not.toContain('no output for');
     expect(elapsed).toBeLessThan(4000);
+  });
+
+  it('raises an idle window below the floor to 100ms and names the window it used', async () => {
+    await writeFile(join(root, 'quiet.mjs'), 'setTimeout(() => {}, 60000);' + LF);
+    const result = await executeTool(
+      'bash',
+      { command: 'node quiet.mjs', idle_timeout_ms: 50 },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain(
+      '[no output for 100ms; the command was stopped before finishing]',
+    );
+    expect(result.output).not.toContain('timed out');
+  });
+
+  it('keeps the hard timeout in charge when the idle window is longer', async () => {
+    const command = process.platform === 'win32' ? 'ping -n 6 127.0.0.1 >nul' : 'sleep 5';
+    const result = await executeTool(
+      'bash',
+      { command, timeout_ms: 1000, idle_timeout_ms: 600000 },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('timed out after 1000ms');
+    expect(result.output).not.toContain('no output for');
   });
 });
 
@@ -849,9 +868,9 @@ describe('classifyTool', () => {
     expect(classifyTool('bash', {}, 'read-only')).toBe('deny');
     expect(classifyTool('bash', { command: 42 }, 'read-only')).toBe('deny');
     expect(classifyTool('write', { path: 'a' }, 'read-only')).toBe('deny');
-    expect(
-      classifyTool('edit', { path: 'a', old_string: 'x', new_string: 'y' }, 'read-only'),
-    ).toBe('deny');
+    expect(classifyTool('edit', { path: 'a', old_string: 'x', new_string: 'y' }, 'read-only')).toBe(
+      'deny',
+    );
   });
 
   it('asks for writes in ask mode and allows them in accept-edits', () => {
@@ -884,12 +903,7 @@ describe('classifyExtraTool', () => {
   }
 
   it('allows a memory search in every mode', () => {
-    expect(decisions('memory', { action: 'search' })).toEqual([
-      'allow',
-      'allow',
-      'allow',
-      'allow',
-    ]);
+    expect(decisions('memory', { action: 'search' })).toEqual(['allow', 'allow', 'allow', 'allow']);
   });
 
   it('denies an MCP listing in read-only mode because it spawns the servers', () => {
@@ -897,18 +911,8 @@ describe('classifyExtraTool', () => {
   });
 
   it('classifies the write actions across the four modes', () => {
-    expect(decisions('memory', { action: 'add' })).toEqual([
-      'deny',
-      'approve',
-      'allow',
-      'allow',
-    ]);
-    expect(decisions('mcp', { action: 'call' })).toEqual([
-      'deny',
-      'approve',
-      'approve',
-      'allow',
-    ]);
+    expect(decisions('memory', { action: 'add' })).toEqual(['deny', 'approve', 'allow', 'allow']);
+    expect(decisions('mcp', { action: 'call' })).toEqual(['deny', 'approve', 'approve', 'allow']);
     expect(decisions('config', { action: 'provider.add' })).toEqual([
       'deny',
       'approve',
@@ -1039,13 +1043,7 @@ describe('extra tool execution', () => {
   });
 
   it('still rejects an unknown tool name', async () => {
-    const result = await executeTool(
-      'deploy',
-      {},
-      context(),
-      createToolSessionState(),
-      deps,
-    );
+    const result = await executeTool('deploy', {}, context(), createToolSessionState(), deps);
     expect(result).toEqual({ output: 'unknown tool: deploy', isError: true });
   });
 });

@@ -49,6 +49,14 @@ export const TOOL_SCHEMAS: readonly ToolSchema[] = [
           minimum: 1000,
           maximum: 600000,
         },
+        idle_timeout_ms: {
+          type: 'integer',
+          description:
+            'Milliseconds without output before the command is stopped. Default 60000; cannot exceed timeout_ms.',
+          minimum: 100,
+          maximum: 600000,
+          default: 60000,
+        },
         cwd: { type: 'string', description: 'Working directory, relative to the worktree root.' },
       },
       required: ['command'],
@@ -184,7 +192,8 @@ export const MCP_TOOL: ExtraToolSchema = {
     properties: {
       action: {
         type: 'string',
-        description: 'Action: list enabled servers and their tools, or call one tool on one server.',
+        description:
+          'Action: list enabled servers and their tools, or call one tool on one server.',
       },
       server: {
         type: 'string',
@@ -382,7 +391,8 @@ export const TODO_TOOL: ExtraToolSchema = {
       },
       phase: {
         type: 'string',
-        description: 'Phase name: targets a phase for done, drop, rm, or chooses one for append and init.',
+        description:
+          'Phase name: targets a phase for done, drop, rm, or chooses one for append and init.',
       },
     },
     required: ['op'],
