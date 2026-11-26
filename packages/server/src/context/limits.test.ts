@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, type Model } from '@tuffcode/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestContext, type TestContext } from '../test-support.js';
+import { discoverModels, mergeModels } from '../providers/models.js';
 import { modelLimits, threadVision, type ModelLimits, type ModelLimitsInput } from './limits.js';
 
 const ISO = '2026-01-01T00:00:00.000Z';
@@ -188,6 +189,26 @@ describe('threadVision', () => {
         isDefault: true,
       },
     ]);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
+  });
+
+  it('keeps the provider toggle in charge after a hint-free /models refresh', async () => {
+    seed(true);
+    const provider = ctx.repos.providers.get('prv_vision');
+    if (provider === undefined) throw new Error('the seeded provider is missing');
+    const discovered = await discoverModels(provider, {
+      secret: null,
+      fetchFn: async () =>
+        new Response(JSON.stringify({ data: [{ id: 'model-x', object: 'model' }] }), {
+          status: 200,
+        }),
+    });
+    // The endpoint published no modality hints, so discovery must leave the row unknown.
+    expect(discovered.models).toHaveLength(1);
+    expect(discovered.models[0]?.capabilities).toBeNull();
+
+    ctx.repos.providers.replaceModels('prv_vision', mergeModels([], discovered.models, new Set()));
 
     expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
   });

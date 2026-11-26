@@ -3,6 +3,7 @@ import { AdapterUnavailableError, type ProviderConfig } from '@tuffcode/contract
 import {
   OpenAIClient,
   OpenAIRequestError,
+  maxTokensField,
   readClientConfig,
   type ChatRequestBody,
 } from './client.js';
@@ -11,6 +12,12 @@ const request: ChatRequestBody = {
   model: 'test-model',
   messages: [{ role: 'user', content: 'hi' }],
 };
+
+/** The 400 OpenAI returns for `max_tokens` on a model that wants the newer field. */
+const TOKEN_FIELD_ERROR =
+  '{"error":{"message":"Unsupported parameter: \'max_tokens\' is not supported with this model. ' +
+  'Use \'max_completion_tokens\' instead.","type":"invalid_request_error","param":"max_tokens",' +
+  '"code":"unsupported_parameter"}}';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 
@@ -41,6 +48,39 @@ describe('readClientConfig', () => {
     );
     expect(config.baseUrl).toBe('http://localhost:1234/v1');
     expect(config.headers).toEqual({ authorization: 'Token x' });
+  });
+
+  it('carries an explicit maxTokensField and ignores an unknown one', () => {
+    expect(
+      readClientConfig(
+        provider({ baseUrl: 'http://x/v1', maxTokensField: 'max_completion_tokens' }),
+      ).maxTokensField,
+    ).toBe('max_completion_tokens');
+    expect(
+      readClientConfig(provider({ baseUrl: 'http://x/v1', maxTokensField: 'nonsense' }))
+        .maxTokensField,
+    ).toBeUndefined();
+  });
+});
+
+describe('maxTokensField', () => {
+  it('sends max_completion_tokens to newer OpenAI models', () => {
+    for (const model of ['gpt-6.1-sol', 'gpt-5.2', 'GPT-6-Turbo', 'o1', 'o3-mini', 'o4-mini']) {
+      expect(maxTokensField(model)).toBe('max_completion_tokens');
+    }
+  });
+
+  it('keeps max_tokens for every other compatible model', () => {
+    for (const model of ['mock-model', 'gpt-4o', 'claude-opus-4-5', 'qwen3-coder', '']) {
+      expect(maxTokensField(model)).toBe('max_tokens');
+    }
+  });
+
+  it('honours an explicit provider config value in either direction', () => {
+    expect(maxTokensField('mock-model', 'max_completion_tokens')).toBe('max_completion_tokens');
+    expect(maxTokensField('gpt-6.1-sol', 'max_tokens')).toBe('max_tokens');
+    expect(maxTokensField('mock-model', 'nonsense')).toBe('max_tokens');
+    expect(maxTokensField('gpt-6.1-sol', 5)).toBe('max_completion_tokens');
   });
 });
 
@@ -135,5 +175,146 @@ describe('OpenAIClient', () => {
       expect((error as OpenAIRequestError).retryable).toBe(false);
       expect((error as OpenAIRequestError).message).toContain('unauthorized');
     }
+  });
+
+  it('sends max_completion_tokens to a newer OpenAI model', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null, maxTokens: 64 },
+      {
+        fetchFn: async (_url, init) => {
+          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          return response(200);
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    await client.stream(
+      { ...request, model: 'gpt-6.1-sol', maxTokens: 512 },
+      new AbortController().signal,
+    );
+
+    expect(bodies[0]?.max_completion_tokens).toBe(512);
+    expect(bodies[0]?.max_tokens).toBeUndefined();
+  });
+
+  it('keeps max_tokens for a generic gateway model', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null, maxTokens: 64 },
+      {
+        fetchFn: async (_url, init) => {
+          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          return response(200);
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    await client.stream({ ...request, model: 'mock-model' }, new AbortController().signal);
+
+    expect(bodies[0]?.max_tokens).toBe(64);
+    expect(bodies[0]?.max_completion_tokens).toBeUndefined();
+  });
+
+  it('lets the provider config force max_completion_tokens', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const config = readClientConfig(
+      provider({ baseUrl: 'http://x/v1', maxTokens: 64, maxTokensField: 'max_completion_tokens' }),
+    );
+    const client = new OpenAIClient(config, {
+      fetchFn: async (_url, init) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return response(200);
+      },
+      sleep: async () => {},
+      logger,
+    });
+
+    await client.stream({ ...request, model: 'mock-model' }, new AbortController().signal);
+
+    expect(bodies[0]?.max_completion_tokens).toBe(64);
+    expect(bodies[0]?.max_tokens).toBeUndefined();
+  });
+
+  it('retries once with max_completion_tokens when a 400 names both fields', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null, maxTokens: 64 },
+      {
+        fetchFn: async (_url, init) => {
+          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          return bodies.length === 1 ? response(400, TOKEN_FIELD_ERROR) : response(200);
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    const stream = await client.stream(
+      { ...request, model: 'mock-model' },
+      new AbortController().signal,
+    );
+
+    expect(stream).toBeDefined();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.max_tokens).toBe(64);
+    expect(bodies[1]?.max_completion_tokens).toBe(64);
+    expect(bodies[1]?.max_tokens).toBeUndefined();
+  });
+
+  it('surfaces one readable error when the alternate field is rejected too', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: 'sk-secret-value' },
+      {
+        fetchFn: async (_url, init) => {
+          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          return response(400, TOKEN_FIELD_ERROR);
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    try {
+      await client.stream({ ...request, model: 'mock-model' }, new AbortController().signal);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAIRequestError);
+      const failure = error as OpenAIRequestError;
+      expect(failure.status).toBe(400);
+      expect(failure.retryable).toBe(false);
+      expect(failure.message).toContain('Unsupported parameter');
+      expect(failure.message).toContain('max_completion_tokens');
+      expect(failure.message).not.toContain('sk-secret-value');
+    }
+    expect(bodies).toHaveLength(2);
+  });
+
+  it('does not retry a 400 that is not about the output token field', async () => {
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          return response(400, '{"error":{"message":"model does not exist"}}');
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    try {
+      await client.stream({ ...request, model: 'mock-model' }, new AbortController().signal);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as OpenAIRequestError).message).toContain('model does not exist');
+    }
+    expect(calls).toBe(1);
   });
 });
