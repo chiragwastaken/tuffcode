@@ -64,10 +64,18 @@ interface ActiveRun {
   adapterKey: string;
 }
 
-interface TurnText {
+/**
+ * Per-turn state that outlives a single settle attempt. `settled` makes the settle path
+ * idempotent, and `cancelled` is the fence that keeps a stopped run from writing again.
+ */
+interface TurnState {
   text: string;
   persisted: boolean;
+  settled: boolean;
+  cancelled: boolean;
 }
+
+type SettleReason = 'complete' | 'interrupted' | 'error';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -77,14 +85,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function turnStatusFor(reason: 'complete' | 'interrupted' | 'error'): TurnStatus {
+function turnStatusFor(reason: SettleReason): TurnStatus {
   if (reason === 'complete') return 'complete';
   if (reason === 'interrupted') return 'interrupted';
   return 'failed';
 }
 
+/** Written alone when a turn is stopped before any text streamed. */
+const INTERRUPTED_LABEL = '[interrupted]';
+
 /** Appended to whatever streamed when the user interrupts, so the row is not read as final. */
-export const INTERRUPTED_MARKER = '\n\n[interrupted]';
+export const INTERRUPTED_MARKER = `\n\n${INTERRUPTED_LABEL}`;
 
 /** Message ids derive from the turn, so replaying a turn insert can never duplicate a row. */
 function userMessageId(turnId: string): string {
@@ -178,8 +189,8 @@ export function createRunner(deps: RunnerDeps): Runner {
   const { repos, bus, logger } = deps;
   const sessions = new Map<string, CachedSession>();
   const active = new Map<string, ActiveRun>();
-  /** Streamed assistant text per in-flight turn, plus whether it was already stored. */
-  const turnText = new Map<string, TurnText>();
+  /** Streamed text plus settlement and cancellation state per in-flight turn. */
+  const turnState = new Map<string, TurnState>();
 
   function emitThread(thread: Thread): void {
     bus.emit({ kind: 'event', type: 'thread.updated', threadId: thread.id, payload: thread });
@@ -245,38 +256,62 @@ export function createRunner(deps: RunnerDeps): Runner {
     }
   }
 
-  /** Stores the streamed assistant text once per turn; interrupted text keeps a marker. */
+  /**
+   * Stores the streamed assistant text once per turn. An interrupted turn always leaves
+   * a row, even when nothing streamed, so the timeline shows where the run stopped.
+   */
   function persistAssistant(
     threadId: string,
     turnId: string,
-    reason: 'complete' | 'interrupted' | 'error',
+    reason: SettleReason,
+    state: TurnState | undefined,
   ): void {
-    const state = turnText.get(turnId);
-    if (state === undefined || state.persisted || state.text.length === 0) return;
-    state.persisted = true;
+    const text = state?.text ?? '';
+    if (state !== undefined) {
+      if (state.persisted) return;
+      state.persisted = true;
+    }
+    if (text.length === 0 && reason !== 'interrupted') return;
+    const content =
+      reason === 'interrupted'
+        ? `${text}${text.length === 0 ? INTERRUPTED_LABEL : INTERRUPTED_MARKER}`
+        : text;
     repos.messages.addIfAbsent({
       id: assistantMessageId(turnId),
       threadId,
       role: 'assistant',
-      content: reason === 'interrupted' ? `${state.text}${INTERRUPTED_MARKER}` : state.text,
+      content,
       createdAt: nowIso(),
     });
   }
 
-  function finishTurn(
+  /**
+   * The single settle path for a turn. The adapter's own turn.finished, an adapter
+   * failure, a failed adapter creation, an interrupt, and orphan recovery all land
+   * here, so a turn gets exactly one turn row write, one assistant row, one thread
+   * status write, and one turn.finished event. Later calls for the same turn are
+   * no-ops, which is what lets a late adapter error lose to an interrupt.
+   */
+  function settleTurn(
     thread: Thread,
     turnId: string,
-    reason: 'complete' | 'interrupted' | 'error',
+    reason: SettleReason,
+    state: TurnState | undefined,
   ): void {
-    const at = nowIso();
-    // An interrupt that landed first wins: a late adapter error must not flip the
-    // turn (or its marker) back to a failed run.
-    const current = repos.turns.get(turnId);
-    const effective = current?.status === 'interrupted' ? 'interrupted' : reason;
-    repos.turns.finish(turnId, turnStatusFor(effective), at);
-    persistAssistant(thread.id, turnId, effective);
+    if (state !== undefined) {
+      if (state.settled) return;
+      state.settled = true;
+    }
+    const existing = repos.turns.get(turnId);
+    // Durable fence: a row that already carries finished_at was settled by an earlier
+    // call, even when the in-memory state is gone (recovery, a cancelled run that
+    // outlived its state).
+    if (existing !== undefined && existing.finishedAt !== null) return;
+    repos.turns.finish(turnId, turnStatusFor(reason), nowIso());
+    persistAssistant(thread.id, turnId, reason, state);
     denyPending(thread.id);
-    setThreadStatus(thread, effective === 'error' ? 'failed' : 'ready-to-review');
+    setThreadStatus(thread, reason === 'error' ? 'failed' : 'ready-to-review');
+    appendEvent(thread.id, { type: 'turn.finished', turnId, reason });
   }
 
   function requestApproval(
@@ -315,37 +350,41 @@ export function createRunner(deps: RunnerDeps): Runner {
     session: AdapterSession,
     text: string,
     ctx: TurnContext,
-    state: TurnText,
+    state: TurnState,
     sections: readonly ContextSectionInput[],
     limits: ModelLimits,
   ): Promise<void> {
-    let settled = false;
     try {
       for await (const event of session.send(text, ctx)) {
+        // The fence: a cancelled or settled turn takes no further adapter input. The
+        // interrupt already wrote its boundary, so a late delta, approval, or finish
+        // must not land in the log or move the thread.
+        if (state.cancelled || state.settled) break;
         if (event.type === 'text.delta') state.text += event.text;
         if (event.type === 'turn.finished') {
-          // Persist the assistant row before the event is broadcast, so a client that
-          // refetches on turn.finished already sees it.
-          finishTurn(thread, turnId, event.reason);
-          settled = true;
+          // Persist and broadcast the boundary before anything else observes it.
+          settleTurn(thread, turnId, event.reason, state);
+          continue;
         }
         appendEvent(thread.id, event);
         if (event.type === 'approval.requested') requestApproval(thread, turnId, event);
       }
-      if (!settled) {
+      if (!state.settled && !state.cancelled) {
         appendEvent(thread.id, {
           type: 'error',
           message: `${kind}: adapter ended without turn.finished`,
           retryable: false,
         });
-        finishTurn(thread, turnId, 'error');
-        appendEvent(thread.id, { type: 'turn.finished', turnId, reason: 'error' });
+        settleTurn(thread, turnId, 'error', state);
       }
     } catch (error) {
-      if (settled) {
+      if (state.settled || state.cancelled) {
+        // An interrupt or a normal finish already settled this turn; the throw is the
+        // cancelled stream unwinding and must not append an error or flip the status.
         logger.warn('adapter failed after the turn settled', {
           threadId: thread.id,
           turnId,
+          reason: errorMessage(error),
         });
       } else {
         appendEvent(thread.id, {
@@ -353,11 +392,12 @@ export function createRunner(deps: RunnerDeps): Runner {
           message: `${kind}: ${errorMessage(error)}`,
           retryable: false,
         });
-        finishTurn(thread, turnId, 'error');
-        appendEvent(thread.id, { type: 'turn.finished', turnId, reason: 'error' });
+        settleTurn(thread, turnId, 'error', state);
       }
     } finally {
-      turnText.delete(turnId);
+      turnState.delete(turnId);
+      // Only this run may clear its own slot: an interrupt followed by a send leaves a
+      // newer turn in the map, and this run must not fence it off.
       const current = active.get(thread.id);
       if (current?.turnId === turnId) active.delete(thread.id);
       try {
@@ -380,8 +420,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       message: `${kind}: ${detail}`,
       retryable: false,
     });
-    repos.turns.finish(turnId, 'failed', nowIso());
-    setThreadStatus(thread, 'failed');
+    settleTurn(thread, turnId, 'error', undefined);
     if (error instanceof AdapterUnavailableError) {
       throw new RpcError('provider-unavailable', detail);
     }
@@ -549,8 +588,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       };
       active.set(thread.id, { session, turnId, controller, adapterKey });
       setThreadStatus(thread, 'running');
-      const state: TurnText = { text: '', persisted: false };
-      turnText.set(turnId, state);
+      const state: TurnState = { text: '', persisted: false, settled: false, cancelled: false };
+      turnState.set(turnId, state);
       void runTurn(
         thread,
         provider.kind,
@@ -575,17 +614,26 @@ export function createRunner(deps: RunnerDeps): Runner {
         }
         return;
       }
+      // Fence the run before the adapter is asked to stop, and before the first await:
+      // the next send() must see no active run and no cached session, so it builds a
+      // fresh adapter instead of attaching to the cancelled one. The settle is
+      // synchronous and idempotent, so a second interrupt cannot finish twice.
+      const state = turnState.get(run.turnId);
+      if (state !== undefined) state.cancelled = true;
       denyPending(threadId);
+      active.delete(threadId);
+      const cached = sessions.get(threadId);
+      sessions.delete(threadId);
+      settleTurn(thread, run.turnId, 'interrupted', state);
+      run.controller.abort();
+
       await run.session.interrupt().catch(() => {
         logger.warn('adapter interrupt failed', { threadId, turnId: run.turnId });
       });
-      run.controller.abort();
-      const turn = repos.turns.get(run.turnId);
-      if (turn !== undefined && (turn.status === 'running' || turn.status === 'needs-approval')) {
-        repos.turns.finish(run.turnId, 'interrupted', nowIso());
-        persistAssistant(threadId, run.turnId, 'interrupted');
-      }
-      setThreadStatus(thread, 'ready-to-review');
+      const disposable = cached?.session ?? run.session;
+      await disposable.dispose().catch(() => {
+        logger.warn('interrupted session dispose failed', { threadId, turnId: run.turnId });
+      });
     },
 
     async approve(threadId, approvalId, decision) {
@@ -633,21 +681,20 @@ export function createRunner(deps: RunnerDeps): Runner {
     },
 
     recoverOrphanedRuns() {
-      const at = nowIso();
       for (const turn of repos.turns.listActive()) {
-        repos.turns.finish(turn.id, 'failed', at);
         const thread = repos.threads.get(turn.threadId);
-        if (thread === undefined) continue;
-        for (const approval of repos.approvals.listPending(thread.id)) {
-          repos.approvals.resolve(approval.id, 'deny', at);
+        if (thread === undefined) {
+          repos.turns.finish(turn.id, 'failed', nowIso());
+          continue;
         }
-        setThreadStatus(thread, 'failed');
         appendEvent(thread.id, {
           type: 'error',
           message: 'server restarted before the turn finished',
           retryable: false,
         });
-        appendEvent(thread.id, { type: 'turn.finished', turnId: turn.id, reason: 'error' });
+        // Recovery has no in-flight state, so the durable finished_at fence keeps a
+        // repeated recovery from writing a second boundary.
+        settleTurn(thread, turn.id, 'error', undefined);
         logger.warn('orphaned turn failed at startup', {
           threadId: thread.id,
           turnId: turn.id,
