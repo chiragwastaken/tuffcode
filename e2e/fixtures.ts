@@ -96,10 +96,30 @@ function killOrphanCrashpad(root: string): void {
   }
 }
 
-/** Deletes a workspace root, tolerating the short-lived locks Windows keeps after exit. */
-function removeWorkspace(root: string): void {
+/**
+ * Deletes a workspace root, tolerating the short-lived locks Windows keeps after exit.
+ * A pty or crashpad handle can outlive the app by a few hundred milliseconds, so
+ * cleanup retries and then leaves the temp tree behind rather than failing a test
+ * that already passed. Launch and assertion failures still propagate as before.
+ */
+async function removeWorkspace(root: string): Promise<void> {
   killOrphanCrashpad(root);
-  rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  const attempts = 6;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      return;
+    } catch (error) {
+      if (attempt === attempts) {
+        console.warn(`[e2e] leaving temp workspace in place, cleanup failed: ${root}`);
+        console.warn(error);
+        return;
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 250);
+      await promise;
+    }
+  }
 }
 
 async function launchOnce(workspace: E2EWorkspace): Promise<{
@@ -190,7 +210,7 @@ export const test = base.extend<Fixtures>({
   workspace: async ({}, use) => {
     const workspace = createWorkspace();
     await use(workspace);
-    removeWorkspace(workspace.root);
+    await removeWorkspace(workspace.root);
   },
   // oxlint-disable-next-line no-empty-pattern -- Playwright fixtures require destructuring.
   mock: async ({}, use) => {

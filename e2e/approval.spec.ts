@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test';
 import { expect, test } from './fixtures';
 import {
   addMockProvider,
@@ -8,6 +9,17 @@ import {
   sendMessage,
 } from './helpers';
 import { MOCK_ALLOWED_TEXT, MOCK_DENIED_TEXT } from './mock-openai';
+
+/**
+ * Opens a tool row's output. The row header toggle is the only button that carries
+ * aria-expanded, so this never matches the "Copy output" button that appears in the
+ * expanded body. The mock provider reuses one tool call id across turns, so the
+ * expansion state is shared and a later row can already be open.
+ */
+async function expandToolRow(tool: Locator): Promise<void> {
+  const toggle = tool.locator('button[aria-expanded]').first();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+}
 
 test('denies a bash approval, keeps the thread alive, then allows one', async ({
   session,
@@ -35,7 +47,7 @@ test('denies a bash approval, keeps the thread alive, then allows one', async ({
   const deniedSteps = page.getByTestId('steps-block').last();
   await deniedSteps.getByRole('button').first().click();
   const deniedTool = deniedSteps.getByTestId('tool-row').last();
-  await deniedTool.getByRole('button').click();
+  await expandToolRow(deniedTool);
   await expect(page.getByTestId('tool-output').last()).toContainText('denied by user');
 
   await sendMessage(page, 'run-bash again');
@@ -47,6 +59,6 @@ test('denies a bash approval, keeps the thread alive, then allows one', async ({
   const allowedSteps = page.getByTestId('steps-block').last();
   await allowedSteps.getByRole('button').first().click();
   const allowedTool = allowedSteps.getByTestId('tool-row').last();
-  await allowedTool.getByRole('button').click();
+  await expandToolRow(allowedTool);
   await expect(page.getByTestId('tool-output').last()).toContainText('tuffcode-ok');
 });
