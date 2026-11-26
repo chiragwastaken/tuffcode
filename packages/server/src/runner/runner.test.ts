@@ -23,9 +23,29 @@ interface SendCall {
   ctx: TurnContext;
 }
 
+interface FakeStream {
+  queue: AdapterEvent[];
+  waiter: (() => void) | null;
+  closed: boolean;
+  failure: Error | null;
+}
+
+interface FakeAdapterOptions {
+  /**
+   * What the adapter does to its live stream when the runner interrupts it: yield its
+   * own boundary, surface the cancellation as a stream failure, or stay silent until
+   * the session is disposed.
+   */
+  interrupt?: 'boundary' | 'failure' | 'silent';
+  /** Park dispose until the test releases it, to model a slow teardown. */
+  holdDispose?: boolean;
+}
+
 /**
  * A queue-driven adapter: the test pushes events, the runner consumes them in order,
- * and `approve`/`interrupt` are observable without any vendor process.
+ * and `approve`/`interrupt` are observable without any vendor process. Each `send`
+ * owns its stream, like a real adapter, so a cancelled turn's stream can never leak
+ * an event into the next turn.
  */
 class FakeAdapter implements AdapterSession {
   readonly id = 'sess_fake';
@@ -37,51 +57,79 @@ class FakeAdapter implements AdapterSession {
   disposes = 0;
   compactCalls = 0;
 
-  private queue: AdapterEvent[] = [];
-  private waiter: (() => void) | null = null;
-  private closed = false;
-  private failure: Error | null = null;
+  private readonly streams: FakeStream[] = [];
+  private readonly interruptMode: 'boundary' | 'failure' | 'silent';
+  private readonly disposeGate: { promise: Promise<void>; resolve: () => void } | null;
+  private readonly disposeStarted: { promise: Promise<void>; resolve: () => void } | null;
   private lastTurnId = 'turn_unknown';
+
+  constructor(options: FakeAdapterOptions = {}) {
+    this.interruptMode = options.interrupt ?? 'boundary';
+    this.disposeGate = options.holdDispose === true ? Promise.withResolvers<void>() : null;
+    this.disposeStarted = options.holdDispose === true ? Promise.withResolvers<void>() : null;
+  }
+
+  /** Resolves once dispose was entered and captured its stream. */
+  whenDisposing(): Promise<void> {
+    return this.disposeStarted?.promise ?? Promise.resolve();
+  }
+
+  /** Releases a held dispose so the session teardown can finish. */
+  releaseDispose(): void {
+    this.disposeGate?.resolve();
+  }
 
   send(text: string, ctx: TurnContext): AsyncIterable<AdapterEvent> {
     this.sends.push({ text, ctx });
     this.lastTurnId = ctx.turnId;
-    this.closed = false;
+    const stream: FakeStream = { queue: [], waiter: null, closed: false, failure: null };
+    this.streams.push(stream);
     return {
-      [Symbol.asyncIterator]: () => this.iterate(),
+      [Symbol.asyncIterator]: () => ({ next: () => this.next(stream) }),
     };
   }
 
-  private iterate(): AsyncIterator<AdapterEvent> {
-    return {
-      next: async () => {
-        if (this.failure !== null) throw this.failure;
-        while (this.queue.length === 0 && !this.closed) {
-          const { promise, resolve } = Promise.withResolvers<void>();
-          this.waiter = resolve;
-          await promise;
-        }
-        const event = this.queue.shift();
-        if (event === undefined) return { done: true, value: undefined };
-        if (event.type === 'turn.finished') this.closed = true;
+  private async next(stream: FakeStream): Promise<IteratorResult<AdapterEvent>> {
+    for (;;) {
+      const event = stream.queue.shift();
+      if (event !== undefined) {
+        if (event.type === 'turn.finished') stream.closed = true;
         return { done: false, value: event };
-      },
-    };
+      }
+      // A real adapter's stream throws wherever it is, including while the runner is
+      // parked waiting for the next event, so the failure is checked on every wake.
+      if (stream.failure !== null) throw stream.failure;
+      if (stream.closed) return { done: true, value: undefined };
+      const { promise, resolve } = Promise.withResolvers<void>();
+      stream.waiter = resolve;
+      await promise;
+    }
+  }
+
+  /** The stream of the latest send(); pushes and failures target it. */
+  private latest(): FakeStream {
+    const stream = this.streams.at(-1);
+    if (stream === undefined) throw new Error('fake adapter has no stream: call send first');
+    return stream;
   }
 
   push(...events: AdapterEvent[]): void {
-    this.queue.push(...events);
-    this.wake();
+    const stream = this.latest();
+    stream.queue.push(...events);
+    FakeAdapter.wake(stream);
   }
 
   fail(message: string): void {
-    this.failure = new Error(message);
-    this.wake();
+    const stream = this.latest();
+    stream.failure = new Error(message);
+    FakeAdapter.wake(stream);
   }
 
   end(): void {
-    this.closed = true;
-    this.wake();
+    const stream = this.streams.at(-1);
+    if (stream === undefined) return;
+    stream.closed = true;
+    FakeAdapter.wake(stream);
   }
 
   approve(approvalId: string, decision: ApprovalChoice): void {
@@ -90,8 +138,16 @@ class FakeAdapter implements AdapterSession {
 
   async interrupt(): Promise<void> {
     this.interrupts += 1;
+    if (this.interruptMode === 'failure') {
+      // A real adapter can surface the cancellation as a stream failure instead of a
+      // boundary event; the runner must not turn that into an error row.
+      this.fail('stream closed during stop');
+      return;
+    }
+    if (this.interruptMode === 'silent') return;
+    // An aborted adapter yields its own boundary; the runner already settled, so this
+    // must be ignored rather than logged a second time.
     this.push({ type: 'turn.finished', turnId: this.lastTurnId, reason: 'interrupted' });
-    this.end();
   }
 
   async compact(): Promise<{ removed: number }> {
@@ -101,12 +157,19 @@ class FakeAdapter implements AdapterSession {
 
   async dispose(): Promise<void> {
     this.disposes += 1;
-    this.end();
+    // The stream belongs to the send that was live when dispose was called; a later
+    // send must keep its own stream open.
+    const stream = this.streams.at(-1);
+    this.disposeStarted?.resolve();
+    if (this.disposeGate !== null) await this.disposeGate.promise;
+    if (stream === undefined) return;
+    stream.closed = true;
+    FakeAdapter.wake(stream);
   }
 
-  private wake(): void {
-    const waiter = this.waiter;
-    this.waiter = null;
+  private static wake(stream: FakeStream): void {
+    const waiter = stream.waiter;
+    stream.waiter = null;
     waiter?.();
   }
 }
@@ -133,6 +196,39 @@ function contextEvents(events: readonly ServerEvent[]): ContextUpdatedEvent[] {
 }
 
 type ContextUpdatedEvent = Extract<ServerEvent, { type: 'context.updated' }>;
+
+/** The persisted event log of the fixture thread, oldest first. */
+function storedEvents(f: Fixture) {
+  return f.ctx.repos.events.since('thr_a', 0, 500);
+}
+
+/** Every turn.finished boundary in the persisted log, in order. */
+function finishPayloads(f: Fixture) {
+  const finished: {
+    type: 'turn.finished';
+    turnId: string;
+    reason: 'complete' | 'interrupted' | 'error';
+  }[] = [];
+  for (const row of storedEvents(f)) {
+    // The events column is stored JSON and typed unknown; the runner only appends
+    // AdapterEvent payloads, so the cast recovers that boundary.
+    const payload = row.payload as AdapterEvent;
+    if (payload.type === 'turn.finished') {
+      finished.push({ type: payload.type, turnId: payload.turnId, reason: payload.reason });
+    }
+  }
+  return finished;
+}
+
+/** Event types of the log rows that belong to one turn. */
+function turnEventTypes(f: Fixture, turnId: string): string[] {
+  const types: string[] = [];
+  for (const row of storedEvents(f)) {
+    const payload = row.payload as AdapterEvent;
+    if ('turnId' in payload && payload.turnId === turnId) types.push(row.type);
+  }
+  return types;
+}
 
 interface Fixture {
   ctx: TestContext;
@@ -771,6 +867,201 @@ describe('thread runner', () => {
     await expect(f.runner.interrupt('thr_a')).resolves.toBeUndefined();
     f.ctx.repos.threads.update('thr_a', { status: 'running', updatedAt: ISO });
     await expect(f.runner.interrupt('thr_a')).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('settles an interrupt with no streamed text and writes the boundary row', async () => {
+    const f = setup();
+    const { turnId } = await f.runner.send('thr_a', 'long job');
+    expect(f.runner.listActive()).toHaveLength(1);
+
+    await f.runner.interrupt('thr_a');
+
+    expect(f.runner.listActive()).toEqual([]);
+    expect(finishPayloads(f)).toEqual([{ type: 'turn.finished', turnId, reason: 'interrupted' }]);
+    const messages = f.ctx.repos.messages.list('thr_a');
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(messages[1]).toMatchObject({
+      id: `msg_${turnId}_assistant`,
+      content: '[interrupted]',
+    });
+    expect(f.turnStatus(turnId)).toBe('interrupted');
+    expect(f.threadStatus()).toBe('ready-to-review');
+  });
+
+  it('tolerates a second interrupt without a duplicate finish', async () => {
+    const f = setup();
+    const { turnId } = await f.runner.send('thr_a', 'long job');
+
+    await f.runner.interrupt('thr_a');
+    await expect(f.runner.interrupt('thr_a')).resolves.toBeUndefined();
+
+    expect(finishPayloads(f)).toEqual([{ type: 'turn.finished', turnId, reason: 'interrupted' }]);
+    expect(f.adapter.interrupts).toBe(1);
+    expect(f.adapter.disposes).toBe(1);
+    expect(f.ctx.repos.messages.list('thr_a')).toHaveLength(2);
+  });
+
+  it('ignores a late adapter error once the interrupt settled the turn', async () => {
+    const adapter = new FakeAdapter({ interrupt: 'failure' });
+    const f = setup({ adapter });
+    const { turnId } = await f.runner.send('thr_a', 'long job');
+    const delta = waitFor(
+      f.bus,
+      (event) => event.type === 'thread.event' && event.payload.type === 'text.delta',
+    );
+    adapter.push({ type: 'text.delta', turnId, text: 'half' });
+    await delta;
+
+    await f.runner.interrupt('thr_a');
+    // The run's finally emits its context update once the cancelled stream unwinds.
+    await vi.waitFor(() => expect(contextEvents(f.events)).toHaveLength(2));
+
+    expect(storedEvents(f).map((row) => row.type)).toEqual(['text.delta', 'turn.finished']);
+    expect(finishPayloads(f)).toEqual([{ type: 'turn.finished', turnId, reason: 'interrupted' }]);
+    expect(f.turnStatus(turnId)).toBe('interrupted');
+    expect(f.threadStatus()).toBe('ready-to-review');
+    expect(f.ctx.repos.messages.list('thr_a')[1]?.content).toBe(`half${INTERRUPTED_MARKER}`);
+  });
+
+  it('lets an immediate send start a fresh turn after an interrupt', async () => {
+    const f = setup();
+    const first = await f.runner.send('thr_a', 'one');
+    const delta = waitFor(
+      f.bus,
+      (event) => event.type === 'thread.event' && event.payload.type === 'text.delta',
+    );
+    f.adapter.push({ type: 'text.delta', turnId: first.turnId, text: 'partial' });
+    await delta;
+
+    await f.runner.interrupt('thr_a');
+    // Anything the cancelled stream still emits must never reach the log or a new turn.
+    f.adapter.push({ type: 'text.delta', turnId: first.turnId, text: 'late' });
+    f.adapter.fail('late socket error');
+
+    const second = await f.runner.send('thr_a', 'two');
+    expect(second.turnId).not.toBe(first.turnId);
+    // The fence dropped the cached session, so this send built a new adapter session.
+    expect(f.adapterCalls).toHaveLength(2);
+    expect(f.adapter.sends).toHaveLength(2);
+    // The old run's finally must not clear the new turn's slot.
+    expect(f.runner.listActive().map((run) => run.turnId)).toEqual([second.turnId]);
+    await expect(f.runner.send('thr_a', 'three')).rejects.toMatchObject({ code: 'conflict' });
+
+    const secondEnded = waitFor(
+      f.bus,
+      (event) =>
+        event.type === 'thread.event' &&
+        event.payload.type === 'turn.finished' &&
+        event.payload.turnId === second.turnId,
+    );
+    f.adapter.push(
+      { type: 'turn.started', turnId: second.turnId },
+      { type: 'text.delta', turnId: second.turnId, text: 'fresh' },
+      { type: 'turn.finished', turnId: second.turnId, reason: 'complete' },
+    );
+    await secondEnded;
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    expect(finishPayloads(f)).toEqual([
+      { type: 'turn.finished', turnId: first.turnId, reason: 'interrupted' },
+      { type: 'turn.finished', turnId: second.turnId, reason: 'complete' },
+    ]);
+    // The cancelled run wrote its delta and its boundary, and nothing else.
+    expect(turnEventTypes(f, first.turnId)).toEqual(['text.delta', 'turn.finished']);
+    expect(turnEventTypes(f, second.turnId)).toEqual([
+      'turn.started',
+      'text.delta',
+      'turn.finished',
+    ]);
+    expect(storedEvents(f).some((row) => row.type === 'error')).toBe(false);
+
+    const messages = f.ctx.repos.messages.list('thr_a');
+    expect(messages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+    ]);
+    expect(messages[1]?.content).toBe(`partial${INTERRUPTED_MARKER}`);
+    expect(messages[3]?.content).toBe('fresh');
+  });
+
+  it('does not let a stopped run clear the slot of the turn that replaced it', async () => {
+    const adapter = new FakeAdapter({ interrupt: 'silent', holdDispose: true });
+    const f = setup({ adapter });
+    const first = await f.runner.send('thr_a', 'one');
+
+    // The interrupt fences synchronously, then parks inside the slow session dispose,
+    // so the replacement send runs while the first run is still registered with its
+    // adapter stream.
+    const stopping = f.runner.interrupt('thr_a');
+    await adapter.whenDisposing();
+    const second = await f.runner.send('thr_a', 'two');
+    expect(second.turnId).not.toBe(first.turnId);
+    expect(f.runner.listActive().map((run) => run.turnId)).toEqual([second.turnId]);
+
+    adapter.releaseDispose();
+    await stopping;
+    // The first run's finally runs after the second turn was registered. It may only
+    // clear its own slot, so the new turn must still own the thread.
+    await vi.waitFor(() => expect(contextEvents(f.events)).toHaveLength(3));
+    expect(f.runner.listActive().map((run) => run.turnId)).toEqual([second.turnId]);
+    await expect(f.runner.send('thr_a', 'three')).rejects.toMatchObject({ code: 'conflict' });
+
+    const secondEnded = waitFor(
+      f.bus,
+      (event) =>
+        event.type === 'thread.event' &&
+        event.payload.type === 'turn.finished' &&
+        event.payload.turnId === second.turnId,
+    );
+    adapter.push({ type: 'turn.finished', turnId: second.turnId, reason: 'complete' });
+    await secondEnded;
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    expect(finishPayloads(f)).toEqual([
+      { type: 'turn.finished', turnId: first.turnId, reason: 'interrupted' },
+      { type: 'turn.finished', turnId: second.turnId, reason: 'complete' },
+    ]);
+  });
+
+  it('ignores adapter events that follow the turn boundary', async () => {
+    const f = setup();
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    f.adapter.push(
+      { type: 'turn.finished', turnId, reason: 'complete' },
+      { type: 'text.delta', turnId, text: 'after the finish' },
+    );
+    await ended;
+    await vi.waitFor(() => expect(contextEvents(f.events)).toHaveLength(2));
+
+    expect(storedEvents(f).map((row) => row.type)).toEqual(['turn.finished']);
+    expect(finishPayloads(f)).toEqual([{ type: 'turn.finished', turnId, reason: 'complete' }]);
+    // Nothing streamed before the boundary, so no assistant row is written.
+    expect(f.ctx.repos.messages.list('thr_a').map((message) => message.role)).toEqual(['user']);
+  });
+
+  it('emits exactly one turn.finished and one assistant row on normal completion', async () => {
+    const f = setup();
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'hello');
+
+    f.adapter.push(
+      { type: 'text.delta', turnId, text: 'done' },
+      { type: 'turn.finished', turnId, reason: 'complete' },
+    );
+    await ended;
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    expect(finishPayloads(f)).toEqual([{ type: 'turn.finished', turnId, reason: 'complete' }]);
+    const assistants = f.ctx.repos.messages
+      .list('thr_a')
+      .filter((message) => message.role === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]?.content).toBe('done');
+    expect(f.threadStatus()).toBe('ready-to-review');
   });
 
   it('records brain injection ids on the turn and touches them once', async () => {
