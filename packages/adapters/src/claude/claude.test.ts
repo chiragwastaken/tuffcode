@@ -171,6 +171,48 @@ describe('mapSdkMessage', () => {
     expect(state.toolCallIds.has('toolu_01')).toBe(true);
   });
 
+  it('redacts a secret-shaped tool input before tool.started', () => {
+    const state = mappingState();
+    const events = mapSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_cfg',
+              name: 'mcp__tuffcode__config',
+              input: {
+                action: 'provider.add',
+                label: 'Remote',
+                secret: 'sk-map-secret',
+                apiKey: 'sk-map-alias',
+              },
+            },
+          ],
+        },
+      },
+      state,
+    );
+
+    expect(events).toEqual([
+      {
+        type: 'tool.started',
+        turnId: 'turn_1',
+        toolCallId: 'toolu_cfg',
+        name: 'mcp__tuffcode__config',
+        input: {
+          action: 'provider.add',
+          label: 'Remote',
+          secret: '[redacted]',
+          apiKey: '[redacted]',
+        },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('sk-map-secret');
+    expect(JSON.stringify(events)).not.toContain('sk-map-alias');
+  });
+
   it('maps a tool result to tool.finished', () => {
     const state = mappingState();
     const events = loadFixture('tool-result').flatMap((message) => mapSdkMessage(message, state));
@@ -394,6 +436,37 @@ describe('createClaudeAdapter', () => {
       ]);
     },
   );
+
+  it('redacts a secret in an approval request', async () => {
+    const outcomes: ClaudePermissionResult[] = [];
+    const queryFn: ClaudeQueryFn = ({ options }) => ({
+      async *[Symbol.asyncIterator]() {
+        yield initMessage('sess_secret_approval');
+        outcomes.push(
+          await options.canUseTool(
+            'mcp__tuffcode__config',
+            { action: 'provider.add', label: 'Remote', secret: 'sk-approval-secret' },
+            { signal: options.abortController.signal, toolUseID: 'toolu_secret' },
+          ),
+        );
+        yield assistantText('ok');
+      },
+    });
+    const adapter = await createClaudeAdapter(provider, deps, { queryFn });
+    const events: AdapterEvent[] = [];
+
+    for await (const event of adapter.send('add it', turnContext())) {
+      events.push(event);
+      if (event.type === 'approval.requested') adapter.approve(event.approvalId, 'allow');
+    }
+
+    expect(events.find((event) => event.type === 'approval.requested')).toMatchObject({
+      name: 'mcp__tuffcode__config',
+      input: { action: 'provider.add', label: 'Remote', secret: '[redacted]' },
+    });
+    expect(JSON.stringify(events)).not.toContain('sk-approval-secret');
+    expect(outcomes).toEqual([{ behavior: 'allow' }]);
+  });
 
   it('ignores unknown approval ids', async () => {
     const outcomes: ClaudePermissionResult[] = [];

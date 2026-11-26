@@ -11,6 +11,7 @@ import {
   type TurnContext,
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
+import { redactToolInput } from '../redact.js';
 import { mapSdkMessage, type ClaudeMappingState } from './map.js';
 import { classifyTuffcodeTool, tuffcodeServer } from './tuffcode-tools.js';
 
@@ -348,7 +349,7 @@ class ClaudeAdapter implements AdapterSession {
       approvalId,
       toolCallId,
       name: toolName,
-      input,
+      input: redactToolInput(input),
     });
     this.deps.logger.debug('claude approval requested', { approvalId, toolName });
 

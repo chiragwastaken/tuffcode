@@ -176,6 +176,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       },
     },
     webFetch: createWebFetch(),
+    emit: (event) => bus.emit(event),
   });
   // The runner needs adapter deps and the subagent service needs the runner, so the
   // harness hook resolves the service through a holder assigned right after creation.

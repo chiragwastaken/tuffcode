@@ -264,6 +264,7 @@ describe('extra tool schemas', () => {
       'kind',
       'label',
       'baseUrl',
+      'model',
       'modelId',
       'contextWindow',
       'maxOutputTokens',
@@ -272,6 +273,13 @@ describe('extra tool schemas', () => {
       'command',
       'args',
       'env',
+      'transport',
+      'url',
+      'cwd',
+      'token',
+      'secretEnv',
+      'secret',
+      'apiKey',
       'key',
       'value',
     ]);
@@ -282,10 +290,23 @@ describe('extra tool schemas', () => {
     expect(CONFIG_TOOL.parameters.properties.env?.type).toBe('string');
   });
 
-  it('never accepts a provider key through the config tool', () => {
-    expect(CONFIG_TOOL.parameters.properties).not.toHaveProperty('apiKey');
-    expect(CONFIG_TOOL.parameters.properties).not.toHaveProperty('api_key');
-    expect(CONFIG_TOOL.description).toContain('Settings > Providers');
+  it('accepts credentials only through keychain fields with explicit descriptions', () => {
+    const properties = CONFIG_TOOL.parameters.properties;
+
+    for (const key of ['secret', 'apiKey', 'token', 'secretEnv', 'transport', 'url']) {
+      expect(properties).toHaveProperty(key);
+      expect(properties[key]?.type).toBe('string');
+    }
+    expect(CONFIG_TOOL.description).toContain('OS keychain');
+    expect(CONFIG_TOOL.description).toContain('never echoed');
+    for (const key of ['secret', 'apiKey', 'token', 'secretEnv']) {
+      expect((properties[key]?.description ?? '').toLowerCase()).toContain('keychain');
+    }
+    expect(properties.transport?.description).toContain('stdio');
+    expect(properties.transport?.description).toContain('http');
+    expect(properties.url?.description).toContain('http');
+    expect(properties.env?.description).toContain('secretEnv');
+    expect(properties).not.toHaveProperty('api_key');
   });
 });
 

@@ -4,6 +4,7 @@ import type { SkillSource } from '@tuffcode/contracts';
 import { isInside, tuffcodeHome } from '@tuffcode/shared';
 import { parseFrontmatter, warnSkipped, type DiscoveryOptions } from '../commands/frontmatter.js';
 import { badRequest, notFound } from '../errors.js';
+import { SYSTEM_SKILLS, isSystemSkillPath, systemSkillBody, systemSkillPath } from './system.js';
 
 const SKILL_FILE = 'SKILL.md';
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -54,7 +55,10 @@ function orderedRoots(projectPath: string, plugins: readonly PluginSkillRoot[] =
 }
 
 /** Every absolute root a skill body may be read from, in precedence order. */
-export function skillRoots(projectPath: string, plugins: readonly PluginSkillRoot[] = []): string[] {
+export function skillRoots(
+  projectPath: string,
+  plugins: readonly PluginSkillRoot[] = [],
+): string[] {
   return orderedRoots(projectPath, plugins).map((entry) => entry.root);
 }
 
@@ -108,8 +112,9 @@ function readSkillDirectory(root: SkillRoot, options: DiscoveryOptions): SkillSu
 }
 
 /**
- * Discovers project then user skills, keeping the first definition of a name.
- * Only frontmatter is parsed; skill bodies stay on disk until `loadSkill`.
+ * Discovers system, project, user and plugin skills, keeping the first definition of a
+ * name. System skills are seeded first, so nothing on disk can shadow them. Only
+ * frontmatter is parsed; skill bodies stay on disk until `loadSkill`.
  */
 export function discoverSkills(
   projectPath: string,
@@ -117,19 +122,48 @@ export function discoverSkills(
 ): SkillSummary[] {
   const roots = orderedRoots(projectPath, options.pluginRoots);
   const skills = new Map<string, SkillSummary>();
+  for (const skill of SYSTEM_SKILLS) {
+    skills.set(skill.name, {
+      name: skill.name,
+      description: skill.description,
+      path: systemSkillPath(skill.name),
+      source: 'system',
+      pluginId: null,
+    });
+  }
   for (const root of roots) {
     for (const skill of readSkillDirectory(root, options)) {
-      if (!skills.has(skill.name)) skills.set(skill.name, skill);
+      const existing = skills.get(skill.name);
+      if (existing !== undefined) {
+        if (existing.source === 'system') {
+          warnSkipped(
+            options,
+            `ignoring ${skill.source} skill ${skill.name} at ${skill.path}: the name is reserved for a built-in skill`,
+          );
+        }
+        continue;
+      }
+      skills.set(skill.name, skill);
     }
   }
-  return [...skills.values()].toSorted((left, right) => left.name.localeCompare(right.name));
+  return [...skills.values()].toSorted(
+    (left, right) =>
+      Number(right.source === 'system') - Number(left.source === 'system') ||
+      left.name.localeCompare(right.name),
+  );
 }
 
 /**
  * Reads a skill body after proving the file is inside one of the skills roots.
- * Symlinks are resolved first, so a link pointing outside the roots is rejected.
+ * System skills carry a synthetic path and are served from the module. Symlinks are
+ * resolved first, so a link pointing outside the roots is rejected.
  */
 export function readSkillBody(filePath: string, roots: readonly string[]): string {
+  if (isSystemSkillPath(filePath)) {
+    const body = systemSkillBody(filePath);
+    if (body === undefined) throw notFound('skill not found');
+    return body;
+  }
   let real: string;
   try {
     real = realpathSync(filePath);

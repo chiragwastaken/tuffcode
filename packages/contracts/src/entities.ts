@@ -449,7 +449,13 @@ export const CommandSchema = z.object({
 });
 export type Command = z.infer<typeof CommandSchema>;
 
-export const SkillSourceSchema = z.enum(['project', 'user', 'plugin', 'claude-project']);
+export const SkillSourceSchema = z.enum([
+  'system',
+  'project',
+  'user',
+  'plugin',
+  'claude-project',
+]);
 export type SkillSource = z.infer<typeof SkillSourceSchema>;
 
 export const SkillSchema = z.object({

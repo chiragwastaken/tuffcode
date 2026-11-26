@@ -95,6 +95,7 @@ describe('prompt planning', () => {
     expect(result.sections.map((section) => section.name)).toEqual([
       'base',
       'custom-instructions',
+      'available-skills',
       'brain-always',
       'retrieved-memory',
       'turn-context',
@@ -113,6 +114,30 @@ describe('prompt planning', () => {
     expect(system).toContain('preview must match the send path');
     // A thread without a worktree previews against the project path.
     expect(system).toContain(ctx.env.root);
+  });
+
+  it('injects the edit-tuffcode body when the message asks to change Tuffcode', () => {
+    const ctx = setup();
+
+    const result = preview(ctx, 'add this MCP server with this token');
+    const skills = result.sections.find((section) => section.name === 'skills');
+
+    expect(skills).toBeDefined();
+    expect(skills?.text).toContain('### Skill: edit-tuffcode');
+    expect(skills?.text).toContain('`config` tool');
+    expect(skills?.text).toContain('keychain');
+    const available = result.sections.find((section) => section.name === 'available-skills');
+    expect(available?.text ?? '').not.toContain('- edit-tuffcode:');
+  });
+
+  it('does not inject the edit-tuffcode body for an ordinary request', () => {
+    const ctx = setup();
+
+    const result = preview(ctx, 'how do I run the preview');
+
+    expect(result.sections.some((section) => section.name === 'skills')).toBe(false);
+    const available = result.sections.find((section) => section.name === 'available-skills');
+    expect(available?.text).toContain('- edit-tuffcode:');
   });
 
   it('reports the injected brain ids and their reasons', () => {
@@ -180,6 +205,7 @@ describe('prompt planning', () => {
     const result = preview(ctx, 'hello');
     expect(result.sections.map((section) => section.name)).toEqual([
       'base',
+      'available-skills',
       'turn-context',
       'user-message',
     ]);
