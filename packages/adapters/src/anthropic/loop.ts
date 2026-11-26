@@ -22,16 +22,14 @@ import {
   type ToolSessionState,
 } from '../openai/tools.js';
 import {
-  effectiveToolIterations,
   isServerToolOffered,
   isToolDisabled,
+  RepeatedToolCallGuard,
   resolveToolOptions,
 } from '../tool-policy.js';
 import { isExtraToolName } from '../extra-tools.js';
 import { redactToolInput } from '../redact.js';
 
-/** Mirrors the `maxToolIterations` setting default. */
-export const DEFAULT_MAX_TOOL_ITERATIONS = 40;
 const LF = String.fromCharCode(10);
 
 export interface RunTurnOptions {
@@ -43,7 +41,6 @@ export interface RunTurnOptions {
   signal: AbortSignal;
   maxTokens: number;
   requestApproval: (approvalId: string) => Promise<ApprovalChoice>;
-  maxIterations?: number;
 }
 
 interface ToolUseAccumulator {
@@ -105,17 +102,12 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
   const { ctx, client, messages, state, deps, signal } = options;
   const turnId = ctx.turnId;
   const toolOptions = resolveToolOptions(ctx, deps);
-  const maxIterations = effectiveToolIterations(
-    ctx.maxToolIterations,
-    options.maxIterations,
-    DEFAULT_MAX_TOOL_ITERATIONS,
-  );
+  const repeatGuard = new RepeatedToolCallGuard();
   const system = systemPrompt(ctx);
   let reason: 'complete' | 'interrupted' | 'error' = 'complete';
-  let completed = false;
 
   try {
-    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    for (let iteration = 0; ; iteration += 1) {
       if (signal.aborted) {
         reason = 'interrupted';
         break;
@@ -160,6 +152,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           signal,
           logger: deps.logger,
         })) {
+          if (signal.aborted) break;
           const record = asRecord(event.data);
           if (record === null) continue;
           const type = typeof record.type === 'string' ? record.type : event.event;
@@ -312,7 +305,24 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           reason = 'error';
           break;
         }
-        completed = true;
+        break;
+      }
+
+      const parsedArguments = ordered.map((call) => parseToolArguments(call.json));
+      const repeated = repeatGuard.observe(
+        textParts.join(''),
+        ordered.map((call, index) => ({
+          name: call.name,
+          args: parsedArguments[index]?.args ?? call.json,
+        })),
+      );
+      if (repeated) {
+        yield {
+          type: 'error',
+          message: 'anthropic: repeated identical tool call',
+          retryable: false,
+        };
+        reason = 'error';
         break;
       }
 
@@ -322,15 +332,12 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
       const text = textParts.join('');
       if (text.length > 0) assistantBlocks.push({ type: 'text', text });
 
-      const toolUseBlocks: AnthropicToolUseBlock[] = ordered.map((call) => {
-        const { args } = parseToolArguments(call.json);
-        return {
-          type: 'tool_use',
-          id: call.id.length > 0 ? call.id : newId('call'),
-          name: call.name,
-          input: args ?? {},
-        };
-      });
+      const toolUseBlocks: AnthropicToolUseBlock[] = ordered.map((call, index) => ({
+        type: 'tool_use',
+        id: call.id.length > 0 ? call.id : newId('call'),
+        name: call.name,
+        input: parsedArguments[index]?.args ?? {},
+      }));
       assistantBlocks.push(...toolUseBlocks);
       messages.push({ role: 'assistant', content: assistantBlocks });
 
@@ -347,7 +354,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
           continue;
         }
 
-        const { args, parseError } = parseToolArguments(call.json);
+        const { args, parseError } = parsedArguments[index] ?? { args: null, parseError: null };
         yield {
           type: 'tool.started',
           turnId,
@@ -437,15 +444,6 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
       yield { type: 'error', message: 'anthropic: ' + errorMessage(error), retryable: false };
       reason = 'error';
     }
-  }
-
-  if (!completed && reason === 'complete') {
-    reason = 'error';
-    yield {
-      type: 'error',
-      message: `anthropic: stopped after ${maxIterations} tool iterations`,
-      retryable: false,
-    };
   }
 
   yield { type: 'turn.finished', turnId, reason };

@@ -23,7 +23,6 @@ const LF = String.fromCharCode(10);
 export interface OpenAIChatAdapterOverrides {
   fetchFn?: FetchFn;
   sleep?: (ms: number) => Promise<void>;
-  maxIterations?: number;
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -51,7 +50,6 @@ class OpenAIChatAdapter implements AdapterSession {
     provider: ProviderConfig,
     private readonly deps: AdapterDeps,
     private readonly client: OpenAIClient,
-    private readonly maxIterations: number | undefined,
   ) {
     this.id = newId('sess');
     this.providerId = provider.id;
@@ -83,7 +81,6 @@ class OpenAIChatAdapter implements AdapterSession {
         deps: this.deps,
         signal: controller.signal,
         requestApproval: (approvalId) => this.requestApproval(approvalId),
-        ...(this.maxIterations !== undefined ? { maxIterations: this.maxIterations } : {}),
       });
     } finally {
       ctx.signal.removeEventListener('abort', onAbort);
@@ -185,5 +182,5 @@ export async function createOpenAIChatAdapter(
     ...(overrides.sleep !== undefined ? { sleep: overrides.sleep } : {}),
   });
   deps.logger.debug('openai adapter created', { providerId: provider.id });
-  return new OpenAIChatAdapter(provider, deps, client, overrides.maxIterations);
+  return new OpenAIChatAdapter(provider, deps, client);
 }

@@ -106,16 +106,45 @@ export function isToolDisabled(name: string, allowlist: readonly string[] | unde
   return allowlist !== undefined && !allowlist.includes(name);
 }
 
+/** How many identical repeats in a row, with no new assistant text, mean the model is stuck. */
+export const REPEATED_TOOL_CALL_LIMIT = 3;
+
+/** Sorted-key JSON, so a re-serialised but identical argument object compares equal. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).toSorted();
+    const entries = keys.map((key) => JSON.stringify(key) + ':' + stableJson(record[key]));
+    return '{' + entries.join(',') + '}';
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 /**
- * The tighter of the per-turn settings cap and the adapter's own cap, so a provider
- * narrowed below the global setting still narrows, and the setting always bounds it.
+ * Stops a turn whose model is stuck repeating itself. A turn may run any number of
+ * distinct tool calls; the same call issued `REPEATED_TOOL_CALL_LIMIT` times in a
+ * row with no new assistant text in between is a loop, not progress.
  */
-export function effectiveToolIterations(
-  turn: number | undefined,
-  adapter: number | undefined,
-  fallback: number,
-): number {
-  if (turn === undefined) return adapter ?? fallback;
-  if (adapter === undefined) return turn;
-  return Math.min(turn, adapter);
+export class RepeatedToolCallGuard {
+  private signature: string | null = null;
+  private count = 0;
+
+  /** Records one assistant step; true when this step is the stuck repeat. */
+  observe(text: string, calls: readonly { name: string; args: unknown }[]): boolean {
+    if (text.length > 0 || calls.length === 0) {
+      this.signature = null;
+      this.count = 0;
+      return false;
+    }
+    const signature = calls
+      .map((call) => call.name + '\u0000' + stableJson(call.args))
+      .join('\u0001');
+    if (signature === this.signature) this.count += 1;
+    else {
+      this.signature = signature;
+      this.count = 1;
+    }
+    return this.count >= REPEATED_TOOL_CALL_LIMIT;
+  }
 }

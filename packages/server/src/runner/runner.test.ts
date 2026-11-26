@@ -383,15 +383,14 @@ describe('thread runner', () => {
     expect(stored[1]).toMatchObject({ id: `msg_${turnId}_assistant`, content: 'ab' });
   });
 
-  it('passes the enabled tools and iteration cap from settings into the turn', async () => {
+  it('passes the enabled tools from settings into the turn', async () => {
     const f = setup();
-    f.ctx.repos.settings.patch({ enabledTools: ['read'], maxToolIterations: 7 });
+    f.ctx.repos.settings.patch({ enabledTools: ['read'] });
     const ended = waitForTurnEnd(f.bus);
     const { turnId } = await f.runner.send('thr_a', 'hello');
 
     const ctx = f.adapter.sends[0]?.ctx;
     expect(ctx?.toolAllowlist).toEqual(['read']);
-    expect(ctx?.maxToolIterations).toBe(7);
 
     f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
     await ended;

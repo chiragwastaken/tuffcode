@@ -48,7 +48,7 @@ const MODE_EXAMPLES: readonly ModeExample[] = [
   {
     value: 'full-auto',
     label: 'Full auto',
-    summary: 'Every tool call runs without a prompt until the iteration cap is reached.',
+    summary: 'Every tool call runs without a prompt; a run ends on Stop, an abort, context compaction, or a repeated identical tool call.',
     example: 'Run the test suite: runs. Commit the change: runs.',
   },
 ];
