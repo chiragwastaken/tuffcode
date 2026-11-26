@@ -12,6 +12,7 @@ import {
   EXTRA_TOOL_SCHEMAS,
   MCP_TOOL,
   MEMORY_TOOL,
+  PROJECT_RULES_HEADING,
   TOOL_NAMES,
   TOOL_SCHEMAS,
   assemblePrompt,
@@ -583,6 +584,52 @@ describe('assemblePrompt', () => {
       expect(entry.tokens).toBe(estimateTokens(entry.text));
     }
     expect(assembly.sections.at(-1)?.tokens).toBe(1);
+  });
+
+  it('places project rules after custom instructions and before brain notes', () => {
+    const rules = '### AGENTS.md\nRun the narrow test first.';
+    const assembly = assemblePrompt({
+      customInstructions: 'Prefer pnpm.',
+      projectRules: rules,
+      brainAlways: '- [rule] never force push',
+      turnContext,
+      userMessage: 'run the tests',
+    });
+
+    expect(assembly.sections.map((entry) => entry.name)).toEqual([
+      'base',
+      'custom-instructions',
+      'project-rules',
+      'brain-always',
+      'turn-context',
+      'user-message',
+    ]);
+    const section = assembly.sections.find((entry) => entry.name === 'project-rules');
+    expect(section?.text).toBe(
+      `${PROJECT_RULES_HEADING}\nRules committed in this repository. Follow them for this turn.\n${rules}`,
+    );
+    expect(section?.tokens).toBe(estimateTokens(section?.text ?? ''));
+    expect(section?.tokens).toBeGreaterThan(0);
+    const system = assembly.systemPrompt;
+    expect(system.indexOf(CUSTOM_INSTRUCTIONS_HEADING)).toBeLessThan(
+      system.indexOf(PROJECT_RULES_HEADING),
+    );
+    expect(system.indexOf(PROJECT_RULES_HEADING)).toBeLessThan(system.indexOf('never force push'));
+    expect(system).toContain('### AGENTS.md');
+  });
+
+  it('omits the project rules section when no rule applies', () => {
+    const assembly = assemblePrompt({
+      projectRules: '   ',
+      turnContext,
+      userMessage: 'hi',
+    });
+    expect(assembly.sections.map((entry) => entry.name)).toEqual([
+      'base',
+      'turn-context',
+      'user-message',
+    ]);
+    expect(assembly.systemPrompt).not.toContain(PROJECT_RULES_HEADING);
   });
 });
 

@@ -53,6 +53,7 @@ export {
   assemblePrompt,
   ABOUT_USER_HEADING,
   CUSTOM_INSTRUCTIONS_HEADING,
+  PROJECT_RULES_HEADING,
   type AssembledPrompt,
   type PromptAssemblyInput,
   type PromptSection,

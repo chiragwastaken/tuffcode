@@ -1,5 +1,12 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { PromptSection } from '@tuffcode/prompt';
-import { BASE_SYSTEM_PROMPT, CUSTOM_INSTRUCTIONS_HEADING, estimateTokens } from '@tuffcode/prompt';
+import {
+  BASE_SYSTEM_PROMPT,
+  CUSTOM_INSTRUCTIONS_HEADING,
+  PROJECT_RULES_HEADING,
+  estimateTokens,
+} from '@tuffcode/prompt';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ALWAYS_TOKEN_BUDGET, RETRIEVAL_TOKEN_BUDGET } from '../brain/selector.js';
 import { RpcError } from '../errors.js';
@@ -114,6 +121,55 @@ describe('prompt planning', () => {
     expect(system).toContain('preview must match the send path');
     // A thread without a worktree previews against the project path.
     expect(system).toContain(ctx.env.root);
+  });
+
+  it('previews the project rules section with its token count and file paths', () => {
+    const ctx = setup();
+    ctx.repos.settings.patch({ customInstructions: 'Prefer pnpm.' });
+    writeFileSync(join(ctx.env.root, 'AGENTS.md'), 'Run the narrow test first.\n');
+    mkdirSync(join(ctx.env.root, '.tuffcode', 'rules'), { recursive: true });
+    writeFileSync(
+      join(ctx.env.root, '.tuffcode', 'rules', 'testing.md'),
+      'Name tests after the behaviour they pin.\n',
+    );
+
+    const result = preview(ctx, 'run the tests');
+
+    expect(result.sections.map((section) => section.name)).toEqual([
+      'base',
+      'custom-instructions',
+      'project-rules',
+      'available-skills',
+      'turn-context',
+      'user-message',
+    ]);
+    const section = result.sections.find((entry) => entry.name === 'project-rules');
+    expect(section?.text.startsWith(PROJECT_RULES_HEADING)).toBe(true);
+    expect(section?.tokens).toBe(estimateTokens(section?.text ?? ''));
+    expect(section?.tokens).toBeGreaterThan(0);
+    expect(section?.text).toContain('### AGENTS.md');
+    expect(section?.text).toContain('### .tuffcode/rules/testing.md');
+    expect(section?.text.indexOf('### AGENTS.md')).toBeLessThan(
+      section?.text.indexOf('### .tuffcode/rules/testing.md') ?? -1,
+    );
+    expect(result.total).toBe(result.sections.reduce((sum, entry) => sum + entry.tokens, 0));
+  });
+
+  it('applies a glob-scoped rule only when the message names a matching path', () => {
+    const ctx = setup();
+    mkdirSync(join(ctx.env.root, '.tuffcode', 'rules'), { recursive: true });
+    writeFileSync(
+      join(ctx.env.root, '.tuffcode', 'rules', 'web.md'),
+      ['---', 'globs: apps/web/**', '---', 'Use the design tokens for colour.'].join('\n'),
+    );
+
+    const matching = preview(ctx, 'fix apps/web/src/app.tsx');
+    const section = matching.sections.find((entry) => entry.name === 'project-rules');
+    expect(section?.text).toContain('### .tuffcode/rules/web.md');
+    expect(section?.text).toContain('Use the design tokens for colour.');
+
+    const unrelated = preview(ctx, 'fix the server tests');
+    expect(unrelated.sections.some((entry) => entry.name === 'project-rules')).toBe(false);
   });
 
   it('injects the edit-tuffcode body when the message asks to change Tuffcode', () => {
