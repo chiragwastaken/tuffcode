@@ -894,6 +894,32 @@ describe('subagent control, telemetry and mailbox', () => {
     }
   });
 
+  it('stops after three rework rounds and still allows a steering message', async () => {
+    const harness = createHarness();
+    try {
+      const childId = await spawn(harness, 'worker', 'add the flag');
+      await harness.subagents.awaitChild(childId);
+      harness.ports.handler = () => Promise.resolve({ status: 'complete', text: 'fixed' });
+      const base = harness.ports.turns.length;
+
+      for (let round = 1; round <= 3; round += 1) {
+        await harness.subagents.message(childId, `fix finding ${round}`, { rework: true });
+        await until(() => harness.ports.turns.length === base + round);
+      }
+
+      expect(harness.ctx.repos.subagents.get(childId)?.reworkRound).toBe(3);
+      await expect(
+        harness.subagents.message(childId, 'fix the next finding', { rework: true }),
+      ).rejects.toThrow(/rework limit reached after 3 rounds/);
+
+      // The cap is on reviewer rework only; ordinary steering still reaches the child.
+      const steered = await harness.subagents.message(childId, 'what changed?');
+      expect(steered).toEqual({ delivered: 'started' });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it('reopens a settled child for a follow-up and refuses one to a stopped child', async () => {
     const harness = createHarness();
     try {

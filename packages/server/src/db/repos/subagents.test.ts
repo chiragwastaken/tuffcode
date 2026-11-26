@@ -110,6 +110,15 @@ describe('subagents repo', () => {
     expect(reopened.toolCount).toBe(4);
   });
 
+  it('starts a child at rework round zero and records each round', () => {
+    create();
+    expect(requireRecord(ctx.repos.subagents.get('sub_1')).reworkRound).toBe(0);
+
+    ctx.repos.subagents.setReworkRound('sub_1', 2);
+
+    expect(requireRecord(ctx.repos.subagents.get('sub_1')).reworkRound).toBe(2);
+  });
+
   it('keeps a mailbox per child and counts unread reports', () => {
     create();
     ctx.repos.subagents.addMessage({

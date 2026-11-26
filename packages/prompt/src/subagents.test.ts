@@ -128,6 +128,7 @@ describe('subagent prompts', () => {
       'action',
       'id',
       'text',
+      'rework',
       'question_id',
       'cursor',
       'timeout_s',

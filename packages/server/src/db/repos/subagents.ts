@@ -28,6 +28,8 @@ export interface CreateSubagentInput {
 export interface SubagentRecord extends SubagentView {
   budgetTokens: number | null;
   depth: SubagentDepth | null;
+  /** Reviewer-driven rework rounds already sent to this child. */
+  reworkRound: number;
   /** Null until the parent closes the child; a closed child keeps its final status. */
   closedAt: string | null;
   /** The status the child declared in its footer, when it declared one. */
@@ -77,6 +79,8 @@ export interface SubagentsRepo {
   recordTelemetry(childId: string, telemetry: SubagentTelemetry): void;
   /** A settled done or failed child goes back to running for a follow-up turn. */
   reopen(childId: string, updatedAt: string): SubagentRecord | undefined;
+  /** Records that one reviewer-driven rework round was sent. */
+  setReworkRound(childId: string, round: number): void;
   /** Marks a child closed; every message row survives. */
   close(childId: string, closedAt: string): SubagentRecord | undefined;
   addMessage(input: AddSubagentMessageInput): SubagentMessage;
@@ -111,7 +115,7 @@ export interface AddSubagentMessageInput {
 }
 
 const COLUMNS =
-  'child_id, thread_id, child_thread_id, type, provider_id, model, status, task, summary, budget_tokens, depth, created_at, updated_at, tool_count, input_tokens, output_tokens, activity, started_at, finished_at, closed_at, footer_status';
+  'child_id, thread_id, child_thread_id, type, provider_id, model, status, task, summary, budget_tokens, depth, created_at, updated_at, tool_count, input_tokens, output_tokens, activity, started_at, finished_at, closed_at, footer_status, rework_round';
 
 const SELECT_COLUMNS = `${COLUMNS}, (SELECT COUNT(*) FROM subagent_messages m WHERE m.child_id = subagents.child_id AND m.direction = 'to-parent' AND m.read_at IS NULL) AS unread, (SELECT r.id FROM subagent_reports r WHERE r.child_id = subagents.child_id ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1) AS report_id, (SELECT length(r.text) FROM subagent_reports r WHERE r.child_id = subagents.child_id ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1) AS report_chars`;
 
@@ -133,6 +137,7 @@ function mapRecord(row: SqlRow): SubagentRecord {
     childThreadId: nullableText(row, 'child_thread_id'),
     budgetTokens: row['budget_tokens'] === null ? null : integer(row, 'budget_tokens'),
     depth: nullableText(row, 'depth') as SubagentDepth | null,
+    reworkRound: integer(row, 'rework_round'),
     closedAt: nullableText(row, 'closed_at'),
     footerStatus: nullableText(row, 'footer_status') as SubagentFooterStatus | null,
     reportId: nullableText(row, 'report_id'),
@@ -223,6 +228,7 @@ export function createSubagentsRepo(db: DatabaseSync): SubagentsRepo {
   const updateReopen = db.prepare(
     "UPDATE subagents SET status = 'running', finished_at = NULL, footer_status = NULL, updated_at = ? WHERE child_id = ? AND status IN ('done','failed')",
   );
+  const updateReworkRound = db.prepare('UPDATE subagents SET rework_round = ? WHERE child_id = ?');
   const updateClosed = db.prepare(
     'UPDATE subagents SET closed_at = ?, updated_at = ? WHERE child_id = ?',
   );
@@ -319,6 +325,9 @@ export function createSubagentsRepo(db: DatabaseSync): SubagentsRepo {
     reopen: (childId, updatedAt) => {
       updateReopen.run(updatedAt, childId);
       return get(childId);
+    },
+    setReworkRound: (childId, round) => {
+      updateReworkRound.run(Math.max(0, Math.floor(round)), childId);
     },
     close: (childId, closedAt) => {
       updateClosed.run(closedAt, closedAt, childId);

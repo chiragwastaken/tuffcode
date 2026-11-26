@@ -397,6 +397,11 @@ export const SUBAGENT_TOOL: {
         type: 'string',
         description: 'Message text for message and report; question text for ask; reply text for answer.',
       },
+      rework: {
+        type: 'boolean',
+        description:
+          'For message: true when sending reviewer findings back as a rework round. The child gets at most three rework rounds.',
+      },
       question_id: {
         type: 'string',
         description: 'For answer: the question id wait or a subagent.question event reported.',

@@ -717,7 +717,12 @@ export const methods = {
   },
   /** Sends a follow-up to a child: queued while it runs, a new turn once it settled. */
   'subagents.message': {
-    params: z.object({ childId: IdSchema, text: z.string().min(1).max(8000) }),
+    params: z.object({
+      childId: IdSchema,
+      text: z.string().min(1).max(8000),
+      /** Reviewer findings sent back as a rework round; capped per child. */
+      rework: z.boolean().optional(),
+    }),
     result: z.object({ delivered: z.enum(['queued', 'started']) }),
   },
   'subagents.messages': {

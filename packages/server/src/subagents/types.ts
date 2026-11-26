@@ -89,7 +89,11 @@ export interface Subagents {
   /** Every action of the `subagent` tool: status, wait, message, stop, inbox, report, ask, answer, close and read. */
   control(request: SubagentControlRequest): Promise<string>;
   /** A follow-up: queued while the child runs, a new turn once it settled. */
-  message(childId: string, text: string): Promise<{ delivered: 'queued' | 'started' }>;
+  message(
+    childId: string,
+    text: string,
+    options?: { rework?: boolean },
+  ): Promise<{ delivered: 'queued' | 'started' }>;
   /**
    * A child's blocking question to its parent. Resolves with the answer, with the
    * stopped text when the child is stopped or closed, or with the fallback text after

@@ -1125,6 +1125,7 @@ async function subagentTool(
       typeof args.cursor === 'string' && args.cursor.trim().length > 0
         ? args.cursor.trim()
         : undefined;
+    const rework = args.rework === true;
     try {
       const output = await deps.subagentControl({
         action,
@@ -1132,6 +1133,7 @@ async function subagentTool(
         ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }),
         ...(id === undefined ? {} : { id }),
         ...(text === undefined ? {} : { text }),
+        ...(rework ? { rework } : {}),
         ...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
         ...(questionId === undefined ? {} : { questionId }),
         ...(cursor === undefined ? {} : { cursor }),

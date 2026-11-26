@@ -13,6 +13,7 @@ import type {
   Thread,
 } from '@tuffcode/contracts';
 import {
+  SUBAGENT_REWORK_LIMIT,
   SUBAGENT_RUN_MINUTES,
   buildSubagentMessage,
   estimateTokens,
@@ -955,12 +956,23 @@ export function createSubagents(deps: SubagentDeps): Subagents {
   async function sendMessage(
     childId: string,
     text: string,
+    options: { rework?: boolean } = {},
   ): Promise<{ delivered: 'queued' | 'started' }> {
     const record = requireRecord(childId);
     const body = text.trim();
     if (body.length === 0) throw badRequest('message text is empty');
     if (record.closedAt !== null) throw conflict('subagent is closed');
     if (record.status === 'cancelled') throw conflict('subagent was stopped');
+    if (options.rework === true) {
+      if (record.reworkRound >= SUBAGENT_REWORK_LIMIT) {
+        const report = repos.subagents.latestReport(childId);
+        const where = report === undefined ? '' : `; the last findings are in report ${report.id}`;
+        throw conflict(
+          `rework limit reached after ${SUBAGENT_REWORK_LIMIT} rounds${where}`,
+        );
+      }
+      repos.subagents.setReworkRound(childId, record.reworkRound + 1);
+    }
     postMessage(record, 'to-child', body);
     if (record.status === 'queued' || record.status === 'running') {
       const queue = inboxes.get(childId) ?? [];
@@ -1126,7 +1138,9 @@ export function createSubagents(deps: SubagentDeps): Subagents {
       }
       case 'message': {
         const record = ownChild(thread.id, request.id);
-        const { delivered } = await sendMessage(record.childId, request.text ?? '');
+        const { delivered } = await sendMessage(record.childId, request.text ?? '', {
+          rework: request.rework === true,
+        });
         return delivered === 'queued'
           ? `Queued for ${record.childId}; it reads the message when its current turn ends.`
           : `${record.childId} reopened with the message; wait for its next report.`;

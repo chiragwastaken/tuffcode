@@ -180,6 +180,8 @@ export interface SubagentControlRequest {
   /** Child id for message, stop, close and read; optional filter for status and wait. */
   id?: string;
   text?: string;
+  /** True when this message sends reviewer findings back as a rework round. */
+  rework?: boolean;
   timeoutSeconds?: number;
   /** The open question `answer` replies to. */
   questionId?: string;

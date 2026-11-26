@@ -455,6 +455,14 @@ const MESSAGE_ATTACHMENTS_SQL = `
 ALTER TABLE messages ADD COLUMN attachments TEXT;
 `;
 
+/**
+ * How many reviewer-driven rework rounds a child has taken. The parent can steer a
+ * child freely, but findings sent back as rework stop at SUBAGENT_REWORK_LIMIT.
+ */
+const SUBAGENT_REWORK_SQL = `
+ALTER TABLE subagents ADD COLUMN rework_round INTEGER NOT NULL DEFAULT 0;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -530,5 +538,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 15,
     name: 'message-attachments',
     sql: MESSAGE_ATTACHMENTS_SQL,
+  },
+  {
+    version: 16,
+    name: 'subagent-rework-round',
+    sql: SUBAGENT_REWORK_SQL,
   },
 ];
