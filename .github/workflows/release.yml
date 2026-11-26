@@ -46,25 +46,37 @@ jobs:
             fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      # electron-builder publishes the release and its assets (exe, latest.yml,
-      # blockmap) through the GitHub provider configured in
-      # apps/desktop/electron-builder.yml. Signing uses CSC_LINK when the
-      # repository secret exists and is skipped when it is empty.
-      # Its upload has dropped assets before (v0.1.1 shipped without the exe and
-      # latest.yml), so a partial publish must not abort the job; the explicit
-      # upload below repairs the asset list and the verify step fails if it did
-      # not. A build failure still fails the job there because the files will
-      # not exist.
-      - name: Build and publish installer
-        continue-on-error: true
+      # Build only: electron-builder never publishes here. Its GitHub provider
+      # tries to create the release and fails with 422 already_exists whenever
+      # the release object was created first (v0.3.1), which also skipped
+      # latest.yml. The publish block in apps/desktop/electron-builder.yml still
+      # supplies the update metadata, so `--publish never` (build:win) writes
+      # the exe, the blockmap and latest.yml into dist without touching GitHub.
+      # Signing uses CSC_LINK when the repository secret exists and is skipped
+      # when it is empty.
+      - name: Build installer
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: pnpm --filter @tuffcode/desktop run build:win:publish
+        run: pnpm --filter @tuffcode/desktop run build:win
 
-      # Deterministic asset upload: --clobber replaces anything electron-builder
-      # managed to attach and adds whatever it missed.
+      # The release is created here, not by electron-builder, so a rerun on a
+      # tag whose release already exists is deterministic: reuse it when it is
+      # present and create it from the tag otherwise.
+      - name: Ensure release exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; reusing it."
+          else
+            echo "Release $GITHUB_REF_NAME is missing; creating it."
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md."
+          fi
+
+      # Deterministic asset upload: --clobber replaces anything a previous run
+      # attached and adds whatever is missing.
       - name: Upload release assets
         shell: bash
         env:
