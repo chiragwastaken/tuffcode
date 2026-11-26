@@ -129,11 +129,17 @@ export const TOOL_SCHEMAS: readonly ToolSchema[] = [
   {
     name: 'grep',
     description:
-      'Search file contents with a regular expression. Returns path, line number, and matching line. Results are capped at 200.',
+      'Search file contents with a regular expression. Respects .gitignore. Returns matching lines, one path per file with a match, or a per-file count. Results are capped at 200.',
     parameters: {
       type: 'object',
       properties: {
         pattern: { type: 'string', description: 'Regular expression to search for.' },
+        mode: {
+          type: 'string',
+          description:
+            'content (default) returns path:line: text, files returns one path per file with a match, count returns path:count.',
+          default: 'content',
+        },
         path: { type: 'string', description: 'File or directory to search.' },
         glob: { type: 'string', description: 'Restrict files by glob, such as **/*.ts.' },
         case_sensitive: {
@@ -240,31 +246,33 @@ export const MEMORY_TOOL: ExtraToolSchema = {
 export const CONFIG_TOOL: ExtraToolSchema = {
   name: 'config',
   description:
-    'Change Tuffcode configuration through validated services: add a provider, add a provider model, add an MCP server, or set one allowlisted setting. provider.add creates the row; the key is set in Settings > Providers and never passed through a tool. Pass capabilities, args, and env as JSON strings.',
+    'Change Tuffcode configuration through validated services. JSON strings: capabilities, args, env, secretEnv. Credentials: secret (alias apiKey) for provider.add, token for an http MCP server, secretEnv for a stdio server. OS keychain only, never echoed.',
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        description:
-          'Action: provider.add, provider.model.add, mcp.add, or settings.set.',
+        description: 'provider.add, provider.model.add, mcp.add, settings.set.',
       },
       providerId: {
         type: 'string',
-        description: 'Provider id for provider.add and provider.model.add.',
+        description: 'Provider id for provider.model.add.',
       },
       kind: {
         type: 'string',
-        description:
-          'Provider kind for provider.add: claude, codex, anthropic, openai-compatible, acp, or opencode.',
+        description: 'claude, codex, anthropic, openai-compatible, acp, or opencode.',
       },
       label: {
         type: 'string',
-        description: 'Human readable provider label.',
+        description: 'Provider or server label.',
       },
       baseUrl: {
         type: 'string',
-        description: 'Base URL for an openai-compatible provider.',
+        description: 'Base URL for openai-compatible providers.',
+      },
+      model: {
+        type: 'string',
+        description: 'Default model for provider.add.',
       },
       modelId: {
         type: 'string',
@@ -272,43 +280,70 @@ export const CONFIG_TOOL: ExtraToolSchema = {
       },
       contextWindow: {
         type: 'integer',
-        description: 'Context window in tokens for the model.',
+        description: 'Context window in tokens.',
         minimum: 1,
       },
       maxOutputTokens: {
         type: 'integer',
-        description: 'Maximum output tokens for the model.',
+        description: 'Maximum output tokens.',
         minimum: 1,
       },
       capabilities: {
         type: 'string',
-        description:
-          'JSON object string with tools, vision, reasoning, and reasoningEfforts, for example {"tools":true}.',
+        description: 'JSON object string: tools, vision, reasoning, reasoningEfforts.',
       },
       reasoning: {
         type: 'string',
-        description: 'Reasoning effort for the model: none, minimal, low, medium, or high.',
+        description: 'Reasoning effort: none, minimal, low, medium, high.',
       },
       command: {
         type: 'string',
-        description: 'Executable for mcp.add.',
+        description: 'Executable for a stdio mcp.add.',
       },
       args: {
         type: 'string',
-        description: 'JSON array of strings of command arguments for mcp.add, for example ["--stdio"].',
+        description: 'JSON array of strings of arguments, for example ["--stdio"].',
       },
       env: {
         type: 'string',
         description:
-          'JSON object string of environment variables for mcp.add. Secret-like keys are rejected; set those in Settings > MCP env.',
+          'JSON object string of plain env vars. Secret-like keys are rejected; pass them in secretEnv.',
+      },
+      transport: {
+        type: 'string',
+        description: 'stdio or http. Defaults to stdio.',
+      },
+      url: {
+        type: 'string',
+        description: 'HTTP endpoint for an http mcp.add.',
+      },
+      cwd: {
+        type: 'string',
+        description: 'Working directory for stdio.',
+      },
+      token: {
+        type: 'string',
+        description: 'Bearer token for an http mcp.add. Keychain only.',
+      },
+      secretEnv: {
+        type: 'string',
+        description: 'Secret env vars JSON for a stdio mcp.add. Keychain only.',
+      },
+      secret: {
+        type: 'string',
+        description: 'Provider credential for provider.add. Keychain only, never echoed.',
+      },
+      apiKey: {
+        type: 'string',
+        description: 'Alias of secret. Keychain only.',
       },
       key: {
         type: 'string',
-        description: 'Settings key for settings.set. Only the documented allowlist is accepted.',
+        description: 'Settings key for settings.set.',
       },
       value: {
         type: 'string',
-        description: 'Settings value as text for settings.set.',
+        description: 'Settings value for settings.set.',
       },
     },
     required: ['action'],
