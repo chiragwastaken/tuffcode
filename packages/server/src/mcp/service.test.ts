@@ -148,6 +148,17 @@ describe('MCP service', () => {
     expect(service.list()[0]?.label).toBe('renamed');
   });
 
+  it('drops the cached tool list on invalidate and re-reads on the next call', async () => {
+    const spawnFn = vi.fn(() => autoChild());
+    const service = createMcpService(ctx.repos, { spawnFn });
+
+    await service.listTools(server.id);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    await service.invalidate();
+    await expect(service.listTools(server.id)).resolves.toEqual(TOOLS);
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+
   it('removes a server and its cache entry', async () => {
     const spawnFn = vi.fn(() => autoChild());
     const service = createMcpService(ctx.repos, { spawnFn });
@@ -311,6 +322,31 @@ describe('MCP connector auth', () => {
       type: 'http',
       url: remote.url,
       headers: { Authorization: 'Bearer token-1' },
+    });
+  });
+
+  it('re-reads a rotated credential on invalidate', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const secrets = fakeSecrets();
+    const service = createMcpService(ctx.repos, { secrets });
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'bearer',
+      secret: 'old-token',
+      secretPrefix: '',
+    });
+    expect(service.launchMap()[saved.label]).toMatchObject({
+      headers: { Authorization: 'old-token' },
+    });
+
+    secrets.values.set(`mcp:${saved.id}`, 'new-token');
+    await service.invalidate();
+
+    expect(service.launchMap()[saved.label]).toMatchObject({
+      headers: { Authorization: 'new-token' },
     });
   });
 

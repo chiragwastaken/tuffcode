@@ -277,6 +277,15 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
   }
 
   /**
+   * Discovery is stateless, so a config write only has to tell the palette to re-list.
+   * Connectors already broadcast `mcp.updated` from the MCP service on save.
+   */
+  function emitDiscovery(): void {
+    deps.emit?.({ kind: 'event', type: 'skills.updated', payload: {} });
+    deps.emit?.({ kind: 'event', type: 'commands.updated', payload: {} });
+  }
+
+  /**
    * One write path for provider rows. A secret travels to the provider service, which
    * puts it in the OS keychain; it is never part of the returned tool text.
    */
@@ -472,8 +481,12 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
             if (action === 'add') return memoryAdd(args, ctx.cwd, ctx.threadId);
             throw new Error(`unknown memory action: ${action}`);
           }
-          case 'config':
-            return await configAction(args);
+          case 'config': {
+            const result = await configAction(args);
+            // A config write can change what the palette lists; re-list on the next open.
+            emitDiscovery();
+            return result;
+          }
           case 'todo': {
             if (deps.todos === undefined) throw new Error('the todo tool is unavailable');
             const scope = resolveScope(ctx.cwd, ctx.threadId);

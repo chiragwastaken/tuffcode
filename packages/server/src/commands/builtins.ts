@@ -76,6 +76,13 @@ export const BUILT_IN_COMMANDS: readonly CommandDefinition[] = [
     path: null,
     argumentHint: '[command]',
   },
+  {
+    name: 'reload',
+    description: 'Reload settings, providers, MCP servers, skills and commands',
+    body: '',
+    path: null,
+    argumentHint: null,
+  },
 ];
 
 export const BUILT_IN_NAMES: ReadonlySet<string> = new Set(

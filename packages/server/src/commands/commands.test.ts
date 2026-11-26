@@ -1,8 +1,9 @@
-import type { Command, CommandRunResult } from '@tuffcode/contracts';
+import type { Command, CommandRunResult, ServerEvent } from '@tuffcode/contracts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Council } from '../council/types.js';
+import { createEventBus } from '../events.js';
 import { addProject } from '../projects.js';
 import type { Runner } from '../runner/runner.js';
 import type { Subagents } from '../subagents/types.js';
@@ -242,6 +243,7 @@ describe('commands.run', () => {
       'compact',
       'clear',
       'help',
+      'reload',
     ]);
     expect(hints.get('subagent')).toBe('<type> <task>');
     expect(hints.get('model')).toBeNull();
@@ -447,5 +449,52 @@ describe('commands.run', () => {
       input: '/help',
     })) as CommandRunResult;
     expect(result.kind).toBe('text');
+  });
+
+  it('reloads live configuration and prints the summary line', async () => {
+    const reload = vi.fn(() =>
+      Promise.resolve('Reloaded 2 providers, 1 MCP servers, 3 skills, 11 commands.'),
+    );
+    const result = await runCommand(
+      { repos: ctx.repos, reload },
+      { threadId: harness.threadId, input: '/reload' },
+    );
+    expect(result).toEqual({
+      kind: 'text',
+      text: 'Reloaded 2 providers, 1 MCP servers, 3 skills, 11 commands.',
+    });
+    expect(reload).toHaveBeenCalledExactlyOnceWith(harness.projectId);
+  });
+
+  it('reports reload unavailable when the slice is not wired', async () => {
+    const result = await runCommand(
+      { repos: ctx.repos },
+      { threadId: harness.threadId, input: '/reload' },
+    );
+    expect(result).toEqual({ kind: 'error', message: 'Reload is not available in this build.' });
+  });
+
+  it('turns a throwing reload into an error result instead of a rejected command', async () => {
+    const result = await runCommand(
+      { repos: ctx.repos, reload: () => Promise.reject(new Error('disk gone')) },
+      { threadId: harness.threadId, input: '/reload' },
+    );
+    expect(result).toEqual({ kind: 'error', message: 'Reload failed: disk gone' });
+  });
+
+  it('reloads through the RPC handler map and broadcasts the settings frame', async () => {
+    const events: ServerEvent[] = [];
+    const bus = createEventBus();
+    bus.subscribe((event) => events.push(event));
+    const handler = createCommandHandlers({ repos: ctx.repos, bus }).get('commands.run');
+    if (handler === undefined) throw new Error('commands.run is not registered');
+    const result = (await handler({
+      threadId: harness.threadId,
+      input: '/reload',
+    })) as CommandRunResult;
+    expect(result.kind).toBe('text');
+    if (result.kind === 'text') expect(result.text).toMatch(/^Reloaded \d+ providers/);
+    expect(events.some((event) => event.type === 'settings.updated')).toBe(true);
+    expect(events.some((event) => event.type === 'commands.updated')).toBe(true);
   });
 });

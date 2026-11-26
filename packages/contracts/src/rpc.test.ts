@@ -1372,6 +1372,8 @@ describe('server events', () => {
         payload: { loginId: 'login-1', providerId: 'prov-claude', ok: true, detail: 'signed in' },
       },
       { kind: 'event', type: 'settings.updated', payload: DEFAULT_SETTINGS },
+      { kind: 'event', type: 'commands.updated', payload: {} },
+      { kind: 'event', type: 'skills.updated', payload: {} },
       {
         kind: 'event',
         type: 'context.updated',
@@ -1387,7 +1389,7 @@ describe('server events', () => {
       { kind: 'event', type: 'server.warning', payload: { message: 'disk low', code: 'disk' } },
     ];
 
-    expect(frames).toHaveLength(14);
+    expect(frames).toHaveLength(16);
     for (const frame of frames) {
       expect(ServerEventSchema.safeParse(frame).success, frame.type).toBe(true);
     }

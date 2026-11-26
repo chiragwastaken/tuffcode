@@ -3,11 +3,13 @@ import type { Council } from '../council/types.js';
 import type { Repos } from '../db/repos/index.js';
 import { notFound } from '../errors.js';
 import type { EventBus } from '../events.js';
+import type { McpService } from '../mcp/service.js';
 import type { RpcHandler, RpcHandlers } from '../rpc.js';
 import type { Runner } from '../runner/runner.js';
 import type { Subagents } from '../subagents/types.js';
 import { pluginCommandDirs } from '../skills/roots.js';
 import { listCommands } from './discover.js';
+import { reloadConfig } from './reload.js';
 import { runCommand } from './run.js';
 
 export interface CommandHandlerDeps {
@@ -17,6 +19,8 @@ export interface CommandHandlerDeps {
   council?: Council;
   subagents?: Subagents;
   runner?: Pick<Runner, 'disposeThread'>;
+  /** Cleared and re-warmed by `/reload`; absent skips the connector section. */
+  mcp?: Pick<McpService, 'invalidate'>;
 }
 
 function warningSink(bus: EventBus | undefined): ((message: string) => void) | undefined {
@@ -46,6 +50,16 @@ export function createCommandHandlers(deps: CommandHandlerDeps): RpcHandlers {
         ...(deps.subagents === undefined ? {} : { subagents: deps.subagents }),
         ...(deps.runner === undefined ? {} : { runner: deps.runner }),
         ...(onWarning === undefined ? {} : { onWarning }),
+        reload: (projectId) =>
+          reloadConfig(
+            {
+              repos: deps.repos,
+              ...(deps.bus === undefined ? {} : { bus: deps.bus }),
+              ...(deps.mcp === undefined ? {} : { mcp: deps.mcp }),
+              ...(onWarning === undefined ? {} : { onWarning }),
+            },
+            projectId,
+          ),
       },
       { threadId, input },
     );

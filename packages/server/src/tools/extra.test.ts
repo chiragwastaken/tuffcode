@@ -104,6 +104,7 @@ describe('extra tools', () => {
       },
       launchMap: () => ({}),
       warmSecrets: async () => undefined,
+      invalidate: async () => undefined,
       test: async () => ({ ok: true, detail: 'Connected', tools: [] }),
       listTools: async () => options.mcpTools ?? [],
       callTool: async (id, tool, args) => {
@@ -330,7 +331,11 @@ describe('extra tools', () => {
       },
     });
     expect(h.providerCalls[0]?.secret).toBeUndefined();
-    expect(h.events.map((event) => event.type)).toEqual(['providers.updated']);
+    expect(h.events.map((event) => event.type)).toEqual([
+      'providers.updated',
+      'skills.updated',
+      'commands.updated',
+    ]);
   });
 
   it('passes a provider secret to the service and never echoes it', async () => {
@@ -419,7 +424,11 @@ describe('extra tools', () => {
       { id: 'm1', label: 'm1', isDefault: true },
       { id: 'm2', label: 'm2', isDefault: false },
     ]);
-    expect(h.events.map((event) => event.type)).toEqual(['providers.updated']);
+    expect(h.events.map((event) => event.type)).toEqual([
+      'providers.updated',
+      'skills.updated',
+      'commands.updated',
+    ]);
   });
 
   it('replaces an existing provider model by id and keeps its label', async () => {
@@ -602,7 +611,24 @@ describe('extra tools', () => {
         type: 'settings.updated',
         payload: expect.objectContaining({ maxOutputTokens: 4096 }),
       },
+      { kind: 'event', type: 'skills.updated', payload: {} },
+      { kind: 'event', type: 'commands.updated', payload: {} },
     ]);
+  });
+
+  it('tells the palette to re-list after a config write and stays quiet on a failure', async () => {
+    const h = harness();
+
+    await h.run('config', { action: 'settings.set', key: 'theme', value: 'light' }, 'C:/work');
+    expect(h.events.map((event) => event.type)).toEqual([
+      'settings.updated',
+      'skills.updated',
+      'commands.updated',
+    ]);
+
+    h.events.length = 0;
+    await h.run('config', { action: 'settings.set', key: 'shell', value: 'pwsh' }, 'C:/work');
+    expect(h.events).toEqual([]);
   });
 
   it('rejects an invalid value for an allowed setting', async () => {
