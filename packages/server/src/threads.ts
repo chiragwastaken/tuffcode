@@ -2,8 +2,11 @@ import type { ExecutionMode, PermissionMode, Thread } from '@tuffcode/contracts'
 import { newId, worktreesRoot } from '@tuffcode/shared';
 import type { Repos } from './db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from './errors.js';
-import { provisionWorktree, removeWorktree } from './git/worktree.js';
+import { provisionWorktree, removeWorktree, samePath } from './git/worktree.js';
 import { DEFAULT_THREAD_TITLE } from './titles.js';
+
+/** Where a thread runs: the project folder itself, or an isolated worktree. */
+export type ThreadWorkspace = 'folder' | 'worktree';
 
 export interface CreateThreadRequest {
   projectId: string;
@@ -12,6 +15,8 @@ export interface CreateThreadRequest {
   modelId: string;
   executionMode: ExecutionMode;
   permissionMode: PermissionMode;
+  /** Defaults to `folder`, so callers that omit it keep the project checkout. */
+  workspace?: ThreadWorkspace;
   baseBranch?: string;
 }
 
@@ -26,9 +31,27 @@ export interface UpdateThreadRequest {
 }
 
 /**
- * Creates the thread row and its worktree on a fresh `tuffcode/<threadId>` branch.
- * The worktree is provisioned first; if the insert fails the worktree is removed so
- * the repository is never left with an orphan checkout.
+ * Serializes worktree provisioning. Two threads created at the same moment would
+ * otherwise run `git worktree add` concurrently, and git locks the repository's
+ * worktree metadata, so one of them would fail with a spurious lock error.
+ */
+let worktreeQueue: Promise<unknown> = Promise.resolve();
+
+function withWorktreeLock<T>(task: () => Promise<T>): Promise<T> {
+  const result = worktreeQueue.then(task, task);
+  worktreeQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+/**
+ * Creates the thread row. `folder` (the default) runs in the project checkout with a
+ * null branch; `worktree` provisions a fresh `tuffcode/<threadId>` branch first. The
+ * worktree is provisioned before the insert, and if the insert fails the worktree is
+ * removed so the repository is never left with an orphan checkout. With the Worktrees
+ * capability off a requested worktree is forced back to folder rather than failing.
  */
 export async function createThread(repos: Repos, request: CreateThreadRequest): Promise<Thread> {
   const project = repos.projects.get(request.projectId);
@@ -43,6 +66,9 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
   const id = newId('thr');
   const baseBranch = request.baseBranch ?? project.defaultBranch;
   const settings = repos.settings.get();
+  const requestedWorkspace = request.workspace ?? 'folder';
+  const workspace: ThreadWorkspace =
+    requestedWorkspace === 'worktree' && settings.capabilities.worktrees ? 'worktree' : 'folder';
   const now = new Date().toISOString();
   const row = {
     id,
@@ -58,8 +84,8 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
     createdAt: now,
     updatedAt: now,
   };
-  // With the Worktrees capability off the thread works in the project checkout itself.
-  if (!settings.capabilities.worktrees) {
+  // A folder-backed thread owns no worktree: it runs in the project checkout itself.
+  if (workspace === 'folder') {
     return repos.threads.create({
       ...row,
       worktreePath: project.path,
@@ -68,13 +94,15 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
     });
   }
   const root = settings.worktreeRoot ?? worktreesRoot();
-  const worktree = await provisionWorktree({
-    repoPath: project.path,
-    baseBranch,
-    projectId: project.id,
-    threadId: id,
-    worktreesRoot: root,
-  });
+  const worktree = await withWorktreeLock(() =>
+    provisionWorktree({
+      repoPath: project.path,
+      baseBranch,
+      projectId: project.id,
+      threadId: id,
+      worktreesRoot: root,
+    }),
+  );
   try {
     return repos.threads.create({
       ...row,
@@ -85,7 +113,9 @@ export async function createThread(repos: Repos, request: CreateThreadRequest): 
       updatedAt: now,
     });
   } catch (error) {
-    await removeWorktree(project.path, worktree.path).catch(() => undefined);
+    await removeWorktree(project.path, worktree.path, { worktreesRoot: root }).catch(
+      () => undefined,
+    );
     throw error;
   }
 }
@@ -141,14 +171,6 @@ export function searchThreads(repos: Repos, query: string, limit = 20): ThreadSe
   return hits;
 }
 
-function samePath(left: string, right: string): boolean {
-  const normalize = (value: string): string => {
-    const trimmed = value.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-    return process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
-  };
-  return normalize(left) === normalize(right);
-}
-
 export function getThread(repos: Repos, id: string): Thread {
   const thread = repos.threads.get(id);
   if (thread === undefined) throw notFound('thread not found');
@@ -193,7 +215,9 @@ export function updateThread(repos: Repos, request: UpdateThreadRequest): Thread
 
 /**
  * Deletes the thread row. With `removeWorktree` the checkout is removed from git and
- * disk first; without it the directory is left in place for manual recovery.
+ * disk first; without it the directory is left in place for manual recovery. A
+ * folder-backed thread (null branch, project path) owns no worktree, so its delete
+ * never touches the project checkout.
  */
 export async function deleteThread(
   repos: Repos,
@@ -201,11 +225,12 @@ export async function deleteThread(
   removeWorktreeFlag: boolean,
 ): Promise<void> {
   const thread = getThread(repos, id);
-  if (removeWorktreeFlag && thread.worktreePath !== null) {
+  if (removeWorktreeFlag && thread.branch !== null && thread.worktreePath !== null) {
     const project = repos.projects.get(thread.projectId);
-    // A thread that ran in the project checkout (worktrees off) owns no worktree.
     if (project !== undefined && !samePath(project.path, thread.worktreePath)) {
-      await removeWorktree(project.path, thread.worktreePath);
+      await removeWorktree(project.path, thread.worktreePath, {
+        worktreesRoot: repos.settings.get().worktreeRoot ?? worktreesRoot(),
+      });
     }
   }
   repos.threads.remove(id);

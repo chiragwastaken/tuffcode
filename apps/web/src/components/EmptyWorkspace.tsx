@@ -10,7 +10,7 @@ export function EmptyWorkspace() {
       <EmptyState
         icon={FolderOpen}
         title="No projects yet"
-        description="Add a local repository to get started. Tuffcode gives every thread its own git worktree, so your main checkout stays untouched."
+        description="Add a local repository to get started. New chats run in the project folder, with an optional isolated worktree when you want one."
         action={
           <Button onClick={addProject} disabled={adding}>
             <FolderPlus strokeWidth={1.75} />

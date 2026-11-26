@@ -4,7 +4,7 @@ import type { Project } from '@tuffcode/contracts';
 import { newId, worktreesRoot } from '@tuffcode/shared';
 import type { Repos } from './db/repos/index.js';
 import { badRequest, conflict, notFound } from './errors.js';
-import { detectDefaultBranch, removeWorktree, repoRoot } from './git/worktree.js';
+import { detectDefaultBranch, removeWorktree, repoRoot, samePath } from './git/worktree.js';
 
 /**
  * Adds the repository containing `path`. The stored path is the repository root, so
@@ -34,7 +34,8 @@ export function listProjects(repos: Repos): Project[] {
 /**
  * Removes a project row (threads cascade). With `deleteWorktrees` every thread
  * worktree is removed from git and disk first, including the project's worktree
- * directory under the configured root.
+ * directory under the configured root. Folder-backed threads have no worktree of
+ * their own, so the project checkout is never a removal target.
  */
 export async function removeProject(
   repos: Repos,
@@ -44,12 +45,13 @@ export async function removeProject(
   const project = repos.projects.get(id);
   if (project === undefined) throw notFound('project not found');
   if (deleteWorktrees) {
-    for (const thread of repos.threads.listByProject(id)) {
-      if (thread.worktreePath !== null) {
-        await removeWorktree(project.path, thread.worktreePath);
-      }
-    }
     const root = repos.settings.get().worktreeRoot ?? worktreesRoot();
+    for (const thread of repos.threads.listByProject(id)) {
+      // A null branch means the thread ran in the checkout; there is nothing to remove.
+      if (thread.branch === null || thread.worktreePath === null) continue;
+      if (samePath(thread.worktreePath, project.path)) continue;
+      await removeWorktree(project.path, thread.worktreePath, { worktreesRoot: root });
+    }
     rmSync(join(root, id), { recursive: true, force: true });
   }
   repos.projects.remove(id);

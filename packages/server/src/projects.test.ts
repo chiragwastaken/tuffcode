@@ -59,6 +59,7 @@ describe('projects service', () => {
       modelId: 'model-x',
       executionMode: 'work',
       permissionMode: 'ask',
+      workspace: 'worktree',
     });
     const worktreePath = thread.worktreePath;
     expect(worktreePath).not.toBeNull();
@@ -68,5 +69,25 @@ describe('projects service', () => {
     expect(ctx.repos.projects.get(project.id)).toBeUndefined();
     expect(ctx.repos.threads.list(project.id)).toHaveLength(0);
     expect(existsSync(worktreePath ?? '')).toBe(false);
+  });
+
+  it('removes a project with folder threads without deleting the checkout', async () => {
+    const project = await addProject(ctx.repos, repo);
+    addTestProvider(ctx.repos);
+    const thread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      workspace: 'folder',
+    });
+    expect(thread.worktreePath).toBe(project.path);
+    expect(thread.branch).toBeNull();
+
+    await removeProject(ctx.repos, project.id, true);
+    expect(ctx.repos.projects.get(project.id)).toBeUndefined();
+    expect(existsSync(join(repo, 'README.md'))).toBe(true);
+    expect(existsSync(join(repo, '.git'))).toBe(true);
   });
 });

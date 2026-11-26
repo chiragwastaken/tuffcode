@@ -5,6 +5,7 @@ import {
   addMockProvider,
   addProjectThroughUi,
   closeDock,
+  confirmNewThreadDialog,
   createThreadThroughSidebar,
   openDock,
   seedDefaultModel,
@@ -37,6 +38,7 @@ test('splits with drop zones into a 2x2, resizes, persists, and opens a side cha
   const firstThreadId = await selectedRow.getAttribute('data-thread-id');
   // A second thread gives the sidebar a row to drag into a tile.
   await page.getByTestId('sidebar-new-thread').click();
+  await confirmNewThreadDialog(page);
   await expect(page.getByTestId('thread-title')).toBeVisible();
   await expect(page.getByTestId('thread-row')).toHaveCount(2);
   const secondThreadId = await page
