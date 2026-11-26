@@ -12,7 +12,7 @@ import {
 } from '../thread/timeline-items';
 import { groupTurnBlocks, type TimelineBlock } from '../thread/turn-blocks';
 import { SUBAGENT_MESSAGE_KIND_LABEL, subagentMessageDirectionLabel } from './subagent-model';
-import { useSubagentMessages } from './use-subagents';
+import { useSubagentEvents, useSubagentMessages } from './use-subagents';
 
 const EMPTY_APPROVALS = {};
 
@@ -46,15 +46,16 @@ export function SubagentTimeline({ child, theme }: SubagentTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const messages = useSubagentMessages(child);
+  const events = useSubagentEvents(child);
 
   const blocks = useMemo(() => {
     const items = groupTimeline({
-      events: child.events,
+      events,
       userMessages: [],
       approvals: EMPTY_APPROVALS,
     });
     return groupTurnBlocks(items);
-  }, [child.events]);
+  }, [events]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;

@@ -4,6 +4,7 @@ import type {
   SubagentMessageKind,
   SubagentStatus,
   SubagentType,
+  ThreadEventRow,
 } from '@tuffcode/contracts';
 import { Compass, Hammer, ListTree, NotebookPen, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { isTerminalSubagentStatus, type SubagentChild } from '../../store/app-store';
@@ -173,6 +174,21 @@ export const SUBAGENT_MESSAGE_KIND_LABEL: Record<SubagentMessageKind, string> = 
 /** Which way a mailbox row travelled, in words the parent can read. */
 export function subagentMessageDirectionLabel(message: SubagentMessage): string {
   return message.direction === 'to-child' ? 'parent to child' : 'child to parent';
+}
+
+/**
+ * A child's persisted event rows plus the live frames the store holds. The seq is the
+ * cursor for both, so a live frame wins when it covers the same row, and a reload
+ * rebuilds the pane instead of showing an empty timeline.
+ */
+export function mergeChildEvents(
+  persisted: readonly ThreadEventRow[],
+  live: readonly ThreadEventRow[],
+): ThreadEventRow[] {
+  const bySeq = new Map<number, ThreadEventRow>();
+  for (const row of persisted) bySeq.set(row.seq, row);
+  for (const row of live) bySeq.set(row.seq, row);
+  return [...bySeq.values()].toSorted((left, right) => left.seq - right.seq);
 }
 
 /**

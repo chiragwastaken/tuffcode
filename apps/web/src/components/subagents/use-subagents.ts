@@ -1,8 +1,8 @@
-import type { SubagentMessage } from '@tuffcode/contracts';
+import type { SubagentMessage, ThreadEventRow } from '@tuffcode/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { isTerminalSubagentStatus, useAppStore, type SubagentChild } from '../../store/app-store';
-import { mergeSubagentMessages } from './subagent-model';
+import { mergeChildEvents, mergeSubagentMessages } from './subagent-model';
 
 /** The list refresh debounce: a spawn and its settle frame arrive close together. */
 const LIST_REFRESH_MS = 250;
@@ -65,6 +65,37 @@ export function useSubagentClock(children: readonly SubagentChild[]): number {
   }, [running]);
 
   return now;
+}
+
+/**
+ * The child's own timeline: durable rows for its thread plus the live frames the store
+ * already holds. The child thread id arrives with the list row, so a reload that opens
+ * the pane replays the reasoning, tools and answer instead of showing only the task.
+ */
+export function useSubagentEvents(child: SubagentChild): ThreadEventRow[] {
+  const rpc = useRpc();
+  const [persisted, setPersisted] = useState<ThreadEventRow[]>([]);
+  const childThreadId = child.childThreadId;
+
+  useEffect(() => {
+    if (childThreadId === null) {
+      setPersisted([]);
+      return;
+    }
+    let disposed = false;
+    void rpc.request('threads.events', { id: childThreadId, sinceSeq: 0, limit: 1000 }).then(
+      (page) => {
+        if (!disposed) setPersisted(page.events);
+      },
+      // A failed replay leaves the live frames on screen.
+      () => undefined,
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [rpc, childThreadId]);
+
+  return useMemo(() => mergeChildEvents(persisted, child.events), [persisted, child.events]);
 }
 
 /**

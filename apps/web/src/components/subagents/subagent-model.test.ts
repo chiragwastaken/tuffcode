@@ -1,8 +1,10 @@
+import type { ThreadEventRow } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SubagentChild } from '../../store/app-store';
 import {
   SUBAGENT_CHIP_LIMIT,
   childForThread,
+  mergeChildEvents,
   mergeSubagentMessages,
   selectActiveSubagent,
   subagentElapsedMs,
@@ -171,6 +173,30 @@ describe('subagentElapsedMs', () => {
       ),
     ).toBe(4500);
     expect(subagentElapsedMs(child({ childId: 'a', startedAt: null }), 1)).toBeNull();
+  });
+});
+
+describe('mergeChildEvents', () => {
+  const event = (seq: number, type: ThreadEventRow['type']): ThreadEventRow => ({
+    id: seq + 1,
+    threadId: 'thr_child',
+    seq,
+    type,
+    payload: { type } as ThreadEventRow['payload'],
+    createdAt: T0,
+  });
+
+  it('replays persisted rows in seq order', () => {
+    const persisted = [event(1, 'turn.started'), event(2, 'text.delta')];
+    expect(mergeChildEvents(persisted, []).map((row) => row.seq)).toEqual([1, 2]);
+  });
+
+  it('lets a live frame replace the persisted row at the same seq', () => {
+    const persisted = [event(1, 'turn.started'), event(2, 'text.delta')];
+    const live = [event(2, 'tool.started'), event(3, 'turn.finished')];
+    const merged = mergeChildEvents(persisted, live);
+    expect(merged.map((row) => row.seq)).toEqual([1, 2, 3]);
+    expect(merged[1]?.type).toBe('tool.started');
   });
 });
 
