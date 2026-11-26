@@ -4,17 +4,23 @@ import { expect, test } from './fixtures';
 import {
   addMockProvider,
   addProjectThroughUi,
-  createThreadThroughSidebar,
-  seedDefaultModel,
   closeDock,
+  createThreadThroughSidebar,
   openDock,
+  seedDefaultModel,
 } from './helpers';
 
+/** Every leaf carries its pane id, so the row can be counted and scoped. */
+const LEAF = /^pane-leaf-/;
+const VERTICAL_SPLITTER = '[data-testid="pane-splitter"][data-split-orientation="vertical"]';
+
 /**
- * The split-pane row: two and three panes, a resized splitter, a tab dragged
- * between headers, the narrow collapse, and a layout that survives a restart.
+ * The split workspace: drop zones that build a 2x2 out of drags alone, a
+ * resized splitter, a side chat opened from a sidebar row, two independent
+ * composers, a closed tile, a nested layout that survives a restart, the narrow
+ * collapse, and the keyboard chords.
  */
-test('splits into two and three panes, drags a tab, collapses narrow, and persists', async ({
+test('splits with drop zones into a 2x2, resizes, persists, and opens a side chat', async ({
   session,
   workspace,
   mock,
@@ -25,126 +31,167 @@ test('splits into two and three panes, drags a tab, collapses narrow, and persis
   await addProjectThroughUi(session, workspace);
   await addMockProvider(page, mock);
   await seedDefaultModel(rpc);
-  await createThreadThroughSidebar(page);
 
-  // The inspector's 560px column would put the row below 1100px, where panes
+  await createThreadThroughSidebar(page);
+  const selectedRow = page.locator('[data-testid="thread-row"][aria-current="page"]');
+  const firstThreadId = await selectedRow.getAttribute('data-thread-id');
+  // A second thread gives the sidebar a row to drag into a tile.
+  await page.getByTestId('sidebar-new-thread').click();
+  await expect(page.getByTestId('thread-title')).toBeVisible();
+  await expect(page.getByTestId('thread-row')).toHaveCount(2);
+  const secondThreadId = await page
+    .locator(`[data-testid="thread-row"]:not([data-thread-id="${firstThreadId}"])`)
+    .getAttribute('data-thread-id');
+  expect(secondThreadId).not.toBe(firstThreadId);
+  const rowOf = (threadId: string | null) =>
+    page.locator(`[data-testid="thread-row"][data-thread-id="${threadId}"]`);
+  await rowOf(firstThreadId).click();
+
+  // The inspector's column would put the row below 1100px, where panes
   // deliberately collapse into tabs.
   await closeDock(page);
 
   const workspaceEl = page.getByTestId('pane-workspace');
+  const leaves = page.getByTestId(LEAF);
   await expect(workspaceEl).toHaveAttribute('data-narrow', 'false');
-  await expect(page.getByTestId('pane')).toHaveCount(1);
+  await expect(leaves).toHaveCount(1);
   await expect(page.getByTestId('pane-tab').filter({ hasText: 'Thread' })).toBeVisible();
 
-  // Two panes: thread and diff, with a draggable splitter between them.
-  await page.getByTestId('pane-split').click();
-  await page.getByTestId('pane-split-surface-diff').click();
-  await expect(page.getByTestId('pane')).toHaveCount(2);
-  const diffPane = page.getByTestId('pane').nth(1);
-  await expect(diffPane).toHaveAttribute('data-surface', 'diff');
-  await expect(diffPane.getByTestId('diff-panel')).toBeVisible();
-  await expect(diffPane.getByRole('status', { name: 'Loading diff' })).toHaveCount(0);
+  // A sidebar thread row dropped on the right edge opens a side chat tile.
+  const threadLeaf = page.getByTestId('pane-leaf-pane-1');
+  await rowOf(secondThreadId).dragTo(threadLeaf.getByTestId('pane-drop-zone-right'), {
+    force: true,
+    steps: 8,
+  });
+
+  await expect(leaves).toHaveCount(2);
+  const sideLeaf = page.getByTestId('pane-leaf-pane-2');
+  await expect(sideLeaf).toHaveAttribute('data-surface', /^thread:/);
   await expect(page.getByTestId('pane-splitter')).toHaveCount(1);
+
+  // Each tile is a full session surface with its own composer and its own draft.
+  await expect(page.getByTestId('composer-input')).toHaveCount(2);
+  await expect(threadLeaf.getByTestId('composer-input')).toBeVisible();
+  await expect(sideLeaf.getByTestId('composer-input')).toBeVisible();
+  await sideLeaf.getByTestId('composer-input').fill('side chat draft');
+  await expect(threadLeaf.getByTestId('composer-input')).toHaveValue('');
 
   const shots = process.env['TUFFCODE_E2E_SHOTS'];
   const prefix = process.env['TUFFCODE_E2E_SHOT_PREFIX'] ?? 'panes';
   if (shots) {
     mkdirSync(shots, { recursive: true });
-    await page.screenshot({ path: join(shots, `${prefix}-two.png`) });
+    await page.screenshot({ path: join(shots, `${prefix}-two-tiles.png`) });
   }
 
-  // The splitter trades width with its neighbour, and a double click restores 50/50.
-  const threadPane = page.getByTestId('pane').first();
-  const beforeDrag = await threadPane.boundingBox();
-  const splitter = page.getByTestId('pane-splitter');
-  const splitterBox = await splitter.boundingBox();
-  if (beforeDrag === null || splitterBox === null) throw new Error('pane row has no box');
-  await page.mouse.move(
-    splitterBox.x + splitterBox.width / 2,
-    splitterBox.y + splitterBox.height / 2,
-  );
+  // A tab dragged onto the bottom edge splits that tile downwards.
+  await threadLeaf.getByTestId('pane-add-tab').click();
+  await page.getByTestId('pane-add-surface-diff').click();
+  await expect(threadLeaf.getByTestId('pane-tab')).toHaveCount(2);
+  await threadLeaf
+    .getByTestId('pane-tab')
+    .filter({ hasText: 'Diff' })
+    .dragTo(threadLeaf.getByTestId('pane-drop-zone-bottom'), { force: true, steps: 8 });
+
+  await expect(leaves).toHaveCount(3);
+  const diffLeaf = page.getByTestId('pane-leaf-pane-3');
+  await expect(diffLeaf).toHaveAttribute('data-surface', 'diff');
+  await expect(diffLeaf.getByTestId('diff-panel')).toBeVisible();
+  await expect(threadLeaf).toHaveAttribute('data-surface', 'thread');
+
+  // The same gesture on the other column completes the 2x2.
+  await sideLeaf.getByTestId('pane-add-tab').click();
+  await page.getByTestId('pane-add-surface-terminal').click();
+  await sideLeaf
+    .getByTestId('pane-tab')
+    .filter({ hasText: 'Terminal' })
+    .dragTo(sideLeaf.getByTestId('pane-drop-zone-bottom'), { force: true, steps: 8 });
+
+  await expect(leaves).toHaveCount(4);
+  const terminalLeaf = page.getByTestId('pane-leaf-pane-4');
+  await expect(terminalLeaf).toHaveAttribute('data-surface', 'terminal');
+  await expect(terminalLeaf.getByTestId('terminal-panel')).toBeVisible();
+  await expect(page.getByTestId('pane-splitter')).toHaveCount(3);
+  await expect(page.locator(VERTICAL_SPLITTER)).toHaveCount(2);
+
+  const grid = await Promise.all([0, 1, 2, 3].map((index) => leaves.nth(index).boundingBox()));
+  expect(Math.max(...grid.map((box) => box?.width ?? 0)) - Math.min(...grid.map((box) => box?.width ?? 0))).toBeLessThan(6);
+  if (shots) {
+    await page.screenshot({ path: join(shots, `${prefix}-grid.png`) });
+  }
+
+  // The stacked splitter trades height with its neighbour; a double click evens it.
+  const stackedSplitter = page.locator(VERTICAL_SPLITTER).first();
+  const beforeResize = await threadLeaf.boundingBox();
+  const barBox = await stackedSplitter.boundingBox();
+  if (beforeResize === null || barBox === null) throw new Error('the left column has no box');
+  await page.mouse.move(barBox.x + barBox.width / 2, barBox.y + barBox.height / 2);
   await page.mouse.down();
-  await page.mouse.move(
-    splitterBox.x + splitterBox.width / 2 - 140,
-    splitterBox.y + splitterBox.height / 2,
-    { steps: 8 },
-  );
+  await page.mouse.move(barBox.x + barBox.width / 2, barBox.y + barBox.height / 2 + 70, {
+    steps: 8,
+  });
   await page.mouse.up();
-  const afterDrag = await threadPane.boundingBox();
-  expect(afterDrag?.width ?? 0).toBeLessThan(beforeDrag.width - 80);
+  const afterResize = await threadLeaf.boundingBox();
+  expect(afterResize?.height ?? 0).toBeGreaterThan((beforeResize.height ?? 0) + 40);
 
-  await splitter.dblclick();
-  const leftAfterReset = await threadPane.boundingBox();
-  const rightAfterReset = await diffPane.boundingBox();
-  expect(Math.abs((leftAfterReset?.width ?? 0) - (rightAfterReset?.width ?? 0))).toBeLessThan(4);
+  await stackedSplitter.dblclick();
+  const resetTop = await threadLeaf.boundingBox();
+  const resetBottom = await diffLeaf.boundingBox();
+  expect(Math.abs((resetTop?.height ?? 0) - (resetBottom?.height ?? 0))).toBeLessThan(4);
 
-  // Three panes: a terminal joins the row.
-  await diffPane.getByTestId('pane-split').click();
-  await page.getByTestId('pane-split-surface-terminal').click();
-  await expect(page.getByTestId('pane')).toHaveCount(3);
-  const terminalPane = page.getByTestId('pane').nth(2);
-  await expect(terminalPane).toHaveAttribute('data-surface', 'terminal');
-  await expect(terminalPane.getByTestId('terminal-panel')).toBeVisible();
-  await expect(terminalPane.locator('[data-terminal-id]')).toBeVisible();
+  // Closing one tile leaves the rest of the tree alone.
+  await terminalLeaf.getByTestId('pane-close').click();
+  await expect(leaves).toHaveCount(3);
+  await expect(page.getByTestId('composer-input')).toHaveCount(2);
+  await expect(workspaceEl).toHaveAttribute('data-pane-count', '3');
 
-  const thirds = await Promise.all(
-    [0, 1, 2].map((index) => page.getByTestId('pane').nth(index).boundingBox()),
-  );
-  const thirdWidths = thirds.map((box) => box?.width ?? 0);
-  expect(Math.max(...thirdWidths) - Math.min(...thirdWidths)).toBeLessThan(6);
-  if (shots) {
-    await page.screenshot({ path: join(shots, `${prefix}-three.png`) });
-  }
-
-  // Dropping a tab on another header moves the surface and closes its empty pane.
-  const terminalTab = terminalPane.getByTestId('pane-tab').filter({ hasText: 'Terminal' });
-  await terminalTab.dragTo(page.getByTestId('pane-header').first());
-  await expect(page.getByTestId('pane')).toHaveCount(2);
-  await expect(threadPane).toHaveAttribute('data-surface', 'terminal');
-  await expect(threadPane.getByTestId('pane-tab').filter({ hasText: 'Terminal' })).toBeVisible();
-  await expect(threadPane.getByTestId('pane-tab-close')).toHaveCount(1);
-
-  // Below 1100px the row keeps one pane; every surface becomes a tab.
-  await openDock(page, 'activity');
-  await expect(workspaceEl).toHaveAttribute('data-narrow', 'true');
-  await expect(page.getByTestId('pane')).toHaveCount(1);
-  await expect(page.getByTestId('pane-tab')).toHaveCount(3);
-  await expect(page.getByTestId('pane-tab').filter({ hasText: 'Terminal' })).toBeVisible();
-  await expect(page.getByTestId('pane-tab').filter({ hasText: 'Diff' })).toBeVisible();
-  if (shots) {
-    await page.screenshot({ path: join(shots, `${prefix}-narrow.png`) });
-  }
-
-  // Selecting a tab in the narrow row writes back to its owning pane.
-  await page.getByTestId('pane-tab').filter({ hasText: 'Thread' }).click();
-  await expect(page.getByTestId('pane')).toHaveAttribute('data-surface', 'thread');
-  await closeDock(page);
-  await expect(workspaceEl).toHaveAttribute('data-narrow', 'false');
-  await expect(page.getByTestId('pane')).toHaveCount(2);
-  await expect(page.getByTestId('pane').first()).toHaveAttribute('data-surface', 'thread');
-
-  // Ctrl+W closes the focused pane while more than one is open.
-  await page.getByTestId('pane-header').nth(1).getByTestId('pane-drag-handle').click();
-  await page.keyboard.press('Control+W');
-  await expect(page.getByTestId('pane')).toHaveCount(1);
-
-  // Ctrl+\ splits with the next surface; the menu then adds a third pane.
-  await page.keyboard.press('Control+\\');
-  await expect(page.getByTestId('pane')).toHaveCount(2);
-  await expect(page.getByTestId('pane').nth(1)).toHaveAttribute('data-surface', 'diff');
-  await page.getByTestId('pane').nth(1).getByTestId('pane-split').click();
-  await page.getByTestId('pane-split-surface-brain').click();
-  await expect(page.getByTestId('pane')).toHaveCount(3);
-
+  // The nested layout survives a restart: one horizontal split, one vertical.
   await session.relaunch();
   await expect(session.page.getByTestId('connection-status')).toHaveAttribute(
     'data-status',
     'open',
   );
+  // The app reopens the newest thread, so go back to the split one by hand.
+  await session.page
+    .locator(`[data-testid="thread-row"][data-thread-id="${firstThreadId}"]`)
+    .click();
   const relaunched = session.page.getByTestId('pane-workspace');
   await expect(relaunched).toHaveAttribute('data-pane-count', '3');
   await closeDock(session.page);
   await expect(relaunched).toHaveAttribute('data-narrow', 'false');
-  await expect(session.page.getByTestId('pane')).toHaveCount(3);
-  await expect(session.page.getByTestId('pane').nth(2)).toHaveAttribute('data-surface', 'brain');
+  const reloaded = session.page.getByTestId(LEAF);
+  await expect(reloaded).toHaveCount(3);
+  await expect(session.page.locator(VERTICAL_SPLITTER)).toHaveCount(1);
+  await expect(session.page.getByTestId('pane-splitter')).toHaveCount(2);
+  await expect(reloaded.nth(0)).toHaveAttribute('data-surface', 'thread');
+  await expect(reloaded.nth(1)).toHaveAttribute('data-surface', 'diff');
+  await expect(reloaded.nth(2)).toHaveAttribute('data-surface', /^thread:/);
+  await expect(session.page.getByTestId('composer-input')).toHaveCount(2);
+
+  // Below 1100px the row keeps one leaf; every surface becomes a tab.
+  await openDock(session.page, 'activity');
+  await expect(relaunched).toHaveAttribute('data-narrow', 'true');
+  await expect(reloaded).toHaveCount(1);
+  await expect(session.page.getByTestId('pane-tab')).toHaveCount(3);
+  await expect(session.page.getByTestId('pane-tab').filter({ hasText: 'Diff' })).toBeVisible();
+  if (shots) {
+    await session.page.screenshot({ path: join(shots, `${prefix}-narrow.png`) });
+  }
+
+  // Selecting a tab in the narrow row writes back to its owning leaf.
+  await session.page.getByTestId('pane-tab').filter({ hasText: 'Thread' }).click();
+  await expect(reloaded).toHaveAttribute('data-surface', 'thread');
+  await closeDock(session.page);
+  await expect(relaunched).toHaveAttribute('data-narrow', 'false');
+  await expect(reloaded).toHaveCount(3);
+  await expect(reloaded.first()).toHaveAttribute('data-surface', 'thread');
+
+  // Ctrl+W closes the focused leaf while more than one is open.
+  await session.page.getByTestId('pane-leaf-pane-3').getByTestId('pane-drag-handle').click();
+  await session.page.keyboard.press('Control+W');
+  await expect(reloaded).toHaveCount(2);
+
+  // Ctrl+\ splits with the first unopened surface.
+  await session.page.keyboard.press('Control+\\');
+  await expect(reloaded).toHaveCount(3);
+  await expect(reloaded.nth(1)).toHaveAttribute('data-surface', 'diff');
 });
