@@ -216,17 +216,11 @@ function pickHost(): FindHost | null {
     const owner = hosts.find((host) => host.root()?.contains(active) === true);
     if (owner !== undefined) return owner;
   }
-  // A clicked pane marks itself, which covers a click on its header or its chrome.
-  const focusedPane = document.querySelector<HTMLElement>(
-    '[data-testid="pane"][data-focused="true"]',
-  );
-  if (focusedPane !== null) {
-    const owner = hosts.find((host) => {
-      const root = host.root();
-      return root !== null && focusedPane.contains(root);
-    });
-    if (owner !== undefined) return owner;
-  }
+  // A clicked pane marks itself with data-focused, which covers a click on its
+  // header or its chrome. The attribute is read on the host's ancestors so the
+  // pane markup can change its testids without breaking the shortcut.
+  const focusedPane = hosts.find((host) => host.root()?.closest('[data-focused="true"]') !== null);
+  if (focusedPane !== undefined) return focusedPane;
   // Otherwise the pane showing the routed thread wins over a side chat.
   const routeThread = useAppStore.getState().activeThreadId;
   const routed = hosts.find((host) => host.threadId === routeThread);

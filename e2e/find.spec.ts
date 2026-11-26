@@ -2,6 +2,7 @@ import { expect, test } from './fixtures';
 import {
   addMockProvider,
   addProjectThroughUi,
+  closeDock,
   createThreadThroughSidebar,
   expectAssistantText,
   seedDefaultModel,
@@ -95,4 +96,59 @@ test('Ctrl+F finds a needle inside a collapsed tool call and opens it', async ({
   await page.getByTestId('thread-find-button').click();
   await expect(page.getByTestId('find-bar')).toBeVisible();
   await expect(page.getByTestId('find-input')).toBeFocused();
+});
+
+/**
+ * Two conversations mounted at once: the clicked tile owns Ctrl+F even when the
+ * routed thread lives in the other tile. This is the regression guard for the pane
+ * lookup, which must read the tile's data-focused attribute rather than a testid.
+ */
+test('Ctrl+F opens in the clicked pane, not the routed thread', async ({
+  session,
+  workspace,
+  mock,
+  rpc,
+}) => {
+  const { page } = session;
+
+  await addProjectThroughUi(session, workspace);
+  await addMockProvider(page, mock);
+  await seedDefaultModel(rpc);
+
+  // Two threads: the routed one returns to pane one, the other becomes a side tile.
+  await createThreadThroughSidebar(page);
+  const routedThreadId = await page
+    .locator('[data-testid="thread-row"][aria-current="page"]')
+    .getAttribute('data-thread-id');
+  await page.getByTestId('sidebar-new-thread').click();
+  await expect(page.getByTestId('thread-title')).toBeVisible();
+  await expect(page.getByTestId('thread-row')).toHaveCount(2);
+  const otherThreadId = await page
+    .locator(`[data-testid="thread-row"]:not([data-thread-id="${routedThreadId}"])`)
+    .getAttribute('data-thread-id');
+  expect(otherThreadId).not.toBe(routedThreadId);
+
+  await page.locator(`[data-testid="thread-row"][data-thread-id="${routedThreadId}"]`).click();
+  await expect(page.getByTestId('pane-leaf-pane-1')).toHaveAttribute('data-surface', 'thread');
+  await closeDock(page);
+
+  await page
+    .locator(`[data-testid="thread-row"][data-thread-id="${otherThreadId}"]`)
+    .dragTo(page.getByTestId('pane-leaf-pane-1').getByTestId('pane-drop-zone-right'), {
+      force: true,
+      steps: 8,
+    });
+
+  const routedLeaf = page.getByTestId('pane-leaf-pane-1');
+  const sideLeaf = page.getByTestId('pane-leaf-pane-2');
+  await expect(sideLeaf).toHaveAttribute('data-surface', /^thread:/);
+  await expect(sideLeaf.getByTestId('composer-input')).toBeVisible();
+
+  // Clicking the tile's chrome focuses it without focusing anything in a timeline.
+  await sideLeaf.getByTestId('pane-header').click();
+  await expect(sideLeaf).toHaveAttribute('data-focused', 'true');
+
+  await page.keyboard.press('Control+f');
+  await expect(sideLeaf.getByTestId('find-bar')).toBeVisible();
+  await expect(routedLeaf.getByTestId('find-bar')).toHaveCount(0);
 });
