@@ -32,6 +32,8 @@ export interface CommandRunDeps {
   subagents?: Subagents;
   /** Drops the cached adapter session so clear and compact really free context. */
   runner?: Pick<Runner, 'disposeThread'>;
+  /** Re-reads live configuration and returns the summary line `/reload` prints. */
+  reload?: (projectId: string) => Promise<string>;
   onWarning?: (message: string) => void;
 }
 
@@ -263,6 +265,17 @@ export async function runCommand(
     }
     case 'help':
       return helpText(deps, project, commands, parsed.args);
+    case 'reload': {
+      if (deps.reload === undefined) {
+        return { kind: 'error', message: 'Reload is not available in this build.' };
+      }
+      try {
+        return { kind: 'text', text: await deps.reload(thread.projectId) };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return { kind: 'error', message: `Reload failed: ${detail}` };
+      }
+    }
     default:
       return { kind: 'error', message: `/${command.name} has no handler.` };
   }

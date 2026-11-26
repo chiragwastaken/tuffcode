@@ -90,6 +90,11 @@ export interface McpService {
   launchMap(): Record<string, McpServerLaunch>;
   /** Loads stored credentials into memory so `launchMap` can attach them synchronously. */
   warmSecrets(): Promise<void>;
+  /**
+   * Drops the 60s tool cache and re-reads stored credentials, so a reload or a
+   * credential change reaches the next turn without a restart. Does not reconnect.
+   */
+  invalidate(): Promise<void>;
   remove(id: string): void;
   test(id: string): Promise<McpTestResult>;
   listTools(id: string): Promise<McpTool[]>;
@@ -198,6 +203,14 @@ export function createMcpService(
     }
   }
 
+  /** Reads every stored connector credential into memory; shared by warm and invalidate. */
+  async function warmCredentials(): Promise<void> {
+    for (const server of repos.mcp.list()) {
+      if (server.authMode === 'oauth') await oauth.warm(server);
+      else if (server.hasSecret) await tokenFor(server);
+    }
+  }
+
   return {
     list: () => repos.mcp.list(),
 
@@ -288,11 +301,12 @@ export function createMcpService(
       return launches;
     },
 
-    warmSecrets: async () => {
-      for (const server of repos.mcp.list()) {
-        if (server.authMode === 'oauth') await oauth.warm(server);
-        else if (server.hasSecret) await tokenFor(server);
-      }
+    warmSecrets: warmCredentials,
+
+    invalidate: async () => {
+      cache.clear();
+      tokens.clear();
+      await warmCredentials();
     },
 
     remove: (id) => {

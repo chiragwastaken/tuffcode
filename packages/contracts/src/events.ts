@@ -188,6 +188,10 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     }),
   ),
   serverEvent('plugins.updated', InstalledPluginSchema.array()),
+  /** Discovered commands changed; the palette drops its cache and refetches. */
+  serverEvent('commands.updated', z.object({})),
+  /** Discovered skills changed; the palette drops its cache and refetches. */
+  serverEvent('skills.updated', z.object({})),
   /** One connector changed: saved, removed, or finished an OAuth sign-in. */
   serverEvent('mcp.updated', McpServerSchema),
   serverEvent('providers.updated', ProviderViewSchema.array()),
