@@ -7,7 +7,14 @@ import {
   type TurnContext,
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
-import { OpenAIClient, readClientConfig, type ChatMessage, type FetchFn } from './client.js';
+import { planAttachments } from '../attachments.js';
+import {
+  OpenAIClient,
+  readClientConfig,
+  type ChatContentPart,
+  type ChatMessage,
+  type FetchFn,
+} from './client.js';
 import { compactHistory, runTurn } from './loop.js';
 import { createToolSessionState, type ToolSessionState } from './tools.js';
 
@@ -64,7 +71,7 @@ class OpenAIChatAdapter implements AdapterSession {
     const turnCtx: TurnContext = { ...ctx, signal: controller.signal };
     const turnId = ctx.turnId;
     this.model = ctx.model;
-    this.messages.push({ role: 'user', content: userContent(text, ctx) });
+    this.messages.push({ role: 'user', content: await userContent(text, ctx) });
 
     try {
       yield { type: 'turn.started', turnId };
@@ -145,10 +152,25 @@ class OpenAIChatAdapter implements AdapterSession {
   }
 }
 
-function userContent(text: string, ctx: TurnContext): string {
+/**
+ * The user message for one turn. Text plus attachment notes stay a plain string when
+ * nothing is inlined, so a text-only turn keeps the exact request body it had before;
+ * images turn the message into the multimodal parts array the provider expects.
+ */
+async function userContent(text: string, ctx: TurnContext): Promise<string | ChatContentPart[]> {
   if (ctx.attachments.length === 0) return text;
-  const lines = ctx.attachments.map((attachment) => `- ${attachment.path} (${attachment.kind})`);
-  return text + LF + LF + 'Attachments:' + LF + lines.join(LF);
+  const plan = await planAttachments(ctx.attachments, ctx.vision);
+  const notes = plan.notes.length === 0 ? '' : LF + LF + 'Attachments:' + LF + plan.notes.join(LF);
+  if (plan.images.length === 0) return text + notes;
+  const parts: ChatContentPart[] = [{ type: 'text', text: text + notes }];
+  for (const image of plan.images) {
+    parts.push({ type: 'text', text: `Image file: ${image.name}` });
+    parts.push({
+      type: 'image_url',
+      image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+    });
+  }
+  return parts;
 }
 
 export async function createOpenAIChatAdapter(

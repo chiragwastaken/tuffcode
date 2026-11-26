@@ -43,6 +43,7 @@ function makeContext(turnId = 'turn-1'): TurnContext {
     model: 'gpt-5-codex',
     brainSlice: 'rules: be brief',
     attachments: [{ path: 'C:/work/demo/notes.md', kind: 'file' }],
+    vision: false,
     signal: new AbortController().signal,
   };
 }

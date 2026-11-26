@@ -8,7 +8,13 @@ export interface TurnContext {
   permissionMode: PermissionMode;
   model: string;
   brainSlice: string;
-  attachments: { path: string; kind: 'file' | 'image' }[];
+  /**
+   * One entry per user attachment. `path` is a resolved file inside the worktree;
+   * `data` is base64 the renderer already encoded, with `mimeType` naming the format.
+   */
+  attachments: TurnAttachment[];
+  /** True when the turn's model can read images; adapters inline them only then. */
+  vision: boolean;
   signal: AbortSignal;
   /** Tool names the user enabled in settings; unset means every harness tool. */
   toolAllowlist?: string[];
@@ -22,6 +28,19 @@ export interface TurnContext {
   reasoningEffort?: string;
   /** Which server tools this turn offers; unset keeps the adapter's construction-time choice. */
   toolOptions?: TurnToolOptions;
+}
+
+/** One attachment as an adapter receives it, with the source already resolved. */
+export interface TurnAttachment {
+  /** The display name the user saw, kept so an inline image still has a filename. */
+  name?: string;
+  /** Absolute path inside the worktree, for attachments that arrived as a path. */
+  path?: string;
+  /** Base64 payload for attachments that arrived as bytes. */
+  data?: string;
+  /** MIME type of `data`, and the hint that marks an attachment as an image. */
+  mimeType?: string;
+  kind: 'file' | 'image';
 }
 
 /** Server tools a turn may offer, decided per turn from capabilities and the thread kind. */

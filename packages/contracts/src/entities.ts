@@ -565,9 +565,20 @@ export const ConnectorEntrySchema = z.object({
 });
 export type ConnectorEntry = z.infer<typeof ConnectorEntrySchema>;
 
-export const AttachmentSchema = z.object({
-  name: z.string(),
-  path: z.string(),
-  mimeType: z.string().optional(),
-});
+/**
+ * One user attachment. Exactly one source is present: `path` for a file inside the
+ * thread worktree, `data` for bytes the renderer already encoded (a pasted or
+ * downscaled image, which has no filesystem home the server may read).
+ */
+export const AttachmentSchema = z
+  .object({
+    name: z.string(),
+    path: z.string().optional(),
+    /** Base64 payload without the `data:` prefix; `mimeType` names the format. */
+    data: z.string().optional(),
+    mimeType: z.string().optional(),
+  })
+  .refine((attachment) => (attachment.path === undefined) !== (attachment.data === undefined), {
+    message: 'an attachment carries either a path or inline data, never both',
+  });
 export type Attachment = z.infer<typeof AttachmentSchema>;

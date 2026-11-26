@@ -11,6 +11,12 @@ export interface AnthropicTextBlock {
   text: string;
 }
 
+/** A prompt image; the API takes base64 inline and names the format separately. */
+export interface AnthropicImageBlock {
+  type: 'image';
+  source: { type: 'base64'; media_type: string; data: string };
+}
+
 export interface AnthropicToolUseBlock {
   type: 'tool_use';
   id: string;
@@ -41,6 +47,7 @@ export type AnthropicContentBlock =
   | AnthropicThinkingBlock
   | AnthropicRedactedThinkingBlock
   | AnthropicTextBlock
+  | AnthropicImageBlock
   | AnthropicToolUseBlock
   | AnthropicToolResultBlock;
 

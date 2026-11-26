@@ -208,12 +208,8 @@ describe('provider model discovery', () => {
           label: 'Opus 4.5',
           contextWindow: null,
           maxOutputTokens: null,
-          capabilities: {
-            tools: true,
-            vision: false,
-            reasoning: false,
-            reasoningEfforts: [],
-          },
+          // The endpoint reports an id and a display name only, so capabilities stay unknown.
+          capabilities: null,
           reasoningEffort: null,
         },
       ],
@@ -592,7 +588,7 @@ describe('provider model discovery', () => {
     ]);
   });
 
-  it('defaults a bare entry to tools without vision or reasoning', async () => {
+  it('leaves capabilities unknown when a bare entry declares nothing', async () => {
     const provider = seedProvider(ctx, 'openai-compatible', {
       baseUrl: 'https://gateway.test',
     });
@@ -604,21 +600,51 @@ describe('provider model discovery', () => {
       ),
     });
 
+    // The endpoint named a model and said nothing else. Recording `vision: false` here
+    // would claim the model cannot see images when nobody ever said so.
     expect(result.models).toEqual([
       {
         id: 'plain',
         label: 'plain',
         contextWindow: null,
         maxOutputTokens: null,
-        capabilities: {
-          tools: true,
-          vision: false,
-          reasoning: false,
-          reasoningEfforts: [],
-        },
+        capabilities: null,
         reasoningEffort: null,
       },
     ]);
+  });
+
+  it('leaves capabilities unknown for a bare string entry', async () => {
+    const provider = seedProvider(ctx, 'openai-compatible', {
+      baseUrl: 'https://gateway.test',
+    });
+    const result = await discoverModels(provider, {
+      secret: null,
+      fetchFn: fakeFetch(
+        async () => new Response(JSON.stringify({ data: ['plain'] }), { status: 200 }),
+      ),
+    });
+
+    expect(result.models[0]?.capabilities).toBeNull();
+  });
+
+  it('records an entry that only declares limits as unknown, not as blind', async () => {
+    const provider = seedProvider(ctx, 'openai-compatible', {
+      baseUrl: 'https://gateway.test',
+    });
+    const result = await discoverModels(provider, {
+      secret: null,
+      fetchFn: fakeFetch(
+        async () =>
+          new Response(
+            JSON.stringify({ data: [{ id: 'limited', context_length: 32_000 }] }),
+            { status: 200 },
+          ),
+      ),
+    });
+
+    expect(result.models[0]?.contextWindow).toBe(32_000);
+    expect(result.models[0]?.capabilities).toBeNull();
   });
 
   it('prefers an explicit capabilities object over supported_parameters', async () => {

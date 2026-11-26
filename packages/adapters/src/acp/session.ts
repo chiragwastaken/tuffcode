@@ -359,7 +359,10 @@ class AcpSession implements AdapterSession {
       try {
         prompt = connection.agent.request(methods.agent.session.prompt, {
           sessionId,
-          prompt: buildPromptBlocks(text, ctx.attachments),
+          prompt: buildPromptBlocks(text, ctx.attachments, {
+            imageCapable:
+              ctx.vision && this.agentCapabilities?.promptCapabilities?.image === true,
+          }),
         });
       } catch (error) {
         settled = true;

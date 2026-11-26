@@ -402,8 +402,18 @@ class CodexAdapter implements AdapterSession {
     const input: Record<string, unknown>[] = [{ type: 'text', text }];
     for (const attachment of ctx.attachments) {
       if (attachment.kind === 'image') {
-        input.push({ type: 'localImage', path: attachment.path });
-      } else {
+        // Inline bytes travel as a data URL; a path is read by the app-server itself.
+        if (attachment.data !== undefined && ctx.vision) {
+          input.push({
+            type: 'image',
+            url: `data:${attachment.mimeType ?? 'image/png'};base64,${attachment.data}`,
+          });
+        } else if (attachment.path !== undefined) {
+          input.push({ type: 'localImage', path: attachment.path });
+        }
+        continue;
+      }
+      if (attachment.path !== undefined) {
         input.push({ type: 'mention', name: basename(attachment.path), path: attachment.path });
       }
     }

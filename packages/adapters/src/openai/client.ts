@@ -12,9 +12,16 @@ export interface OpenAIToolCall {
   function: { name: string; arguments: string };
 }
 
+/** One part of a multimodal user message; images arrive as a base64 data URL. */
+export interface ChatContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | ChatContentPart[] | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 }

@@ -134,28 +134,43 @@ function explicitCapabilities(record: Record<string, unknown>): ModelCapabilitie
   };
 }
 
-/** Capability hints OpenRouter-style list entries carry beside the id. */
-function inferredCapabilities(record: Record<string, unknown>): ModelCapabilities {
-  const capabilities: ModelCapabilities = { ...DEFAULT_CAPABILITIES, reasoningEfforts: [] };
+/**
+ * Capability hints OpenRouter-style list entries carry beside the id. Returns `null`
+ * when the payload declares nothing, so an unknown model stays unknown instead of being
+ * recorded as unable to do things nobody said it could not do.
+ */
+function inferredCapabilities(record: Record<string, unknown>): ModelCapabilities | null {
   const supported = record['supported_parameters'];
+  const architecture = recordOf(record['architecture']);
+  const modality = record['modality'];
+  const architectureModality = architecture?.['modality'];
+  const hasHints =
+    Array.isArray(supported) ||
+    stringArray(architecture?.['input_modalities']).length > 0 ||
+    (typeof modality === 'string' && modality.length > 0) ||
+    (typeof architectureModality === 'string' && architectureModality.length > 0);
+  if (!hasHints) return null;
+
+  const capabilities: ModelCapabilities = { ...DEFAULT_CAPABILITIES, reasoningEfforts: [] };
   if (Array.isArray(supported)) {
     const names = stringArray(supported);
     capabilities.tools = names.includes('tools') || names.includes('tool_choice');
     capabilities.reasoning =
       names.includes('reasoning') || names.includes('include_reasoning');
   }
-  const architecture = recordOf(record['architecture']);
   if (stringArray(architecture?.['input_modalities']).includes('image')) {
     capabilities.vision = true;
   }
-  for (const modality of [record['modality'], architecture?.['modality']]) {
-    if (typeof modality === 'string' && modality.includes('image')) capabilities.vision = true;
+  for (const declared of [modality, architectureModality]) {
+    if (typeof declared === 'string' && declared.includes('image')) capabilities.vision = true;
   }
   return capabilities;
 }
 
-function capabilitiesOf(record: Record<string, unknown>): ModelCapabilities {
+/** The declared capabilities, or `null` when neither the entry nor its hints said anything. */
+function capabilitiesOf(record: Record<string, unknown>): ModelCapabilities | null {
   const capabilities = explicitCapabilities(record) ?? inferredCapabilities(record);
+  if (capabilities === null) return null;
   if (capabilities.reasoning && capabilities.reasoningEfforts.length === 0) {
     capabilities.reasoningEfforts = [...DEFAULT_REASONING_EFFORTS];
   }

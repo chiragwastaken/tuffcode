@@ -36,4 +36,6 @@ export interface TuffcodeBridge {
   notify?(request: NotifyRequest): void;
   setKeepAwake?(on: boolean): void;
   openExternal?(url: string): void;
+  /** Absent in a browser test harness and in a preload older than this build. */
+  getPathForFile?(file: File): string;
 }

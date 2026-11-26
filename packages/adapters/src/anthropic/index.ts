@@ -7,9 +7,11 @@ import {
   type TurnContext,
 } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
+import { planAttachments } from '../attachments.js';
 import {
   AnthropicClient,
   readAnthropicConfig,
+  type AnthropicContentBlock,
   type AnthropicMessage,
   type FetchFn,
 } from './client.js';
@@ -85,7 +87,7 @@ class AnthropicAdapter implements AdapterSession {
     this.model = model;
     const turnCtx: TurnContext = { ...ctx, model, signal: controller.signal };
     const turnId = ctx.turnId;
-    this.messages.push({ role: 'user', content: userContent(text, ctx) });
+    this.messages.push({ role: 'user', content: await userContent(text, ctx) });
 
     try {
       yield { type: 'turn.started', turnId };
@@ -168,10 +170,27 @@ class AnthropicAdapter implements AdapterSession {
   }
 }
 
-function userContent(text: string, ctx: TurnContext): string {
+/**
+ * The user message for one turn. Text-only turns keep a plain string; inlined images
+ * turn the message into content blocks, the shape the Messages API expects.
+ */
+async function userContent(
+  text: string,
+  ctx: TurnContext,
+): Promise<string | AnthropicContentBlock[]> {
   if (ctx.attachments.length === 0) return text;
-  const lines = ctx.attachments.map((attachment) => `- ${attachment.path} (${attachment.kind})`);
-  return text + LF + LF + 'Attachments:' + LF + lines.join(LF);
+  const plan = await planAttachments(ctx.attachments, ctx.vision);
+  const notes = plan.notes.length === 0 ? '' : LF + LF + 'Attachments:' + LF + plan.notes.join(LF);
+  if (plan.images.length === 0) return text + notes;
+  const blocks: AnthropicContentBlock[] = [{ type: 'text', text: text + notes }];
+  for (const image of plan.images) {
+    blocks.push({ type: 'text', text: `Image file: ${image.name}` });
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: image.mimeType, data: image.data },
+    });
+  }
+  return blocks;
 }
 
 export async function createAnthropicAdapter(

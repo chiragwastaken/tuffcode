@@ -29,6 +29,8 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
   type RefObject,
 } from 'react';
@@ -42,7 +44,17 @@ import { useCouncilGoal } from '../council/use-council-goal';
 import { requestInspectorTab } from '../inspector/panel-requests';
 import { ModelMenu } from '../models/ModelMenu';
 import { takePendingDraft } from './composer-drafts';
-import { attachmentFromFile, attachmentFromFolder, hasFilePathBridge } from './attachments';
+import {
+  attachmentFromFile,
+  attachmentFromFolder,
+  encodeImageFile,
+  filesFromTransfer,
+  hasFilePathBridge,
+  imageAttachment,
+  imageTypeOf,
+  isImageFile,
+  pastedImageName,
+} from './attachments';
 import { dispatchCommandResult } from './command-run';
 import { DEFAULT_CONTEXT_WARNING_THRESHOLD } from './context-meter';
 import { ContextMeter } from './ContextMeter';
@@ -90,6 +102,13 @@ const PERMISSION_MENU: readonly { value: PermissionMode; label: string }[] = [
 
 /** Below this the permission control becomes a menu button instead of shrinking. */
 const COMPACT_WIDTH = 720;
+
+/** Claims a drag that carries files so the drop lands on the composer, not the window. */
+function handleDragOver(event: DragEvent<HTMLDivElement>): void {
+  if (event.dataTransfer?.types.includes('Files') !== true) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+}
 
 const MAX_TEXTAREA_HEIGHT = 200;
 
@@ -398,20 +417,56 @@ export function Composer({ thread }: ComposerProps) {
     }
   }
 
+  /**
+   * Adds files from a picker, a drop or a paste. Images become inline bytes; other
+   * files need a filesystem path. A refusal is reported per file instead of failing
+   * the whole selection, so one bad image never blocks a good one.
+   */
+  async function addFiles(files: readonly File[], source: 'clipboard' | 'drop' | 'picker'): Promise<void> {
+    if (files.length === 0) return;
+    const added: Attachment[] = [];
+    let unnamed = 0;
+    for (const file of files) {
+      if (isImageFile(file)) {
+        const named =
+          file.name.length > 0
+            ? file
+            : new File([file], pastedImageName(imageTypeOf(file) ?? 'image/png', unnamed++), {
+                type: file.type,
+              });
+        const encoded = await encodeImageFile(named);
+        if (encoded.ok) added.push(imageAttachment(named, encoded.image));
+        else toast.error(encoded.reason);
+        continue;
+      }
+      const attachment = attachmentFromFile(file);
+      if (attachment) added.push(attachment);
+      else if (source === 'picker') toast.error(`${file.name} has no filesystem path in this build.`);
+      else toast.error(`${file.name} needs to be picked with the paperclip; a drop or paste only carries images.`);
+    }
+    if (added.length > 0) setAttachments((current) => [...current, ...added]);
+  }
+
   function handleFiles(event: ChangeEvent<HTMLInputElement>): void {
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (files.length === 0) return;
+    void addFiles(files, 'picker');
+  }
 
-    const added: Attachment[] = [];
-    for (const file of files) {
-      const attachment = attachmentFromFile(file);
-      if (attachment) added.push(attachment);
-    }
-    if (added.length < files.length) {
-      toast.error('Some files have no filesystem path in this build.');
-    }
-    if (added.length > 0) setAttachments((current) => [...current, ...added]);
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
+    const files = filesFromTransfer(event.clipboardData);
+    if (files.length === 0) return;
+    // Only an image paste is claimed; a text paste keeps the textarea's own behavior.
+    if (!files.some((file) => isImageFile(file))) return;
+    event.preventDefault();
+    void addFiles(files, 'clipboard');
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>): void {
+    const files = filesFromTransfer(event.dataTransfer);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addFiles(files, 'drop');
   }
 
   const paletteLabel: Record<PaletteKind, string> = {
@@ -532,7 +587,11 @@ export function Composer({ thread }: ComposerProps) {
           </div>
         ) : null}
 
-        <div className="rounded-xl border border-border bg-message-surface/80 p-3 backdrop-blur-md transition-colors duration-150 focus-within:border-ring/50 focus-within:ring-1 focus-within:ring-ring/40 focus-within:ring-inset">
+        <div
+          className="rounded-xl border border-border bg-message-surface/80 p-3 backdrop-blur-md transition-colors duration-150 focus-within:border-ring/50 focus-within:ring-1 focus-within:ring-ring/40 focus-within:ring-inset"
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+        >
           {councilMode ? (
             <CouncilGoal
               value={goalInput}
@@ -548,9 +607,9 @@ export function Composer({ thread }: ComposerProps) {
                 <div className="mb-1 flex flex-wrap gap-1.5 px-1">
                   {attachments.map((attachment, index) => (
                     <span
-                      key={`${attachment.path}-${index}`}
+                      key={`${attachment.name}-${index}`}
                       className="inline-flex max-w-60 items-center gap-1 rounded-sm border border-border bg-background/40 px-1.5 py-0.5 text-2xs text-muted-foreground"
-                      title={attachment.path}
+                      title={attachment.path ?? `${attachment.mimeType ?? 'image'} attached`}
                     >
                       <Paperclip
                         aria-hidden="true"
@@ -563,9 +622,7 @@ export function Composer({ thread }: ComposerProps) {
                         aria-label={`Remove ${attachment.name}`}
                         className="rounded-sm text-muted-foreground hover:text-foreground"
                         onClick={() =>
-                          setAttachments((current) =>
-                            current.filter((entry) => entry.path !== attachment.path),
-                          )
+                          setAttachments((current) => current.filter((_, at) => at !== index))
                         }
                       >
                         <X aria-hidden="true" strokeWidth={1.75} className="size-3" />
@@ -598,6 +655,7 @@ export function Composer({ thread }: ComposerProps) {
                 disabled={!thread}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 className="max-h-[200px] w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-64"
               />
 
@@ -651,6 +709,7 @@ export function Composer({ thread }: ComposerProps) {
                     ref={fileInputRef}
                     type="file"
                     multiple
+                    accept="image/png,image/jpeg,image/gif,image/webp"
                     className="hidden"
                     onChange={handleFiles}
                   />

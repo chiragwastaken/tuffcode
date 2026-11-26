@@ -251,7 +251,7 @@ describe('stop reasons and prompts', () => {
   it('builds text and resource link prompt blocks', () => {
     const blocks = buildPromptBlocks('hello', [
       { path: 'C:/work/a.txt', kind: 'file' },
-      { path: 'C:/work/b.png', kind: 'image' },
+      { path: 'C:/work/b.png', kind: 'image', mimeType: 'image/png' },
     ]);
 
     expect(blocks).toEqual([
@@ -261,8 +261,31 @@ describe('stop reasons and prompts', () => {
         type: 'resource_link',
         name: 'b.png',
         uri: 'file:///C:/work/b.png',
-        mimeType: 'image/*',
+        mimeType: 'image/png',
       },
     ]);
+  });
+
+  it('sends an inline image as an image block when the agent accepts images', () => {
+    const blocks = buildPromptBlocks(
+      'what is this?',
+      [{ kind: 'image', name: 'shot.png', mimeType: 'image/png', data: 'AAAA' }],
+      { imageCapable: true },
+    );
+
+    expect(blocks).toEqual([
+      { type: 'text', text: 'what is this?' },
+      { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+    ]);
+  });
+
+  it('keeps an inline image out of the prompt when the agent has no image capability', () => {
+    const blocks = buildPromptBlocks(
+      'look',
+      [{ kind: 'image', name: 'shot.png', mimeType: 'image/png', data: 'AAAA' }],
+      { imageCapable: false },
+    );
+
+    expect(blocks).toEqual([{ type: 'text', text: 'look' }]);
   });
 });
