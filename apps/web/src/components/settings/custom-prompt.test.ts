@@ -185,8 +185,10 @@ describe('prompt preview sections', () => {
   it('labels every section the server can return', () => {
     expect(PROMPT_SECTION_ORDER.map((name) => promptSectionLabel(name))).toEqual([
       PROMPT_SECTION_LABEL.base,
+      PROMPT_SECTION_LABEL['plan-mode'],
       PROMPT_SECTION_LABEL['about-user'],
       PROMPT_SECTION_LABEL['custom-instructions'],
+      PROMPT_SECTION_LABEL['project-rules'],
       PROMPT_SECTION_LABEL.skills,
       PROMPT_SECTION_LABEL['available-skills'],
       PROMPT_SECTION_LABEL['brain-always'],
