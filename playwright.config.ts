@@ -15,7 +15,10 @@ export default defineConfig({
   forbidOnly: Boolean(process.env['CI']),
   retries: 0,
   timeout: 120_000,
-  expect: { timeout: 15_000 },
+  // Every test drives a real Electron app on a shared machine, so a hover transition
+  // or a pane remount can miss a 15s window while another build saturates the CPU.
+  // The budget is global on purpose: no per-assertion weakening and no retries.
+  expect: { timeout: 30_000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { trace: 'retain-on-failure' },
 });

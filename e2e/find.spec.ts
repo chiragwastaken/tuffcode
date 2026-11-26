@@ -145,10 +145,23 @@ test('Ctrl+F opens in the clicked pane, not the routed thread', async ({
   const sideLeaf = page.getByTestId('pane-leaf-pane-2');
   await expect(sideLeaf).toHaveAttribute('data-surface', /^thread:/);
   await expect(sideLeaf.getByTestId('composer-input')).toBeVisible();
+  // Both tiles must have their thread view mounted before the shortcut runs: each
+  // mounted view registers its own find host, and the pane lookup can only pick the
+  // clicked one once the second host exists. The header control proves the view and
+  // its hook are live, so the keypress never races the side tile's first render.
+  await expect(routedLeaf.getByTestId('thread-find-button')).toBeVisible();
+  await expect(sideLeaf.getByTestId('thread-find-button')).toBeVisible();
+  await expect(routedLeaf).not.toHaveAttribute('data-focused', 'true');
 
   // Clicking the tile's chrome focuses it without focusing anything in a timeline.
   await sideLeaf.getByTestId('pane-header').click();
   await expect(sideLeaf).toHaveAttribute('data-focused', 'true');
+  // The shortcut prefers the focused element's own pane, so a stale focus left inside
+  // the routed tile by the drag would legitimately win. Clear that possibility by
+  // asserting the click left focus outside both timelines.
+  expect(
+    await routedLeaf.evaluate((leaf) => leaf.contains(document.activeElement)),
+  ).toBe(false);
 
   await page.keyboard.press('Control+f');
   await expect(sideLeaf.getByTestId('find-bar')).toBeVisible();

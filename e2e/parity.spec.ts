@@ -328,7 +328,10 @@ test('Turn Summary shows the diff totals, opens the diff and reports PR errors i
   await addProjectThroughUi(session, workspace);
   await addMockProvider(page, mock);
   await seedDefaultModel(rpc);
-  await createThreadThroughSidebar(page);
+  // New chats default to the project folder, where the thread has no branch: the card
+  // renders, but Create PR stays disabled and never reaches the server. This test
+  // drives the real git.pr error path, so it asks the dialog for the worktree.
+  await createThreadThroughSidebar(page, { workspace: 'worktree' });
   await setPermissionMode(page, 'Full auto');
 
   await sendMessage(page, 'show-timeline');
@@ -340,7 +343,8 @@ test('Turn Summary shows the diff totals, opens the diff and reports PR errors i
   await expect(summary).toContainText(/\+\d+/);
   await expect(summary).toContainText(/-\d+/);
   await expect(page.getByTestId('turn-summary-review')).toBeVisible();
-  await expect(page.getByTestId('turn-summary-pr')).toBeVisible();
+  // The thread owns a worktree branch, so Create PR is enabled and reaches the server.
+  await expect(page.getByTestId('turn-summary-pr')).toBeEnabled();
   console.log(`PARITY_SHOT ${await shot(page, 'parity-1440-turn-summary')}`);
 
   // Review changes opens the real diff panel in the dock.
@@ -361,4 +365,28 @@ test('Turn Summary shows the diff totals, opens the diff and reports PR errors i
   const thread = (await rpc.request('threads.get', { id: threadId ?? '' })) as { prUrl: string | null };
   expect(thread.prUrl).toBeNull();
   console.log(`PARITY_SHOT ${await shot(page, 'parity-1440-turn-summary-error')}`);
+
+  // The default New chat path: the thread runs in the project folder, so it has no
+  // branch. The card still reports the working-tree diff, but Create PR is disabled
+  // and carries the reason instead of calling the handler.
+  await createThreadThroughSidebar(page);
+  await setPermissionMode(page, 'Full auto');
+  await sendMessage(page, 'show-timeline');
+  await expectAssistantText(page, MOCK_TIMELINE_FINAL);
+  const folderSummary = page.getByTestId('turn-summary');
+  await expect(folderSummary).toBeVisible();
+  const folderPr = folderSummary.getByTestId('turn-summary-pr');
+  await expect(folderPr).toBeDisabled();
+  await expect(folderPr).toHaveAttribute('title', 'Pull requests need a worktree branch.');
+  const folderThreadId = await page
+    .locator('[data-testid="thread-row"][aria-current="page"]')
+    .getAttribute('data-thread-id');
+  expect(folderThreadId).not.toBeNull();
+  const folderThread = (await rpc.request('threads.get', { id: folderThreadId ?? '' })) as {
+    branch: string | null;
+    worktreePath: string | null;
+  };
+  expect(folderThread.branch).toBeNull();
+  expect(folderThread.worktreePath).not.toBeNull();
+  console.log(`PARITY_SHOT ${await shot(page, 'parity-1440-turn-summary-folder')}`);
 });
