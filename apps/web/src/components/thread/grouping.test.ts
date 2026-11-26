@@ -9,7 +9,7 @@ import {
   type LocalUserMessage,
   type TimelineItem,
 } from './grouping';
-import { groupTurnBlocks } from './turn-blocks';
+import { foldTurnSteps, groupTurnBlocks } from './turn-blocks';
 
 function event(
   seq: number,
@@ -256,20 +256,24 @@ describe('groupTimeline', () => {
     const reasoningTexts = items.flatMap((item) => (item.kind === 'reasoning' ? item.text : []));
     expect(reasoningTexts).toEqual(['A', 'B']);
 
-    const blocks = groupTurnBlocks(items);
-    expect(blocks.map((block) => block.kind)).toEqual([
+    const blocks = foldTurnSteps(groupTurnBlocks(items));
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final']);
+    const steps = blocks[0];
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.children.map((child) => child.kind)).toEqual([
       'reasoning',
       'prose',
       'tools',
       'reasoning',
       'prose',
       'tools',
-      'final',
     ]);
     const finals = blocks.filter((block) => block.kind === 'final');
     expect(finals).toHaveLength(1);
     expect(finals[0]?.kind === 'final' ? finals[0].text : null).toBe('ANSWER');
-    const proseTexts = blocks.flatMap((block) => (block.kind === 'prose' ? [block.text] : []));
+    const proseTexts = steps.children.flatMap((block) =>
+      block.kind === 'prose' ? [block.text] : [],
+    );
     expect(proseTexts).toEqual(['P1', 'P2']);
   });
 
@@ -514,6 +518,284 @@ describe('persisted messages', () => {
     const oldAssistant = items[1];
     if (oldAssistant?.kind !== 'assistant') throw new Error('Expected an assistant row.');
     expect(oldAssistant.text).toBe('Old answer');
+  });
+});
+
+describe('turn ordering', () => {
+  it('keeps two sends with identical clocks apart', () => {
+    const at = '2026-01-01T00:00:00.000Z';
+    const items = groupTimeline({
+      events: [
+        event(
+          1,
+          {
+            type: 'tool.started',
+            turnId: 'turn-1',
+            toolCallId: 'c1',
+            name: 'bash',
+            input: { command: 'one' },
+          },
+          at,
+        ),
+        event(
+          2,
+          { type: 'tool.finished', turnId: 'turn-1', toolCallId: 'c1', output: 'one ok', isError: false },
+          at,
+        ),
+        event(3, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, at),
+        event(4, { type: 'turn.started', turnId: 'turn-2' }, at),
+        event(
+          5,
+          {
+            type: 'tool.started',
+            turnId: 'turn-2',
+            toolCallId: 'c2',
+            name: 'bash',
+            input: { command: 'two' },
+          },
+          at,
+        ),
+        event(
+          6,
+          { type: 'tool.finished', turnId: 'turn-2', toolCallId: 'c2', output: 'two ok', isError: false },
+          at,
+        ),
+        event(7, { type: 'turn.finished', turnId: 'turn-2', reason: 'complete' }, at),
+      ],
+      userMessages: [
+        message({ id: 'send-1', turnId: 'turn-1', text: 'First', createdAt: at }),
+        message({ id: 'send-2', turnId: 'turn-2', text: 'Second', createdAt: at }),
+      ],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'user' ? item.text : item.kind))).toEqual([
+      'First',
+      'tool',
+      'Second',
+      'tool',
+    ]);
+    const tools = items.filter((item) => item.kind === 'tool');
+    expect(tools.map((tool) => (tool.kind === 'tool' ? toolSummary(tool.input) : null))).toEqual([
+      'one',
+      'two',
+    ]);
+  });
+
+  it('anchors a persisted user row before its turn even when its clock is later', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'turn.started', turnId: 'turn-1' }, '2026-01-01T00:00:05.000Z'),
+        event(2, { type: 'text.delta', turnId: 'turn-1', text: 'Answer' }, '2026-01-01T00:00:06.000Z'),
+        event(
+          3,
+          { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' },
+          '2026-01-01T00:00:07.000Z',
+        ),
+      ],
+      messages: [persisted('msg_turn-1_user', 'user', 'Late row', '2026-01-01T00:00:09.000Z')],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'user' ? item.text : item.kind))).toEqual([
+      'Late row',
+      'assistant',
+    ]);
+  });
+
+  it('anchors a persisted assistant row after the last tool even when its clock is earlier', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Prose' }, '2026-01-01T00:00:02.000Z'),
+        event(
+          2,
+          {
+            type: 'tool.started',
+            turnId: 'turn-1',
+            toolCallId: 'c1',
+            name: 'read',
+            input: { path: 'a.ts' },
+          },
+          '2026-01-01T00:00:03.000Z',
+        ),
+        event(
+          3,
+          { type: 'tool.finished', turnId: 'turn-1', toolCallId: 'c1', output: 'ok', isError: false },
+          '2026-01-01T00:00:04.000Z',
+        ),
+        event(
+          4,
+          { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' },
+          '2026-01-01T00:00:05.000Z',
+        ),
+      ],
+      messages: [
+        persisted('msg_turn-1_assistant', 'assistant', 'ProseAnswer', '2026-01-01T00:00:01.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => (item.kind === 'assistant' ? item.text : item.kind))).toEqual([
+      'Prose',
+      'tool',
+      'Answer',
+    ]);
+  });
+});
+
+describe('streaming termination', () => {
+  it('closes the older turn when a new send starts before it finishes', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Thinking' }, '2026-01-01T00:00:01.000Z'),
+        event(2, { type: 'text.delta', turnId: 'turn-1', text: 'Partial' }, '2026-01-01T00:00:02.000Z'),
+        event(3, { type: 'turn.started', turnId: 'turn-2' }, '2026-01-01T00:00:03.000Z'),
+        event(4, { type: 'reasoning.delta', turnId: 'turn-2', text: 'New thought' }, '2026-01-01T00:00:04.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(['reasoning', 'assistant', 'reasoning']);
+    const [olderReasoning, olderAnswer, newestReasoning] = items;
+    if (olderReasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning row.');
+    if (olderAnswer?.kind !== 'assistant') throw new Error('Expected an assistant row.');
+    if (newestReasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning row.');
+    expect(olderReasoning.streaming).toBe(false);
+    expect(olderAnswer.streaming).toBe(false);
+    expect(newestReasoning.streaming).toBe(true);
+  });
+
+  it('closes an open reasoning segment that the replay never finished', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Left open' }, '2026-01-01T00:00:01.000Z'),
+        event(2, { type: 'turn.started', turnId: 'turn-2' }, '2026-01-01T00:00:02.000Z'),
+        event(3, { type: 'text.delta', turnId: 'turn-2', text: 'Fresh' }, '2026-01-01T00:00:03.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const [reasoning] = items;
+    if (reasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning row.');
+    expect(reasoning.streaming).toBe(false);
+    expect(reasoning.finishedAt).toBe('2026-01-01T00:00:01.000Z');
+  });
+
+  it('closes a middle turn that never emitted turn.finished', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Done' }, '2026-01-01T00:00:01.000Z'),
+        event(2, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '2026-01-01T00:00:02.000Z'),
+        event(3, { type: 'text.delta', turnId: 'turn-2', text: 'Orphan' }, '2026-01-01T00:00:03.000Z'),
+        event(4, { type: 'turn.started', turnId: 'turn-3' }, '2026-01-01T00:00:04.000Z'),
+        event(5, { type: 'text.delta', turnId: 'turn-3', text: 'Live' }, '2026-01-01T00:00:05.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const assistants = items.flatMap((item) => (item.kind === 'assistant' ? [item] : []));
+    expect(assistants.map((row) => row.text)).toEqual(['Done', 'Orphan', 'Live']);
+    expect(assistants.map((row) => row.streaming)).toEqual([false, false, true]);
+  });
+
+  it('settles a running tool whose turn a later send superseded', () => {
+    const items = groupTimeline({
+      events: [
+        event(
+          1,
+          {
+            type: 'tool.started',
+            turnId: 'turn-1',
+            toolCallId: 'c1',
+            name: 'bash',
+            input: { command: 'sleep 60' },
+          },
+          '2026-01-01T00:00:01.000Z',
+        ),
+        event(2, { type: 'turn.started', turnId: 'turn-2' }, '2026-01-01T00:00:02.000Z'),
+        event(3, { type: 'text.delta', turnId: 'turn-2', text: 'Fresh' }, '2026-01-01T00:00:03.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const tool = items.find((item) => item.kind === 'tool');
+    if (tool?.kind !== 'tool') throw new Error('Expected a tool row.');
+    expect(tool.running).toBe(false);
+    expect(tool.finishedAt).toBe('2026-01-01T00:00:01.000Z');
+  });
+
+  it('settles a running tool when its own turn finishes without tool.finished', () => {
+    const items = groupTimeline({
+      events: [
+        event(
+          1,
+          {
+            type: 'tool.started',
+            turnId: 'turn-1',
+            toolCallId: 'c1',
+            name: 'bash',
+            input: { command: 'sleep 60' },
+          },
+          '2026-01-01T00:00:01.000Z',
+        ),
+        event(2, { type: 'turn.finished', turnId: 'turn-1', reason: 'interrupted' }, '2026-01-01T00:00:04.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const tool = items.find((item) => item.kind === 'tool');
+    if (tool?.kind !== 'tool') throw new Error('Expected a tool row.');
+    expect(tool.running).toBe(false);
+    expect(tool.finishedAt).toBe('2026-01-01T00:00:04.000Z');
+  });
+
+  it('keeps the newest unfinished turn tool running', () => {
+    const items = groupTimeline({
+      events: [
+        event(
+          1,
+          {
+            type: 'tool.started',
+            turnId: 'turn-1',
+            toolCallId: 'c1',
+            name: 'bash',
+            input: { command: 'pnpm test' },
+          },
+          '2026-01-01T00:00:01.000Z',
+        ),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const tool = items.find((item) => item.kind === 'tool');
+    if (tool?.kind !== 'tool') throw new Error('Expected a tool row.');
+    expect(tool.running).toBe(true);
+  });
+
+  it('closes the spinner when the newest turn finished without a later send', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Thinking' }, '2026-01-01T00:00:01.000Z'),
+        event(2, { type: 'text.delta', turnId: 'turn-1', text: 'Stopped' }, '2026-01-01T00:00:02.000Z'),
+        event(3, { type: 'turn.finished', turnId: 'turn-1', reason: 'interrupted' }, '2026-01-01T00:00:03.000Z'),
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    expect(
+      items.map((item) =>
+        item.kind === 'assistant' || item.kind === 'reasoning' ? item.streaming : null,
+      ),
+    ).toEqual([false, false]);
   });
 });
 

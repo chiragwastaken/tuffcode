@@ -8,10 +8,11 @@ import {
   NoticeRow,
   ProseText,
   ReasoningRow,
+  StepsRow,
   ToolGroup,
   UserBubble,
 } from './timeline-items';
-import { groupTurnBlocks, type TimelineBlock } from './turn-blocks';
+import { foldTurnSteps, groupTurnBlocks, type TimelineBlock } from './turn-blocks';
 
 export interface TimelineProps {
   items: TimelineItem[];
@@ -39,6 +40,8 @@ function renderBlock(
       return <ProseText block={block} theme={theme} />;
     case 'tools':
       return <ToolGroup block={block} />;
+    case 'steps':
+      return <StepsRow block={block} theme={theme} />;
     case 'final':
       return (
         <FinalAnswer
@@ -65,7 +68,7 @@ export function Timeline({
 }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  const blocks = useMemo(() => groupTurnBlocks(items), [items]);
+  const blocks = useMemo(() => foldTurnSteps(groupTurnBlocks(items)), [items]);
 
   const virtualizer = useVirtualizer({
     count: blocks.length,

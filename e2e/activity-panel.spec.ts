@@ -51,10 +51,13 @@ test('lists the running bash call in Activity and keeps its output once finished
   await expect(panel.locator('pre')).toContainText('activity-ok');
   await expect(page.getByTestId('activity-waiting-empty')).toBeVisible();
 
-  // The thread timeline keeps the same completed call as a secondary surface.
-  const completed = page.getByTestId('tool-row').last();
+  // The thread timeline keeps the same completed call as a secondary surface,
+  // folded under the finished turn's steps row.
+  const completedSteps = page.getByTestId('steps-block').last();
+  await completedSteps.getByRole('button').first().click();
+  const completed = completedSteps.getByTestId('tool-row').last();
   await expect(completed).toHaveAttribute('data-status', 'done');
   await expect(completed).toContainText(MOCK_ACTIVITY_COMMAND);
   await completed.getByRole('button').click();
-  await expect(page.getByTestId('tool-output').last()).toContainText('activity-ok');
+  await expect(completedSteps.getByTestId('tool-output').last()).toContainText('activity-ok');
 });

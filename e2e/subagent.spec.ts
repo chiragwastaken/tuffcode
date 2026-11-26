@@ -68,9 +68,12 @@ test('spawns a child, shows its card under the spawn turn, and opens the pane', 
   await expect(page.getByTestId('subagent-pane-model')).toContainText('mock-model');
 
   // D40 removed the in-timeline card grid and its connector; the spawn stays in
-  // the parent timeline as one tool row attributed to the turn that ran it. The
-  // verb and target are separate spans, so textContent has no space between them.
-  const spawnRow = page.getByTestId('tool-row').filter({ hasText: /Used subagent/ });
+  // the parent timeline as one tool row attributed to the turn that ran it, folded
+  // under that finished turn's steps row. The verb and target are separate spans,
+  // so textContent has no space between them.
+  const spawnSteps = page.getByTestId('steps-block').last();
+  await spawnSteps.getByRole('button').first().click();
+  const spawnRow = spawnSteps.getByTestId('tool-row').filter({ hasText: /Used subagent/ });
   await expect(spawnRow).toBeVisible();
 
   await expect(page.getByTestId('subagent-task')).toContainText(MOCK_SUBAGENT_TASK);

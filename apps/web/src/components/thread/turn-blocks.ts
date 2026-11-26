@@ -62,6 +62,22 @@ export interface NoticeBlock {
   item: NoticeItem;
 }
 
+/**
+ * The pre-answer work of one finished turn: every reasoning, prose and tool block
+ * that came before the answer, folded under one disclosure row. Only those kinds
+ * are folded, so no user, approval or notice block can appear here.
+ */
+export interface StepsBlock {
+  kind: 'steps';
+  key: string;
+  turnId: string;
+  /** Total tool calls across the folded tool blocks, not the number of groups. */
+  tools: number;
+  /** Sum of the reasoning durations that are known, or null when none is. */
+  durationMs: number | null;
+  children: TimelineBlock[];
+}
+
 export type TimelineBlock =
   | UserBlock
   | ReasoningBlock
@@ -69,7 +85,8 @@ export type TimelineBlock =
   | ToolGroupBlock
   | FinalBlock
   | ApprovalBlock
-  | NoticeBlock;
+  | NoticeBlock
+  | StepsBlock;
 
 /** Milliseconds between two ISO timestamps, or null when either is unusable. */
 export function elapsedMs(startedAt: string | null, finishedAt: string | null): number | null {
@@ -92,6 +109,20 @@ export function formatDuration(ms: number | null): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+/**
+ * The one-line summary of a folded steps block: "Ran 3 tools and thought for 12s".
+ * Each half stands alone when the other is missing, and a turn with neither a
+ * tool call nor a measured thought keeps the neutral "Worked".
+ */
+export function stepsSummary(tools: number, durationMs: number | null): string {
+  const duration = formatDuration(durationMs);
+  const calls = tools > 0 ? `Ran ${tools} ${tools === 1 ? 'tool' : 'tools'}` : '';
+  if (calls.length > 0 && duration.length > 0) return `${calls} and thought for ${duration}`;
+  if (calls.length > 0) return calls;
+  if (duration.length > 0) return `Thought for ${duration}`;
+  return 'Worked';
 }
 
 const VERBS: Record<string, string> = {
@@ -358,4 +389,71 @@ export function groupTurnBlocks(items: readonly TimelineItem[]): TimelineBlock[]
   });
 
   return blocks;
+}
+
+/** The kinds a steps row absorbs; everything else keeps its own row. */
+function foldable(block: TimelineBlock): block is ReasoningBlock | ProseBlock | ToolGroupBlock {
+  return block.kind === 'reasoning' || block.kind === 'prose' || block.kind === 'tools';
+}
+
+function stepsBlock(turnId: string, children: TimelineBlock[]): StepsBlock {
+  let tools = 0;
+  let duration = 0;
+  let measured = false;
+  for (const child of children) {
+    if (child.kind === 'tools') tools += child.tools.length;
+    else if (child.kind === 'reasoning' && child.durationMs !== null) {
+      duration += child.durationMs;
+      measured = true;
+    }
+  }
+  return {
+    kind: 'steps',
+    key: `steps-${turnId}`,
+    turnId,
+    tools,
+    durationMs: measured ? duration : null,
+    children,
+  };
+}
+
+/**
+ * Folds the work before a settled answer into one steps row. The thread timeline
+ * applies this on top of groupTurnBlocks; a compact surface that renders blocks
+ * itself can keep the flat list. A turn keeps today's flat blocks while its answer
+ * streams or while no answer exists, so live progress stays visible; only a
+ * finished answer pulls its own turn's reasoning, prose and tools together.
+ * Approvals, notices and user rows are never folded, and the steps row sits
+ * directly above the answer it belongs to.
+ */
+export function foldTurnSteps(blocks: readonly TimelineBlock[]): TimelineBlock[] {
+  const settled = new Set<string>();
+  for (const block of blocks) {
+    if (block.kind === 'final' && !block.streaming) settled.add(block.turnId);
+  }
+  if (settled.size === 0) return blocks.slice();
+
+  const result: TimelineBlock[] = [];
+  const pending = new Map<string, TimelineBlock[]>();
+
+  for (const block of blocks) {
+    if (foldable(block) && settled.has(block.turnId)) {
+      const children = pending.get(block.turnId) ?? [];
+      children.push(block);
+      pending.set(block.turnId, children);
+      continue;
+    }
+    if (block.kind === 'final' && settled.has(block.turnId)) {
+      const children = pending.get(block.turnId) ?? [];
+      pending.delete(block.turnId);
+      if (children.length > 0) result.push(stepsBlock(block.turnId, children));
+    }
+    result.push(block);
+  }
+
+  // A settled turn always ends with its answer, so this only guards the fold from
+  // silently dropping rows if a future shape breaks that invariant.
+  for (const children of pending.values()) result.push(...children);
+
+  return result;
 }
