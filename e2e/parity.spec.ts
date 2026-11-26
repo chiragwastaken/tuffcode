@@ -38,21 +38,53 @@ async function shot(page: Page, name: string): Promise<string> {
   return path;
 }
 
+/**
+ * Applies the requested size to the real BrowserWindow. A maximized or fullscreen
+ * window ignores setSize, and a setSize issued while the window is still settling
+ * can be dropped, so the caller may apply this more than once.
+ */
+async function applyWindowBounds(
+  session: Pick<AppSession, 'app'>,
+  width: number,
+  height: number,
+): Promise<void> {
+  await session.app.evaluate(
+    ({ BrowserWindow }, size: [number, number]) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      if (!window) return;
+      if (window.isFullScreen()) window.setFullScreen(false);
+      if (window.isMaximized()) window.unmaximize();
+      const [x, y] = window.getPosition();
+      window.setBounds({ x, y, width: size[0], height: size[1] });
+      window.setSize(size[0], size[1]);
+    },
+    [width, height] as [number, number],
+  );
+}
+
 /** Resizes the real BrowserWindow, then waits until the renderer agrees. */
 async function resizeWindow(
   session: Pick<AppSession, 'app' | 'page'>,
   width: number,
   height: number,
 ): Promise<number> {
-  await session.app.evaluate(
-    ({ BrowserWindow }, size: [number, number]) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      if (window) window.setSize(size[0], size[1]);
-    },
-    [width, height] as [number, number],
-  );
-  await expect.poll(() => session.page.evaluate(() => window.innerWidth)).toBeGreaterThan(width - 80);
-  await expect.poll(() => session.page.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(width);
+  const waitForWidth = async (timeout: number): Promise<void> => {
+    await expect
+      .poll(() => session.page.evaluate(() => window.innerWidth), { timeout })
+      .toBeGreaterThan(width - 80);
+    await expect
+      .poll(() => session.page.evaluate(() => window.innerWidth), { timeout })
+      .toBeLessThanOrEqual(width);
+  };
+
+  await applyWindowBounds(session, width, height);
+  try {
+    await waitForWidth(5_000);
+  } catch {
+    // The resize was dropped under load; re-apply it once and give it the full window.
+    await applyWindowBounds(session, width, height);
+    await waitForWidth(15_000);
+  }
   return session.page.evaluate(() => window.innerWidth);
 }
 
