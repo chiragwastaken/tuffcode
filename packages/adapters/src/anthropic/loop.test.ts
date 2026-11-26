@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdapterDeps, AdapterEvent, AdapterLogger, TurnContext } from '@tuffcode/contracts';
 import type { AnthropicMessage, AnthropicRequestBody, MessagesStreamer } from './client.js';
 import { compactHistory, mapStopReason, runTurn } from './loop.js';
@@ -124,6 +124,52 @@ function toolUseEvents(index: number): FixtureEvent[] {
   ];
 }
 
+/** Several complete tool_use blocks in one assistant step, in the model's order. */
+function multiToolUseEvents(
+  calls: readonly { id: string; name: string; args: unknown }[],
+): FixtureEvent[] {
+  const events: FixtureEvent[] = [];
+  for (const [index, call] of calls.entries()) {
+    events.push({
+      event: 'content_block_start',
+      data: {
+        type: 'content_block_start',
+        index,
+        content_block: { type: 'tool_use', id: call.id, name: call.name, input: {} },
+      },
+    });
+    events.push({
+      event: 'content_block_delta',
+      data: {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.args) },
+      },
+    });
+    events.push({ event: 'content_block_stop', data: { type: 'content_block_stop', index } });
+  }
+  events.push({
+    event: 'message_delta',
+    data: {
+      type: 'message_delta',
+      delta: { stop_reason: 'tool_use' },
+      usage: { output_tokens: 1 },
+    },
+  });
+  return events;
+}
+
+/** A promise plus its resolver, so a test can hold a tool call open mid-flight. */
+function gate<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  // The package targets ES2023, which has no Promise.withResolvers, so this is the
+  // only way to capture the resolver.
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /** A body whose first read rejects, standing in for a dropped provider connection. */
 function failingStream(message: string): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -239,6 +285,190 @@ describe('runTurn', () => {
         },
       ],
     });
+  });
+
+  it('runs two read-only calls of one step concurrently and keeps results in call order', async () => {
+    const gates = [gate<string>(), gate<string>()];
+    const started: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (_name, args) => {
+        const index = args.query === 'first' ? 0 : 1;
+        started.push(String(args.query));
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        const output = await gates[index]?.promise;
+        inFlight -= 1;
+        return output ?? '';
+      },
+    };
+    const client = new FakeClient([
+      streamOf(
+        multiToolUseEvents([
+          { id: 'toolu_a', name: 'memory', args: { action: 'search', query: 'first' } },
+          { id: 'toolu_b', name: 'memory', args: { action: 'search', query: 'second' } },
+        ]),
+      ),
+      streamOf(fixture('text-stream')),
+    ]);
+    const messages: AnthropicMessage[] = [{ role: 'user', content: 'go' }];
+    const events: AdapterEvent[] = [];
+    const collecting = (async () => {
+      for await (const event of runTurn({
+        ctx: context(),
+        client,
+        messages,
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      })) {
+        events.push(event);
+      }
+    })();
+
+    // Both calls must be running before either one is allowed to finish.
+    await vi.waitFor(() => expect(started).toEqual(['first', 'second']));
+    expect(maxInFlight).toBe(2);
+    gates[1]?.resolve('second result');
+    await vi.waitFor(() =>
+      expect(events.filter((event) => event.type === 'tool.finished')).toHaveLength(1),
+    );
+    expect(events.filter((event) => event.type === 'tool.finished')[0]).toMatchObject({
+      toolCallId: 'toolu_b',
+      output: 'second result',
+    });
+    gates[0]?.resolve('first result');
+    await collecting;
+
+    const finished = events.filter((event) => event.type === 'tool.finished');
+    expect(finished.map((event) => event.toolCallId)).toEqual(['toolu_b', 'toolu_a']);
+    expect(
+      events.filter((event) => event.type === 'tool.started').map((event) => event.toolCallId),
+    ).toEqual(['toolu_a', 'toolu_b']);
+    // The tool_result blocks follow the model's call order, not the completion order.
+    expect(client.requests[1]?.messages.at(-1)).toEqual({
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_a', content: 'first result' },
+        { type: 'tool_result', tool_use_id: 'toolu_b', content: 'second result' },
+      ],
+    });
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'complete',
+    });
+  });
+
+  it('serializes the step when one call needs approval', async () => {
+    const order: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (_name, args) => {
+        order.push(String(args.query ?? args.action));
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        return 'ran ' + String(args.query ?? args.action);
+      },
+    };
+    const client = new FakeClient([
+      streamOf(
+        multiToolUseEvents([
+          { id: 'toolu_read', name: 'memory', args: { action: 'search', query: 'first' } },
+          {
+            id: 'toolu_cfg',
+            name: 'config',
+            args: { action: 'settings.set', key: 'a', value: 1 },
+          },
+        ]),
+      ),
+      streamOf(fixture('text-stream')),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ permissionMode: 'ask' }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => {
+          order.push('approval');
+          return 'allow';
+        },
+      }),
+    );
+
+    expect(maxInFlight).toBe(1);
+    expect(order).toEqual(['first', 'approval', 'settings.set']);
+    const types = events
+      .filter(
+        (event) =>
+          event.type === 'tool.started' ||
+          event.type === 'tool.finished' ||
+          event.type === 'approval.requested',
+      )
+      .map((event) => event.type);
+    expect(types).toEqual([
+      'tool.started',
+      'tool.finished',
+      'tool.started',
+      'approval.requested',
+      'tool.finished',
+    ]);
+  });
+
+  it('does not cancel a sibling when one parallel call fails', async () => {
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (_name, args) => {
+        if (args.query === 'boom') throw new Error('memory offline');
+        return 'ok';
+      },
+    };
+    const client = new FakeClient([
+      streamOf(
+        multiToolUseEvents([
+          { id: 'toolu_boom', name: 'memory', args: { action: 'search', query: 'boom' } },
+          { id: 'toolu_ok', name: 'memory', args: { action: 'search', query: 'fine' } },
+        ]),
+      ),
+      streamOf(fixture('text-stream')),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        maxTokens: 256,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    const finished = events.filter((event) => event.type === 'tool.finished');
+    expect(finished).toHaveLength(2);
+    expect(finished.find((event) => event.toolCallId === 'toolu_boom')).toMatchObject({
+      output: 'memory offline',
+      isError: true,
+    });
+    expect(finished.find((event) => event.toolCallId === 'toolu_ok')).toMatchObject({
+      output: 'ok',
+      isError: false,
+    });
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: 'turn.finished', reason: 'complete' });
   });
 
   it('denies a tool when approval is denied', async () => {

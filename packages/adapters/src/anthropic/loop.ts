@@ -1,4 +1,10 @@
-import type { AdapterDeps, AdapterEvent, ApprovalChoice, TurnContext } from '@tuffcode/contracts';
+import type {
+  AdapterDeps,
+  AdapterEvent,
+  ApprovalChoice,
+  TurnContext,
+  TurnToolOptions,
+} from '@tuffcode/contracts';
 import { TOOL_NAMES, SUBAGENT_TOOL_NAME, type ToolName } from '@tuffcode/prompt';
 import { newId } from '@tuffcode/shared';
 import {
@@ -22,8 +28,10 @@ import {
   type ToolSessionState,
 } from '../openai/tools.js';
 import {
+  isParallelSafeTool,
   isServerToolOffered,
   isToolDisabled,
+  PARALLEL_TOOL_LIMIT,
   RepeatedToolCallGuard,
   resolveToolOptions,
 } from '../tool-policy.js';
@@ -96,6 +104,70 @@ function parseToolArguments(json: string): {
   } catch (error) {
     return { args: null, parseError: 'invalid tool arguments: ' + errorMessage(error) };
   }
+}
+
+interface CallPlan {
+  args: Record<string, unknown> | null;
+  parseError: string | null;
+  /** Set when the call cannot run at all; the call is answered without executing. */
+  result: ToolExecResult | null;
+  decision: PermissionDecision | null;
+}
+
+/**
+ * Decides what a call does before any of the step's calls start: answer with an error,
+ * ask the user, or run. Kept separate from execution so a whole assistant step can be
+ * judged before any of it is started, which is what makes the parallel decision safe.
+ */
+function planToolCall(
+  name: string,
+  args: Record<string, unknown> | null,
+  parseError: string | null,
+  ctx: TurnContext,
+  toolOptions: TurnToolOptions,
+): CallPlan {
+  if (parseError !== null) {
+    return { args, parseError, result: { output: parseError, isError: true }, decision: null };
+  }
+  if (!isServerToolOffered(name, toolOptions)) {
+    return {
+      args,
+      parseError,
+      result: { output: 'tool "' + name + '" is not available in this turn', isError: true },
+      decision: null,
+    };
+  }
+  let decision: PermissionDecision;
+  if (name === SUBAGENT_TOOL_NAME) {
+    decision = classifySubagentTool(ctx.permissionMode, args ?? {});
+  } else if (isExtraToolName(name)) {
+    decision = classifyExtraTool(name, args ?? {}, ctx.permissionMode);
+  } else if (!isToolName(name)) {
+    return {
+      args,
+      parseError,
+      result: { output: 'unknown tool: ' + name, isError: true },
+      decision: null,
+    };
+  } else if (isToolDisabled(name, ctx.toolAllowlist)) {
+    return {
+      args,
+      parseError,
+      result: { output: 'tool "' + name + '" is disabled in settings', isError: true },
+      decision: null,
+    };
+  } else {
+    decision = classifyTool(name, args ?? {}, ctx.permissionMode);
+  }
+  if (decision === 'deny') {
+    return {
+      args,
+      parseError,
+      result: { output: 'tool is not allowed in ' + ctx.permissionMode + ' mode', isError: true },
+      decision,
+    };
+  }
+  return { args, parseError, result: null, decision };
 }
 
 export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEvent> {
@@ -341,89 +413,163 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
       assistantBlocks.push(...toolUseBlocks);
       messages.push({ role: 'assistant', content: assistantBlocks });
 
+      const plans = toolUseBlocks.map((block, index) =>
+        planToolCall(
+          block.name,
+          parsedArguments[index]?.args ?? null,
+          parsedArguments[index]?.parseError ?? null,
+          ctx,
+          toolOptions,
+        ),
+      );
+      // The step overlaps only when every call is a read the ladder allows in every
+      // mode. One approval, one write, or one unknown tool keeps the whole step serial.
+      const parallel =
+        !signal.aborted &&
+        toolUseBlocks.length > 1 &&
+        plans.every(
+          (plan, index) =>
+            plan.result === null &&
+            plan.decision === 'allow' &&
+            isParallelSafeTool(toolUseBlocks[index]?.name ?? '', plan.args),
+        );
+
       const toolResults: AnthropicToolResultBlock[] = [];
-      for (const [index, call] of ordered.entries()) {
-        const toolCallId = toolUseBlocks[index]?.id ?? newId('call');
-        if (signal.aborted) {
+      if (parallel) {
+        // Every call is announced in the model's order before any of them runs, so the
+        // timeline never shows a later call starting before an earlier one.
+        for (const [index, block] of toolUseBlocks.entries()) {
+          yield {
+            type: 'tool.started',
+            turnId,
+            toolCallId: block.id,
+            name: block.name,
+            input: redactToolInput(plans[index]?.args ?? ordered[index]?.json ?? ''),
+          };
+        }
+        const batch = new Map<number, AnthropicToolResultBlock>();
+        const inFlight = new Map<number, Promise<{ index: number; result: ToolExecResult }>>();
+        const start = (position: number): void => {
+          const block = toolUseBlocks[position];
+          if (block === undefined) return;
+          // A rejection stays inside its own call: siblings keep running and the error
+          // is reported for this call only.
+          inFlight.set(
+            position,
+            executeTool(
+              block.name,
+              plans[position]?.args ?? {},
+              ctx,
+              state,
+              deps,
+              deps.extraTool,
+            ).then(
+              (result) => ({ index: position, result }),
+              (error: unknown) => ({
+                index: position,
+                result: { output: errorMessage(error), isError: true },
+              }),
+            ),
+          );
+        };
+        let nextCall = 0;
+        while (nextCall < toolUseBlocks.length && inFlight.size < PARALLEL_TOOL_LIMIT) {
+          start(nextCall);
+          nextCall += 1;
+        }
+        for (let completed = 0; completed < toolUseBlocks.length; completed += 1) {
+          const done = await Promise.race(inFlight.values());
+          inFlight.delete(done.index);
+          const block = toolUseBlocks[done.index];
+          batch.set(done.index, {
+            type: 'tool_result',
+            tool_use_id: block?.id ?? newId('call'),
+            content: done.result.output,
+            ...(done.result.isError ? { is_error: true } : {}),
+          });
+          yield {
+            type: 'tool.finished',
+            turnId,
+            toolCallId: block?.id ?? '',
+            output: done.result.output,
+            isError: done.result.isError,
+          };
+          if (nextCall < toolUseBlocks.length) {
+            start(nextCall);
+            nextCall += 1;
+          }
+        }
+        // The model reads results in the order it asked, not the order they finished.
+        for (let index = 0; index < toolUseBlocks.length; index += 1) {
+          const result = batch.get(index);
+          if (result !== undefined) toolResults.push(result);
+        }
+      } else {
+        for (const [index, call] of ordered.entries()) {
+          const toolCallId = toolUseBlocks[index]?.id ?? newId('call');
+          if (signal.aborted) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCallId,
+              content: '[interrupted]',
+              is_error: true,
+            });
+            continue;
+          }
+
+          const plan = plans[index];
+          yield {
+            type: 'tool.started',
+            turnId,
+            toolCallId,
+            name: call.name,
+            input: redactToolInput(plan?.args ?? call.json),
+          };
+
+          let result = plan?.result ?? null;
+          if (result === null && plan?.decision === 'approve') {
+            const approvalId = newId('apr');
+            const pending = options.requestApproval(approvalId);
+            yield {
+              type: 'approval.requested',
+              turnId,
+              approvalId,
+              toolCallId,
+              name: call.name,
+              input: redactToolInput(plan.args),
+            };
+            const choice = await pending;
+            if (signal.aborted) {
+              result = { output: '[interrupted]', isError: true };
+            } else if (choice === 'deny') {
+              result = { output: 'denied by user', isError: true };
+            }
+          }
+          if (result === null) {
+            result = await executeTool(
+              call.name,
+              plan?.args ?? {},
+              ctx,
+              state,
+              deps,
+              deps.extraTool,
+            );
+          }
+
+          yield {
+            type: 'tool.finished',
+            turnId,
+            toolCallId,
+            output: result.output,
+            isError: result.isError,
+          };
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolCallId,
-            content: '[interrupted]',
-            is_error: true,
+            content: result.output,
+            ...(result.isError ? { is_error: true } : {}),
           });
-          continue;
         }
-
-        const { args, parseError } = parsedArguments[index] ?? { args: null, parseError: null };
-        yield {
-          type: 'tool.started',
-          turnId,
-          toolCallId,
-          name: call.name,
-          input: redactToolInput(args ?? call.json),
-        };
-
-        let result: ToolExecResult | null = null;
-        let decision: PermissionDecision | null = null;
-        if (parseError !== null) {
-          result = { output: parseError, isError: true };
-        } else if (!isServerToolOffered(call.name, toolOptions)) {
-          result = {
-            output: 'tool "' + call.name + '" is not available in this turn',
-            isError: true,
-          };
-        } else if (call.name === SUBAGENT_TOOL_NAME) {
-          decision = classifySubagentTool(ctx.permissionMode, args ?? {});
-        } else if (isExtraToolName(call.name)) {
-          decision = classifyExtraTool(call.name, args ?? {}, ctx.permissionMode);
-        } else if (!isToolName(call.name)) {
-          result = { output: 'unknown tool: ' + call.name, isError: true };
-        } else if (isToolDisabled(call.name, ctx.toolAllowlist)) {
-          result = { output: 'tool "' + call.name + '" is disabled in settings', isError: true };
-        } else {
-          decision = classifyTool(call.name, args ?? {}, ctx.permissionMode);
-        }
-
-        if (decision === 'deny') {
-          result = {
-            output: 'tool is not allowed in ' + ctx.permissionMode + ' mode',
-            isError: true,
-          };
-        } else if (decision === 'approve') {
-          const approvalId = newId('apr');
-          const pending = options.requestApproval(approvalId);
-          yield {
-            type: 'approval.requested',
-            turnId,
-            approvalId,
-            toolCallId,
-            name: call.name,
-            input: redactToolInput(args),
-          };
-          const choice = await pending;
-          if (signal.aborted) {
-            result = { output: '[interrupted]', isError: true };
-          } else if (choice === 'deny') {
-            result = { output: 'denied by user', isError: true };
-          }
-        }
-        if (result === null) {
-          result = await executeTool(call.name, args ?? {}, ctx, state, deps, deps.extraTool);
-        }
-
-        yield {
-          type: 'tool.finished',
-          turnId,
-          toolCallId,
-          output: result.output,
-          isError: result.isError,
-        };
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolCallId,
-          content: result.output,
-          ...(result.isError ? { is_error: true } : {}),
-        });
       }
 
       if (toolResults.length > 0) {

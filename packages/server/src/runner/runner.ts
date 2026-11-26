@@ -75,6 +75,22 @@ interface TurnState {
   cancelled: boolean;
 }
 
+/**
+ * Streamed text and reasoning waiting to be written as one row. A turn that streams in
+ * 300 pieces writes one row per flush instead of 300, while the renderer keeps showing
+ * the same characters: the joined text is byte-identical to the unbatched stream.
+ */
+interface DeltaBuffer {
+  threadId: string;
+  turnId: string;
+  type: 'text.delta' | 'reasoning.delta';
+  parts: string[];
+  timer: NodeJS.Timeout | null;
+}
+
+/** How long a streamed delta may wait for company before it is written on its own. */
+const DELTA_FLUSH_MS = 50;
+
 type SettleReason = 'complete' | 'interrupted' | 'error';
 
 function errorMessage(error: unknown): string {
@@ -191,6 +207,8 @@ export function createRunner(deps: RunnerDeps): Runner {
   const active = new Map<string, ActiveRun>();
   /** Streamed text plus settlement and cancellation state per in-flight turn. */
   const turnState = new Map<string, TurnState>();
+  /** Streamed deltas waiting to be written as one row, keyed by turn. */
+  const deltaBuffers = new Map<string, DeltaBuffer>();
 
   function emitThread(thread: Thread): void {
     bus.emit({ kind: 'event', type: 'thread.updated', threadId: thread.id, payload: thread });
@@ -249,6 +267,58 @@ export function createRunner(deps: RunnerDeps): Runner {
     return seq;
   }
 
+  /**
+   * Writes whatever the turn buffered as one row, at the seq it gets now. The entry is
+   * dropped before the write, so a timer that fires mid-write finds nothing to flush
+   * and no path can append the same text twice.
+   */
+  function flushDeltas(turnId: string): void {
+    const buffer = deltaBuffers.get(turnId);
+    if (buffer === undefined) return;
+    deltaBuffers.delete(turnId);
+    // The timer may already have fired, which leaves null here.
+    clearTimeout(buffer.timer ?? undefined);
+    if (buffer.parts.length === 0) return;
+    appendEvent(buffer.threadId, {
+      type: buffer.type,
+      turnId,
+      text: buffer.parts.join(''),
+    });
+  }
+
+  /** Buffers one delta, flushing first when the type changes so the order is kept. */
+  function recordDelta(
+    threadId: string,
+    event: Extract<AdapterEvent, { type: 'text.delta' | 'reasoning.delta' }>,
+  ): void {
+    const existing = deltaBuffers.get(event.turnId);
+    if (existing !== undefined && existing.type === event.type) {
+      existing.parts.push(event.text);
+      return;
+    }
+    if (existing !== undefined) flushDeltas(event.turnId);
+    const buffer: DeltaBuffer = {
+      threadId,
+      turnId: event.turnId,
+      type: event.type,
+      parts: [event.text],
+      timer: null,
+    };
+    // The timer keeps streaming live between structural events; every exit path clears it.
+    buffer.timer = setTimeout(() => {
+      buffer.timer = null;
+      flushDeltas(event.turnId);
+    }, DELTA_FLUSH_MS);
+    buffer.timer.unref();
+    deltaBuffers.set(event.turnId, buffer);
+  }
+
+  /** Appends a structural event only after the turn's buffered text is written. */
+  function appendAfterDeltas(threadId: string, turnId: string, event: AdapterEvent): void {
+    flushDeltas(turnId);
+    appendEvent(threadId, event);
+  }
+
   function denyPending(threadId: string): void {
     const at = nowIso();
     for (const approval of repos.approvals.listPending(threadId)) {
@@ -298,6 +368,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     reason: SettleReason,
     state: TurnState | undefined,
   ): void {
+    // Nothing structural may be written ahead of the turn's buffered text, and no timer
+    // may outlive the turn.
+    flushDeltas(turnId);
     if (state !== undefined) {
       if (state.settled) return;
       state.settled = true;
@@ -366,11 +439,15 @@ export function createRunner(deps: RunnerDeps): Runner {
           settleTurn(thread, turnId, event.reason, state);
           continue;
         }
-        appendEvent(thread.id, event);
+        if (event.type === 'text.delta' || event.type === 'reasoning.delta') {
+          recordDelta(thread.id, event);
+          continue;
+        }
+        appendAfterDeltas(thread.id, turnId, event);
         if (event.type === 'approval.requested') requestApproval(thread, turnId, event);
       }
       if (!state.settled && !state.cancelled) {
-        appendEvent(thread.id, {
+        appendAfterDeltas(thread.id, turnId, {
           type: 'error',
           message: `${kind}: adapter ended without turn.finished`,
           retryable: false,
@@ -387,7 +464,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           reason: errorMessage(error),
         });
       } else {
-        appendEvent(thread.id, {
+        appendAfterDeltas(thread.id, turnId, {
           type: 'error',
           message: `${kind}: ${errorMessage(error)}`,
           retryable: false,
@@ -395,6 +472,8 @@ export function createRunner(deps: RunnerDeps): Runner {
         settleTurn(thread, turnId, 'error', state);
       }
     } finally {
+      // The buffer and its timer must not outlive the turn, even when the stream threw.
+      flushDeltas(turnId);
       turnState.delete(turnId);
       // Only this run may clear its own slot: an interrupt followed by a send leaves a
       // newer turn in the map, and this run must not fence it off.
