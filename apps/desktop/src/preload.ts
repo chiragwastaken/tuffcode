@@ -5,11 +5,13 @@ import {
   KEEP_AWAKE_CHANNEL,
   MENU_ACTION_CHANNEL,
   NOTIFY_CHANNEL,
+  NOTIFY_TEST_CHANNEL,
   OPEN_EXTERNAL_CHANNEL,
   PICK_FILE_CHANNEL,
   PICK_FOLDER_CHANNEL,
   SET_THEME_CHANNEL,
   type NotifyRequest,
+  type NotifyTestResult,
   type PickFileRequest,
   type BootstrapInfo,
   type Theme,
@@ -28,6 +30,8 @@ const bridge: TuffcodeBridge = {
    */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   notify: (request: NotifyRequest): void => ipcRenderer.send(NOTIFY_CHANNEL, request),
+  notifyTest: (request: NotifyRequest): Promise<NotifyTestResult> =>
+    ipcRenderer.invoke(NOTIFY_TEST_CHANNEL, request),
   setKeepAwake: (on: boolean): void => ipcRenderer.send(KEEP_AWAKE_CHANNEL, on === true),
   openExternal: (url: string): void => ipcRenderer.send(OPEN_EXTERNAL_CHANNEL, url),
   checkForUpdates: (): Promise<UpdateCheckOutcome> => ipcRenderer.invoke(CHECK_UPDATES_CHANNEL),

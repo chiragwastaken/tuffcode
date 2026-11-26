@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   attachSecretBridge,
+  deliverNotification,
   handleChildMessage,
   isExternalUrl,
   parseNotifyRequest,
   parsePickFileRequest,
+  type NotificationDelivery,
+  type NotificationShowOptions,
   type SecretBridgeChild,
   type SecretBridgeLogger,
 } from './bridge';
@@ -290,5 +293,88 @@ describe('round 4 bridge validation', () => {
       title: 'Upload plugin',
     });
     expect(parsePickFileRequest({ extensions: [] })).toBeNull();
+  });
+});
+
+describe('round 5 notification delivery', () => {
+  it('rejects an overlong title or body and keeps an unsafe route out of the payload', () => {
+    expect(parseNotifyRequest({ title: 'x'.repeat(120), body: 'y'.repeat(400) })).toEqual({
+      title: 'x'.repeat(120),
+      body: 'y'.repeat(400),
+      silent: false,
+    });
+    expect(parseNotifyRequest({ title: 'x'.repeat(121), body: 'ok' })).toBeNull();
+    expect(parseNotifyRequest({ title: 'ok', body: 'y'.repeat(401) })).toBeNull();
+    expect(parseNotifyRequest({ title: 'ok', body: 'ok', route: '/project/p1/thread/t1' })).toEqual(
+      { title: 'ok', body: 'ok', route: '/project/p1/thread/t1', silent: false },
+    );
+    expect(parseNotifyRequest({ title: 'ok', body: 'ok', route: 'https://evil.example' })).toEqual({
+      title: 'ok',
+      body: 'ok',
+      silent: false,
+    });
+    expect(
+      parseNotifyRequest({ title: 'ok', body: 'ok', route: '/project/p1/thread/t1\n' }),
+    ).toEqual({
+      title: 'ok',
+      body: 'ok',
+      silent: false,
+    });
+  });
+
+  it('returns supported and shown when the OS accepted the test notification', () => {
+    const shown: { options: NotificationShowOptions; route: string | undefined }[] = [];
+    const delivery: NotificationDelivery = {
+      isSupported: () => true,
+      show: (options, route) => {
+        shown.push({ options, route });
+      },
+    };
+    const result = deliverNotification(
+      {
+        title: 'Test notification',
+        body: 'Tuffcode notifications are working.',
+        route: '/project/p1/thread/t1',
+        silent: false,
+      },
+      delivery,
+    );
+    expect(result).toEqual({ supported: true, shown: true });
+    expect(shown).toEqual([
+      {
+        options: {
+          title: 'Test notification',
+          body: 'Tuffcode notifications are working.',
+          silent: false,
+        },
+        route: '/project/p1/thread/t1',
+      },
+    ]);
+  });
+
+  it('reports an unsupported system and a failed show without claiming a banner', () => {
+    expect(
+      deliverNotification(
+        { title: 'Test notification', body: 'hi' },
+        {
+          isSupported: () => false,
+          show: () => {
+            throw new Error('show must not run when unsupported');
+          },
+        },
+      ),
+    ).toEqual({ supported: false, shown: false });
+
+    expect(
+      deliverNotification(
+        { title: 'Test notification', body: 'hi' },
+        {
+          isSupported: () => true,
+          show: () => {
+            throw new Error('no toast surface');
+          },
+        },
+      ),
+    ).toEqual({ supported: true, shown: false, error: 'no toast surface' });
   });
 });

@@ -2,7 +2,13 @@ import type { ThreadStatus } from '@tuffcode/contracts';
 import { useEffect, useRef } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
-import { notificationFor } from './notification-model';
+import {
+  hasRunningThread,
+  keepAwakeFor,
+  notificationFor,
+  shouldNotify,
+  trackThreadStatus,
+} from './notification-model';
 
 /**
  * Desktop notifications and keep-awake. Notifications follow the Notifications
@@ -21,7 +27,7 @@ export function useNotifications(): void {
       const settings = state.settings?.notifications;
       if (settings !== undefined && window.tuffcode?.notify !== undefined) {
         const focused = typeof document !== 'undefined' && document.hasFocus();
-        if (!(settings.onlyWhenUnfocused && focused)) {
+        if (shouldNotify(settings, focused)) {
           const request = notificationFor(event, {
             settings,
             threads: state.threads,
@@ -30,15 +36,14 @@ export function useNotifications(): void {
           if (request !== null) window.tuffcode.notify(request);
         }
       }
-      if (event.type === 'thread.updated') previous.current.set(event.payload.id, event.payload.status);
+      // Track after judging, so this frame is compared with the status it replaced.
+      trackThreadStatus(previous.current, event);
     });
   }, [rpc]);
 
   const keepAwake = useAppStore((state) => state.settings?.keepAwake ?? false);
-  const anyRunning = useAppStore((state) =>
-    Object.values(state.threads).some((thread) => thread.status === 'running'),
-  );
+  const anyRunning = useAppStore((state) => hasRunningThread(state.threads));
   useEffect(() => {
-    window.tuffcode?.setKeepAwake?.(keepAwake && anyRunning);
+    window.tuffcode?.setKeepAwake?.(keepAwakeFor(keepAwake, anyRunning));
   }, [anyRunning, keepAwake]);
 }

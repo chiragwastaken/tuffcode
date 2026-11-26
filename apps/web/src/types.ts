@@ -24,6 +24,13 @@ export interface NotifyRequest {
   silent?: boolean;
 }
 
+/** Mirrors the desktop bridge's answer to a test notification. */
+export interface NotifyTestResult {
+  supported: boolean;
+  shown: boolean;
+  error?: string;
+}
+
 export interface TuffcodeBridge {
   getBootstrap(): Promise<BootstrapInfo>;
   pickFolder(): Promise<string | null>;
@@ -34,6 +41,7 @@ export interface TuffcodeBridge {
   /** Round 4 additions; absent in a browser test harness, so callers must guard. */
   pickFile?(request: { title?: string; extensions: string[] }): Promise<string | null>;
   notify?(request: NotifyRequest): void;
+  notifyTest?(request: NotifyRequest): Promise<NotifyTestResult>;
   setKeepAwake?(on: boolean): void;
   openExternal?(url: string): void;
   /** Absent in a browser test harness and in a preload older than this build. */
