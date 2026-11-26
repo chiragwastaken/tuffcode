@@ -2,19 +2,31 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { AdapterDeps, PermissionMode, TurnContext } from '@tuffcode/contracts';
 import { SUBAGENT_TOOL_NAME, isSubagentAction, isSubagentType } from '@tuffcode/prompt';
 import { z } from 'zod';
-import { classifyExtraTool, classifySubagentTool, type PermissionDecision } from '../openai/tools.js';
+import {
+  classifyExtraTool,
+  classifySubagentTool,
+  type PermissionDecision,
+} from '../openai/tools.js';
 import { resolveToolOptions } from '../tool-policy.js';
 
 /**
  * Tuffcode's own tools for Claude sessions. The Claude CLI runs its own tool loop, so
  * the harness tools reach it as an in-process SDK MCP server named `tuffcode`: the
- * task list, subagent control, memory, skills and web_fetch share one implementation
- * with the harness adapters and land in the same thread state.
+ * task list, subagent control, memory, config, MCP, skills and web_fetch share one
+ * implementation with the harness adapters and land in the same thread state.
  */
 export const TUFFCODE_SERVER_NAME = 'tuffcode';
 const PREFIX = `mcp__${TUFFCODE_SERVER_NAME}__`;
 
 type ToolText = { content: { type: 'text'; text: string }[]; isError?: boolean };
+
+/** One registered tool before the SDK wraps it, so tests can inspect names and handlers. */
+export interface TuffcodeToolSpec {
+  name: string;
+  description: string;
+  schema: z.ZodRawShape;
+  run(args: Record<string, unknown>): Promise<ToolText>;
+}
 
 function text(value: string, isError = false): ToolText {
   return { content: [{ type: 'text', text: value }], ...(isError ? { isError: true } : {}) };
@@ -31,8 +43,8 @@ function defined(args: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * The permission decision for a `mcp__tuffcode__*` call, or null for any other tool.
- * Mirrors the harness: status reads, todo and skill never ask; spawning, messaging and
- * stopping follow the permission ladder.
+ * Mirrors the harness: status reads, todo and skill never ask; spawning, messaging,
+ * stopping, config and MCP calls follow the permission ladder.
  */
 export function classifyTuffcodeTool(
   toolName: string,
@@ -42,10 +54,231 @@ export function classifyTuffcodeTool(
   if (!toolName.startsWith(PREFIX)) return null;
   const name = toolName.slice(PREFIX.length);
   if (name === SUBAGENT_TOOL_NAME) return classifySubagentTool(mode, input);
-  if (name === 'todo' || name === 'skill' || name === 'web_fetch' || name === 'memory' || name === 'config') {
+  if (
+    name === 'todo' ||
+    name === 'skill' ||
+    name === 'web_fetch' ||
+    name === 'memory' ||
+    name === 'config' ||
+    name === 'mcp'
+  ) {
     return classifyExtraTool(name, input, mode);
   }
   return 'deny';
+}
+
+/** The `config` schema mirrors the prompt tool, plus the secret fields this round adds. */
+const CONFIG_SCHEMA = {
+  action: z.string(),
+  providerId: z.string().optional(),
+  kind: z.string().optional(),
+  label: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.string().optional(),
+  modelId: z.string().optional(),
+  contextWindow: z.number().int().min(1).optional(),
+  maxOutputTokens: z.number().int().min(1).optional(),
+  capabilities: z.string().optional(),
+  reasoning: z.string().optional(),
+  command: z.string().optional(),
+  args: z.string().optional(),
+  env: z.string().optional(),
+  cwd: z.string().optional(),
+  transport: z.enum(['stdio', 'http']).optional(),
+  url: z.string().optional(),
+  token: z.string().optional(),
+  secretEnv: z.string().optional(),
+  secret: z.string().optional(),
+  apiKey: z.string().optional(),
+  key: z.string().optional(),
+  value: z.string().optional(),
+};
+
+const MCP_SCHEMA = {
+  action: z.string(),
+  server: z.string().optional(),
+  tool: z.string().optional(),
+  arguments: z.string().optional(),
+};
+
+/**
+ * The tools this turn offers, in registration order. Gated exactly like the harness:
+ * config and memory need `extra`, mcp needs `mcp`, and every spec needs a runner.
+ */
+export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): TuffcodeToolSpec[] {
+  const options = resolveToolOptions(ctx, deps);
+  const runner = deps.extraTool;
+  const scope = { cwd: ctx.cwd, ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }) };
+  const specs: TuffcodeToolSpec[] = [];
+
+  if (options.todo && runner !== undefined) {
+    specs.push({
+      name: 'todo',
+      description:
+        'Track multi-step work as a phased task list the user sees live. op: init (list or items), start (task), done, drop, rm (task, phase, or all), append (items, phase), view. Keep one task in progress; mark it done right after verifying.',
+      schema: {
+        op: z.enum(['init', 'start', 'done', 'drop', 'rm', 'append', 'view']),
+        list: z
+          .array(z.object({ phase: z.string().optional(), items: z.array(z.string()) }))
+          .optional(),
+        items: z.array(z.string()).optional(),
+        task: z.string().optional(),
+        phase: z.string().optional(),
+      },
+      run: async (args) => {
+        try {
+          return text(await runner('todo', defined(args), scope));
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+  }
+
+  if (options.subagent && deps.spawnSubagent !== undefined) {
+    const spawn = deps.spawnSubagent;
+    const control = deps.subagentControl;
+    specs.push({
+      name: SUBAGENT_TOOL_NAME,
+      description:
+        'Run and control Tuffcode subagents. action spawn (default) starts explorer, reviewer, notetaker, worker or planner with a self-contained task and returns its id; status lists children with tool count, tokens and activity; wait blocks until children settle (timeout_s); message steers a child; stop cancels one; inbox reads unread reports.',
+      schema: {
+        action: z.string().optional(),
+        id: z.string().optional(),
+        text: z.string().optional(),
+        timeout_s: z.number().int().min(1).max(600).optional(),
+        type: z.string().optional(),
+        task: z.string().optional(),
+        model: z.string().optional(),
+      },
+      run: async (args) => {
+        const action = typeof args.action === 'string' ? args.action : 'spawn';
+        const task = typeof args.task === 'string' ? args.task : '';
+        const model = typeof args.model === 'string' ? args.model : undefined;
+        try {
+          if (!isSubagentAction(action)) return text(`unknown action: ${action}`, true);
+          if (action === 'spawn') {
+            if (!isSubagentType(args.type)) {
+              return text(
+                'type must be one of explorer, reviewer, notetaker, worker, planner',
+                true,
+              );
+            }
+            if (task.trim().length === 0) {
+              return text('task is required', true);
+            }
+            const spawned = await spawn({
+              ...scope,
+              type: args.type,
+              task,
+              ...(model === undefined ? {} : { model }),
+            });
+            return text(
+              `subagent ${spawned.childId} (${args.type}) ${spawned.status}. Use action wait to collect its summary.`,
+            );
+          }
+          if (control === undefined) return text(`subagent ${action} is unavailable`, true);
+          return text(
+            await control({
+              action,
+              ...scope,
+              ...(typeof args.id === 'string' ? { id: args.id } : {}),
+              ...(typeof args.text === 'string' ? { text: args.text } : {}),
+              ...(typeof args.timeout_s === 'number' ? { timeoutSeconds: args.timeout_s } : {}),
+              signal: ctx.signal,
+            }),
+          );
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+  }
+
+  if (options.extra && runner !== undefined) {
+    specs.push({
+      name: 'memory',
+      description:
+        'Search Tuffcode brain memory or record one durable entry. action: search (query) or add (kind, text, tags, importance).',
+      schema: {
+        action: z.enum(['search', 'add']),
+        query: z.string().optional(),
+        kind: z.string().optional(),
+        text: z.string().optional(),
+        tags: z.string().optional(),
+        importance: z.string().optional(),
+      },
+      run: async (args) => {
+        try {
+          return text(await runner('memory', defined(args), scope));
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+
+    specs.push({
+      name: 'config',
+      description:
+        'Change Tuffcode configuration through validated services: add a provider, add a provider model, add an MCP server, or set one allowlisted setting. Pass a user-supplied credential in secret (alias apiKey) for provider.add, token for an http MCP server, or secretEnv as a JSON object for a stdio server; it goes to the OS keychain and is never echoed. Pass capabilities, args, env and secretEnv as JSON strings.',
+      schema: CONFIG_SCHEMA,
+      run: async (args) => {
+        try {
+          return text(await runner('config', defined(args), scope));
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+  }
+
+  if (options.mcp && runner !== undefined) {
+    specs.push({
+      name: 'mcp',
+      description:
+        'List enabled MCP servers and their tools, or call one tool on one server. Pass arguments as a JSON object string.',
+      schema: MCP_SCHEMA,
+      run: async (args) => {
+        try {
+          return text(await runner('mcp', defined(args), scope));
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+  }
+
+  if (options.skill && runner !== undefined) {
+    specs.push({
+      name: 'skill',
+      description: 'Load the full instructions of one skill listed under Available skills.',
+      schema: { name: z.string() },
+      run: async (args) => {
+        try {
+          return text(await runner('skill', defined(args), scope));
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+  }
+
+  if (options.webFetch && runner !== undefined) {
+    specs.push({
+      name: 'web_fetch',
+      description: 'Fetch one public http or https URL and return its readable text.',
+      schema: { url: z.string(), max_chars: z.number().int().min(500).max(64000).optional() },
+      run: async (args) => {
+        try {
+          return text(await runner('web_fetch', defined(args), scope));
+        } catch (error) {
+          return failure(error);
+        }
+      },
+    });
+  }
+
+  return specs;
 }
 
 /** The in-process server for one turn, or undefined when the turn offers none of the tools. */
@@ -53,146 +286,18 @@ export function tuffcodeServer(
   deps: AdapterDeps,
   ctx: TurnContext,
 ): Record<string, unknown> | undefined {
-  const options = resolveToolOptions(ctx, deps);
-  const runner = deps.extraTool;
-  const scope = { cwd: ctx.cwd, ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }) };
-  const tools = [];
-
-  if (options.todo && runner !== undefined) {
-    tools.push(
-      tool(
-        'todo',
-        'Track multi-step work as a phased task list the user sees live. op: init (list or items), start (task), done, drop, rm (task, phase, or all), append (items, phase), view. Keep one task in progress; mark it done right after verifying.',
-        {
-          op: z.enum(['init', 'start', 'done', 'drop', 'rm', 'append', 'view']),
-          list: z.array(z.object({ phase: z.string().optional(), items: z.array(z.string()) })).optional(),
-          items: z.array(z.string()).optional(),
-          task: z.string().optional(),
-          phase: z.string().optional(),
-        },
-        async (args) => {
-          try {
-            return text(await runner('todo', defined(args), scope));
-          } catch (error) {
-            return failure(error);
-          }
-        },
-      ),
-    );
-  }
-
-  if (options.subagent && deps.spawnSubagent !== undefined) {
-    const spawn = deps.spawnSubagent;
-    const control = deps.subagentControl;
-    tools.push(
-      tool(
-        SUBAGENT_TOOL_NAME,
-        'Run and control Tuffcode subagents. action spawn (default) starts explorer, reviewer, notetaker, worker or planner with a self-contained task and returns its id; status lists children with tool count, tokens and activity; wait blocks until children settle (timeout_s); message steers a child; stop cancels one; inbox reads unread reports.',
-        {
-          action: z.string().optional(),
-          id: z.string().optional(),
-          text: z.string().optional(),
-          timeout_s: z.number().int().min(1).max(600).optional(),
-          type: z.string().optional(),
-          task: z.string().optional(),
-          model: z.string().optional(),
-        },
-        async (args) => {
-          const action = args.action ?? 'spawn';
-          try {
-            if (!isSubagentAction(action)) return text(`unknown action: ${action}`, true);
-            if (action === 'spawn') {
-              if (!isSubagentType(args.type)) {
-                return text('type must be one of explorer, reviewer, notetaker, worker, planner', true);
-              }
-              if (args.task === undefined || args.task.trim().length === 0) return text('task is required', true);
-              const spawned = await spawn({
-                ...scope,
-                type: args.type,
-                task: args.task,
-                ...(args.model === undefined ? {} : { model: args.model }),
-              });
-              return text(`subagent ${spawned.childId} (${args.type}) ${spawned.status}. Use action wait to collect its summary.`);
-            }
-            if (control === undefined) return text(`subagent ${action} is unavailable`, true);
-            return text(
-              await control({
-                action,
-                ...scope,
-                ...(args.id === undefined ? {} : { id: args.id }),
-                ...(args.text === undefined ? {} : { text: args.text }),
-                ...(args.timeout_s === undefined ? {} : { timeoutSeconds: args.timeout_s }),
-                signal: ctx.signal,
-              }),
-            );
-          } catch (error) {
-            return failure(error);
-          }
-        },
-      ),
-    );
-  }
-
-  if (options.extra && runner !== undefined) {
-    tools.push(
-      tool(
-        'memory',
-        'Search Tuffcode brain memory or record one durable entry. action: search (query) or add (kind, text, tags, importance).',
-        {
-          action: z.enum(['search', 'add']),
-          query: z.string().optional(),
-          kind: z.string().optional(),
-          text: z.string().optional(),
-          tags: z.string().optional(),
-          importance: z.string().optional(),
-        },
-        async (args) => {
-          try {
-            return text(await runner('memory', defined(args), scope));
-          } catch (error) {
-            return failure(error);
-          }
-        },
-      ),
-    );
-  }
-
-  if (options.skill && runner !== undefined) {
-    tools.push(
-      tool(
-        'skill',
-        'Load the full instructions of one skill listed under Available skills.',
-        { name: z.string() },
-        async (args) => {
-          try {
-            return text(await runner('skill', defined(args), scope));
-          } catch (error) {
-            return failure(error);
-          }
-        },
-      ),
-    );
-  }
-
-  if (options.webFetch && runner !== undefined) {
-    tools.push(
-      tool(
-        'web_fetch',
-        'Fetch one public http or https URL and return its readable text.',
-        { url: z.string(), max_chars: z.number().int().min(500).max(64000).optional() },
-        async (args) => {
-          try {
-            return text(await runner('web_fetch', defined(args), scope));
-          } catch (error) {
-            return failure(error);
-          }
-        },
-      ),
-    );
-  }
-
-  if (tools.length === 0) return undefined;
+  const specs = tuffcodeToolSpecs(deps, ctx);
+  if (specs.length === 0) return undefined;
+  const tools = specs.map((spec) =>
+    tool(spec.name, spec.description, spec.schema, (args) =>
+      spec.run(args as Record<string, unknown>),
+    ),
+  );
   return {
-    [TUFFCODE_SERVER_NAME]: createSdkMcpServer({ name: TUFFCODE_SERVER_NAME, version: '1.0.0', tools }),
+    [TUFFCODE_SERVER_NAME]: createSdkMcpServer({
+      name: TUFFCODE_SERVER_NAME,
+      version: '1.0.0',
+      tools,
+    }),
   };
 }

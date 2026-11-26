@@ -1,18 +1,21 @@
 import {
   BrainKindSchema,
+  McpTransportSchema,
   ModelCapabilitiesSchema,
   ProviderKindSchema,
   ReasoningEffortSchema,
   SettingsPatchSchema,
   type BrainEntry,
+  type McpServer,
   type ModelCapabilities,
+  type ServerEvent,
   type Settings,
 } from '@tuffcode/contracts';
 import { z } from 'zod';
 import type { MemorySearchInput, MemorySearchResult } from '../brain/search.js';
 import type { Repos, UpsertBrainInput } from '../db/repos/index.js';
 import type { McpService } from '../mcp/service.js';
-import type { ProvidersService } from '../providers/service.js';
+import type { ProvidersService, ProvidersUpsertInput } from '../providers/service.js';
 
 /**
  * The server-side extra tools, D47 to D49. The adapter harness calls `run` for the
@@ -59,6 +62,8 @@ export interface ExtraToolDeps {
   skills?: { read(projectId: string, name: string): string };
   /** Fetches one URL as readable text for `web_fetch`. */
   webFetch?: (url: string, maxChars: number) => Promise<string>;
+  /** Broadcasts a server event after a config write; absent keeps writes silent. */
+  emit?: (event: ServerEvent) => void;
 }
 
 const ArgumentsSchema = z.record(z.string(), z.unknown());
@@ -263,6 +268,33 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     return entry.id;
   }
 
+  function emitProviders(): void {
+    deps.emit?.({
+      kind: 'event',
+      type: 'providers.updated',
+      payload: deps.repos.providers.list(),
+    });
+  }
+
+  /**
+   * One write path for provider rows. A secret travels to the provider service, which
+   * puts it in the OS keychain; it is never part of the returned tool text.
+   */
+  async function saveProvider(input: ProvidersUpsertInput): Promise<{ id: string }> {
+    try {
+      const view = await deps.providers.upsert(input);
+      emitProviders();
+      return view;
+    } catch (error) {
+      if (input.secret !== undefined && /secret storage/i.test(failure(error))) {
+        throw new Error('secret storage is unavailable; set the key in Settings > Providers', {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  }
+
   async function providerAdd(args: Record<string, unknown>): Promise<string> {
     const kindText = requireString(args, 'kind');
     const kind = ProviderKindSchema.safeParse(kindText);
@@ -283,8 +315,13 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     if (capabilities !== undefined) config['capabilities'] = capabilities;
     const reasoning = parseReasoning(optionalString(args, 'reasoning'));
     if (reasoning !== undefined) config['reasoningEffort'] = reasoning;
-    // The key never travels through a tool; it is set in Settings > Providers.
-    const view = await deps.providers.upsert({ kind: kind.data, label, config });
+    const secret = optionalString(args, 'secret') ?? optionalString(args, 'apiKey');
+    const view = await saveProvider({
+      kind: kind.data,
+      label,
+      config,
+      ...(secret === undefined ? {} : { secret }),
+    });
     return view.id;
   }
 
@@ -312,7 +349,7 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
       models.push({ id: modelId, label: modelId, isDefault: models.length === 0 });
     }
     config['models'] = models;
-    await deps.providers.upsert({
+    await saveProvider({
       id: providerId,
       kind: record.kind,
       label: record.label,
@@ -321,9 +358,23 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     return `${providerId}:${modelId}`;
   }
 
-  function mcpAdd(args: Record<string, unknown>): string {
+  async function mcpAdd(args: Record<string, unknown>): Promise<string> {
     const label = requireString(args, 'label');
-    const command = requireString(args, 'command');
+    const transportText = optionalString(args, 'transport');
+    let transport: 'stdio' | 'http' = 'stdio';
+    if (transportText !== undefined) {
+      const parsed = McpTransportSchema.safeParse(transportText);
+      if (!parsed.success) throw new Error(`unknown transport: ${transportText} (stdio or http)`);
+      transport = parsed.data;
+    }
+    const command = optionalString(args, 'command');
+    if (transport === 'stdio' && command === undefined) {
+      throw new Error('command is required for a stdio server');
+    }
+    const url = optionalString(args, 'url');
+    if (transport === 'http' && url === undefined) {
+      throw new Error('url is required for an http server');
+    }
     let commandArgs: string[] | undefined;
     if (args['args'] !== undefined) {
       const parsed = StringArraySchema.safeParse(jsonValue(args['args'], 'args'));
@@ -337,21 +388,43 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
       for (const key of Object.keys(parsed.data)) {
         if (SECRET_ENV_KEY.test(key)) {
           throw new Error(
-            `env ${key} looks like a secret; set MCP secrets in Settings > MCP env`,
+            `env ${key} looks like a secret; pass it in secretEnv or set it in Settings > MCP env`,
           );
         }
       }
       env = parsed.data;
     }
+    let secretEnv: Record<string, string> | undefined;
+    if (args['secretEnv'] !== undefined) {
+      const parsed = StringRecordSchema.safeParse(jsonValue(args['secretEnv'], 'secretEnv'));
+      if (!parsed.success) throw new Error('secretEnv must be an object of strings');
+      if (Object.keys(parsed.data).length > 0) secretEnv = parsed.data;
+    }
+    const token = optionalString(args, 'token');
     const cwd = optionalString(args, 'cwd');
-    const server = deps.mcp.upsert({
-      label,
-      command,
-      ...(commandArgs === undefined ? {} : { args: commandArgs }),
-      ...(env === undefined ? {} : { env }),
-      ...(cwd === undefined ? {} : { cwd }),
-    });
-    return server.id;
+    let saved: McpServer;
+    try {
+      saved = await deps.mcp.save({
+        label,
+        transport,
+        ...(command === undefined ? {} : { command }),
+        ...(commandArgs === undefined ? {} : { args: commandArgs }),
+        ...(env === undefined ? {} : { env }),
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(url === undefined ? {} : { url }),
+        ...(token === undefined ? {} : { secret: token }),
+        ...(secretEnv === undefined ? {} : { secretEnv }),
+      });
+    } catch (error) {
+      const hasSecret = token !== undefined || secretEnv !== undefined;
+      if (hasSecret && /secret storage/i.test(failure(error))) {
+        throw new Error('secret storage is unavailable; set the value in Settings > MCP env', {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    return saved.id;
   }
 
   function settingsSet(args: Record<string, unknown>): string {
@@ -362,7 +435,8 @@ export function createExtraTools(deps: ExtraToolDeps): { run: ExtraToolRunner } 
     if (args['value'] === undefined) throw new Error('value is required');
     const patch = SettingsPatchSchema.parse({ [key]: parseSettingValue(args['value']) });
     if (patch[key] === undefined) throw new Error(`invalid value for ${key}`);
-    deps.repos.settings.patch(patch);
+    const settings = deps.repos.settings.patch(patch);
+    deps.emit?.({ kind: 'event', type: 'settings.updated', payload: settings });
     return key;
   }
 

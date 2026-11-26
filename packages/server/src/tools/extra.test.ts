@@ -3,12 +3,13 @@ import {
   ProviderConfigSchema,
   type McpTool,
   type ProviderView,
+  type ServerEvent,
   type Settings,
 } from '@tuffcode/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MemorySearchInput, MemorySearchResult } from '../brain/search.js';
-import type { UpsertBrainInput, UpsertMcpServerInput } from '../db/repos/index.js';
-import type { McpService } from '../mcp/service.js';
+import type { UpsertBrainInput } from '../db/repos/index.js';
+import type { McpService, UpsertMcpWithSecretInput } from '../mcp/service.js';
 import type { ProvidersService, ProvidersUpsertInput } from '../providers/service.js';
 import { createTestContext, type TestContext } from '../test-support.js';
 import { createExtraTools, type ExtraToolBrain } from './extra.js';
@@ -20,15 +21,18 @@ interface HarnessOptions {
   searchEntries?: MemorySearchResult['entries'];
   mcpTools?: McpTool[];
   callResult?: string;
+  /** Makes both secret bridges fail the way a locked or missing keychain does. */
+  secretStorageDown?: boolean;
 }
 
 interface Harness {
   run(name: string, args: Record<string, unknown>, cwd?: string): Promise<string>;
   providerCalls: ProvidersUpsertInput[];
-  mcpCalls: UpsertMcpServerInput[];
+  mcpSaves: UpsertMcpWithSecretInput[];
   brainAdds: UpsertBrainInput[];
   searches: MemorySearchInput[];
   callCalls: { id: string; tool: string; args: Record<string, unknown> }[];
+  events: ServerEvent[];
 }
 
 describe('extra tools', () => {
@@ -44,16 +48,20 @@ describe('extra tools', () => {
 
   function harness(options: HarnessOptions = {}): Harness {
     const providerCalls: ProvidersUpsertInput[] = [];
-    const mcpCalls: UpsertMcpServerInput[] = [];
+    const mcpSaves: UpsertMcpWithSecretInput[] = [];
     const brainAdds: UpsertBrainInput[] = [];
     const searches: MemorySearchInput[] = [];
     const callCalls: { id: string; tool: string; args: Record<string, unknown> }[] = [];
+    const events: ServerEvent[] = [];
     const settings: Settings = { ...DEFAULT_SETTINGS, ...options.settings };
 
     const providers: ProvidersService = {
       list: () => ctx.repos.providers.list(),
       upsert: async (input): Promise<ProviderView> => {
         providerCalls.push(input);
+        if (options.secretStorageDown === true && input.secret !== undefined) {
+          throw new Error('secret storage unavailable');
+        }
         return {
           id: input.id ?? 'prv_new',
           kind: input.kind,
@@ -75,12 +83,25 @@ describe('extra tools', () => {
 
     const mcp: McpService = {
       list: () => ctx.repos.mcp.list(),
-      upsert: (input) => {
-        mcpCalls.push(input);
-        return ctx.repos.mcp.upsert(input);
-      },
+      upsert: (input) => ctx.repos.mcp.upsert(input),
       remove: (id) => ctx.repos.mcp.remove(id),
-      save: async (input) => ctx.repos.mcp.upsert(input),
+      save: async (input) => {
+        mcpSaves.push(input);
+        if (options.secretStorageDown === true && (input.secret ?? input.secretEnv) !== undefined) {
+          throw new Error('secret storage unavailable');
+        }
+        // Mirrors the real service: only the row fields reach the database.
+        return ctx.repos.mcp.upsert({
+          label: input.label,
+          transport: input.transport,
+          command: input.command,
+          args: input.args,
+          env: input.env,
+          cwd: input.cwd,
+          url: input.url,
+          enabled: input.enabled,
+        });
+      },
       launchMap: () => ({}),
       warmSecrets: async () => undefined,
       test: async () => ({ ok: true, detail: 'Connected', tools: [] }),
@@ -102,14 +123,22 @@ describe('extra tools', () => {
       },
     };
 
-    const tools = createExtraTools({ repos: ctx.repos, settings: () => settings, providers, mcp, brain });
+    const tools = createExtraTools({
+      repos: ctx.repos,
+      settings: () => settings,
+      providers,
+      mcp,
+      brain,
+      emit: (event) => events.push(event),
+    });
     return {
       run: (name, args, cwd = 'C:/work') => tools.run(name, args, { cwd }),
       providerCalls,
-      mcpCalls,
+      mcpSaves,
       brainAdds,
       searches,
       callCalls,
+      events,
     };
   }
 
@@ -292,27 +321,67 @@ describe('extra tools', () => {
       },
     });
     expect(h.providerCalls[0]?.secret).toBeUndefined();
+    expect(h.events.map((event) => event.type)).toEqual(['providers.updated']);
   });
 
-  it('ignores an apiKey argument and never reaches the secret path', async () => {
+  it('passes a provider secret to the service and never echoes it', async () => {
     const h = harness();
 
-    const id = await h.run(
+    const result = await h.run(
       'config',
       {
         action: 'provider.add',
         kind: 'openai-compatible',
         label: 'Remote',
         baseUrl: 'https://api.example.test/v1',
-        apiKey: 'sk-should-not-be-stored',
+        secret: 'sk-keychain-only',
       },
       'C:/work',
     );
 
-    expect(id).toBe('prv_new');
-    expect(h.providerCalls[0]?.secret).toBeUndefined();
+    expect(result).toBe('prv_new');
+    expect(h.providerCalls[0]?.secret).toBe('sk-keychain-only');
     expect(h.providerCalls[0]?.config).toEqual({ baseUrl: 'https://api.example.test/v1' });
-    expect(JSON.stringify(h.providerCalls[0])).not.toContain('sk-should-not-be-stored');
+    expect(result).not.toContain('sk-keychain-only');
+    expect(JSON.stringify(h.events)).not.toContain('sk-keychain-only');
+  });
+
+  it('accepts apiKey as an alias for the provider secret', async () => {
+    const h = harness();
+
+    await h.run(
+      'config',
+      {
+        action: 'provider.add',
+        kind: 'anthropic',
+        label: 'Anthropic',
+        apiKey: 'sk-ant-alias',
+      },
+      'C:/work',
+    );
+
+    expect(h.providerCalls[0]?.secret).toBe('sk-ant-alias');
+    expect(JSON.stringify(h.providerCalls[0]?.config)).not.toContain('sk-ant-alias');
+  });
+
+  it('points at Settings when secret storage is unavailable and never echoes the key', async () => {
+    const h = harness({ secretStorageDown: true });
+
+    const result = await h.run(
+      'config',
+      {
+        action: 'provider.add',
+        kind: 'openai-compatible',
+        label: 'Remote',
+        baseUrl: 'https://api.example.test/v1',
+        secret: 'sk-unavailable',
+      },
+      'C:/work',
+    );
+
+    expect(result).toContain('Settings > Providers');
+    expect(result).not.toContain('sk-unavailable');
+    expect(h.events).toEqual([]);
   });
 
   it('appends a provider model without touching the stored secret', async () => {
@@ -341,6 +410,7 @@ describe('extra tools', () => {
       { id: 'm1', label: 'm1', isDefault: true },
       { id: 'm2', label: 'm2', isDefault: false },
     ]);
+    expect(h.events.map((event) => event.type)).toEqual(['providers.updated']);
   });
 
   it('replaces an existing provider model by id and keeps its label', async () => {
@@ -361,7 +431,7 @@ describe('extra tools', () => {
     expect(h.providerCalls[0]?.config['models']).toEqual([{ id: 'm1', label: 'Old name' }]);
   });
 
-  it('adds an MCP server with parsed args and env', async () => {
+  it('adds a stdio MCP server with parsed args and non-secret env', async () => {
     const h = harness();
 
     const id = await h.run(
@@ -378,16 +448,72 @@ describe('extra tools', () => {
     );
 
     expect(id).toMatch(/^mcp_/);
-    expect(h.mcpCalls[0]).toEqual({
+    expect(h.mcpSaves[0]).toEqual({
       label: 'fs',
+      transport: 'stdio',
       command: 'npx',
       args: ['-y', 'server-fs'],
       env: { ROOT: 'C:/work' },
       cwd: 'C:/work',
     });
+    expect(ctx.repos.mcp.list()[0]?.env).toEqual({ ROOT: 'C:/work' });
   });
 
-  it('rejects a secret-like MCP env key and points at Settings', async () => {
+  it('adds an http MCP server and sends the bearer token down the secret path', async () => {
+    const h = harness();
+
+    const id = await h.run(
+      'config',
+      {
+        action: 'mcp.add',
+        label: 'docs',
+        transport: 'http',
+        url: 'https://mcp.example.test/sse',
+        token: 'tok-connector',
+      },
+      'C:/work',
+    );
+
+    expect(id).toMatch(/^mcp_/);
+    expect(h.mcpSaves[0]).toMatchObject({
+      label: 'docs',
+      transport: 'http',
+      url: 'https://mcp.example.test/sse',
+      secret: 'tok-connector',
+    });
+    expect(id).not.toContain('tok-connector');
+    const row = ctx.repos.mcp.list()[0];
+    expect(row?.transport).toBe('http');
+    expect(JSON.stringify(row)).not.toContain('tok-connector');
+  });
+
+  it('adds a stdio MCP server and keeps secretEnv out of the stored env', async () => {
+    const h = harness();
+
+    await h.run(
+      'config',
+      {
+        action: 'mcp.add',
+        label: 'github',
+        command: 'npx',
+        args: '["-y","server-github"]',
+        env: '{"ROOT":"C:/work"}',
+        secretEnv: '{"GITHUB_TOKEN":"ghp-keychain"}',
+      },
+      'C:/work',
+    );
+
+    expect(h.mcpSaves[0]).toMatchObject({
+      label: 'github',
+      transport: 'stdio',
+      secretEnv: { GITHUB_TOKEN: 'ghp-keychain' },
+    });
+    const row = ctx.repos.mcp.list()[0];
+    expect(row?.env).toEqual({ ROOT: 'C:/work' });
+    expect(JSON.stringify(row)).not.toContain('ghp-keychain');
+  });
+
+  it('refuses secret-shaped env keys so a token cannot reach SQLite', async () => {
     const h = harness();
 
     const text = await h.run(
@@ -403,7 +529,7 @@ describe('extra tools', () => {
 
     expect(text).toContain('OPENAI_API_KEY');
     expect(text).toContain('Settings > MCP env');
-    expect(h.mcpCalls).toEqual([]);
+    expect(h.mcpSaves).toEqual([]);
     expect(ctx.repos.mcp.list()).toEqual([]);
   });
 
@@ -419,7 +545,27 @@ describe('extra tools', () => {
       expect(text).toContain(key);
       expect(text).toContain('Settings > MCP env');
     }
-    expect(h.mcpCalls).toEqual([]);
+    expect(h.mcpSaves).toEqual([]);
+  });
+
+  it('points at Settings when MCP secret storage is unavailable', async () => {
+    const h = harness({ secretStorageDown: true });
+
+    const text = await h.run(
+      'config',
+      {
+        action: 'mcp.add',
+        label: 'docs',
+        transport: 'http',
+        url: 'https://mcp.example.test/sse',
+        token: 'tok-unavailable',
+      },
+      'C:/work',
+    );
+
+    expect(text).toContain('Settings > MCP env');
+    expect(text).not.toContain('tok-unavailable');
+    expect(ctx.repos.mcp.list()).toEqual([]);
   });
 
   it('rejects a setting outside the allowlist and applies an allowed one', async () => {
@@ -441,6 +587,13 @@ describe('extra tools', () => {
     );
     expect(applied).toBe('maxOutputTokens');
     expect(ctx.repos.settings.get().maxOutputTokens).toBe(4096);
+    expect(h.events).toEqual([
+      {
+        kind: 'event',
+        type: 'settings.updated',
+        payload: expect.objectContaining({ maxOutputTokens: 4096 }),
+      },
+    ]);
   });
 
   it('rejects an invalid value for an allowed setting', async () => {
@@ -460,7 +613,9 @@ describe('extra tools', () => {
     const h = harness();
 
     await expect(h.run('nope', {}, 'C:/work')).resolves.toBe('unknown tool: nope');
-    await expect(h.run('mcp', { action: 'nope' }, 'C:/work')).resolves.toBe('unknown mcp action: nope');
+    await expect(h.run('mcp', { action: 'nope' }, 'C:/work')).resolves.toBe(
+      'unknown mcp action: nope',
+    );
     await expect(h.run('config', { action: 'nope' }, 'C:/work')).resolves.toBe(
       'unknown config action: nope',
     );

@@ -2,12 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { redactToolInput } from './redact.js';
 
 describe('redactToolInput', () => {
-  it('masks every secret-shaped key', () => {
+  it('masks every secret-shaped key, camelCase and snake_case alike', () => {
     const redacted = redactToolInput({
       apiKey: 'sk-live',
       api_key: 'sk-snake',
       secret: 'shh',
+      secretEnv: '{"GITHUB_TOKEN":"ghp"}',
       token: 'tok',
+      authToken: 'auth',
+      accessToken: 'access',
+      access_token: 'access-snake',
+      refreshToken: 'refresh',
+      clientSecret: 'client',
+      client_secret: 'client-snake',
       password: 'hunter2',
       credential: 'cred',
       authorization: 'Bearer abc',
@@ -19,12 +26,42 @@ describe('redactToolInput', () => {
       apiKey: '[redacted]',
       api_key: '[redacted]',
       secret: '[redacted]',
+      secretEnv: '[redacted]',
       token: '[redacted]',
+      authToken: '[redacted]',
+      accessToken: '[redacted]',
+      access_token: '[redacted]',
+      refreshToken: '[redacted]',
+      clientSecret: '[redacted]',
+      client_secret: '[redacted]',
       password: '[redacted]',
       credential: '[redacted]',
       authorization: '[redacted]',
       label: 'Local',
       count: 3,
+    });
+  });
+
+  it('leaves no plaintext credential in a config tool payload', () => {
+    const redacted = redactToolInput({
+      action: 'provider.add',
+      kind: 'openai-compatible',
+      label: 'Remote',
+      baseUrl: 'https://api.example.test/v1',
+      apiKey: 'sk-plaintext-one',
+      secret: 'sk-plaintext-two',
+    });
+    const serialized = JSON.stringify(redacted);
+
+    expect(serialized).not.toContain('sk-plaintext-one');
+    expect(serialized).not.toContain('sk-plaintext-two');
+    expect(redacted).toEqual({
+      action: 'provider.add',
+      kind: 'openai-compatible',
+      label: 'Remote',
+      baseUrl: 'https://api.example.test/v1',
+      apiKey: '[redacted]',
+      secret: '[redacted]',
     });
   });
 

@@ -80,6 +80,7 @@ describe('skill roots', () => {
     const pluginRoots = [{ root: plugin, pluginId: 'plg_1' }];
     const found = discoverSkills(project, { pluginRoots, onWarning: () => undefined });
     expect(found.map((entry) => [entry.name, entry.source, entry.pluginId])).toEqual([
+      ['edit-tuffcode', 'system', null],
       ['chart', 'plugin', 'plg_1'],
       ['deploy', 'project', null],
       ['lint', 'claude-project', null],

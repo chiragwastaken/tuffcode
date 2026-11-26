@@ -1,4 +1,5 @@
 import type { AdapterEvent } from '@tuffcode/contracts';
+import { redactToolInput } from '../redact.js';
 
 /**
  * Correlation state carried across one turn while mapping Claude Agent SDK
@@ -98,7 +99,7 @@ function mapAssistant(record: JsonRecord, state: ClaudeMappingState): AdapterEve
           turnId: state.turnId,
           toolCallId,
           name,
-          input: item.input ?? {},
+          input: redactToolInput(item.input ?? {}),
         });
       }
     }

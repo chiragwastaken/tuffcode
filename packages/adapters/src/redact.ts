@@ -2,7 +2,8 @@
  * Tool arguments are persisted and broadcast in `tool.started`, so secret-shaped keys are
  * masked before the event leaves the adapter. The executed arguments stay untouched.
  */
-const SECRET_KEY = /^(api_?key|secret|token|password|credential|authorization)$/i;
+const SECRET_KEY =
+  /^(api_?key|secret|secret_?env|token|auth_?token|access_?token|refresh_?token|client_?secret|password|credential|authorization)$/i;
 const REDACTED = '[redacted]';
 const MAX_DEPTH = 6;
 const MAX_KEYS = 500;
