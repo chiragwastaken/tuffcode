@@ -603,6 +603,8 @@ describe('isReadOnlyCommand', () => {
       'git rev-parse --abbrev-ref HEAD',
       'git ls-files src',
       'git grep -n needle',
+      'git grep -C 3 needle',
+      'git log -C',
       'git blame src/index.ts',
       'git remote',
       'git remote -v',

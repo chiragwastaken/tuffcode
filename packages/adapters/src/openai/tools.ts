@@ -328,8 +328,9 @@ function isReadOnlyGit(tokens: readonly string[]): boolean {
   const args = tokens.slice(2);
   for (const arg of args) {
     const lower = arg.toLowerCase();
-    // Any -c can set config, including an alias that runs an external command.
-    if (lower.startsWith('-c') && !lower.startsWith('--')) return false;
+    // Lowercase -c sets config, including an alias that runs an external command. Uppercase
+    // -C is copy detection or grep context and is read-only.
+    if (arg.startsWith('-c') && !arg.startsWith('--')) return false;
     if (arg.startsWith('-O')) return false;
     if (GIT_DENIED_PREFIXES.some((prefix) => lower.startsWith(prefix))) return false;
   }
