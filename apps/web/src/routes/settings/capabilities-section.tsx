@@ -15,7 +15,7 @@ const ROWS: { key: keyof Capabilities; label: string; description: string }[] = 
   { key: 'todo', label: 'Task list', description: 'Agents keep a live todo list for multi-step work.' },
   { key: 'webFetch', label: 'Web fetch', description: 'Agents may read public web pages. Asks first in Ask mode; private hosts are refused.' },
   { key: 'browser', label: 'Browser tab', description: 'The built-in browser panel for previews and docs.' },
-  { key: 'worktrees', label: 'Worktrees', description: 'New chats get their own git worktree. Off works directly in the project checkout.' },
+  { key: 'worktrees', label: 'Worktrees', description: 'Adds a worktree option when you start a new chat. Disabled, every chat runs in the project folder.' },
 ];
 
 /** Real switches for what agents may use. Council threads always keep every tool. */
