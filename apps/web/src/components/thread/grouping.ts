@@ -216,8 +216,11 @@ function userItem(message: LocalUserMessage): UserItem {
   };
 }
 
-/** A user row belongs before an event with the same timestamp; an assistant row after. */
-function beforeEvent(message: Message, event: ThreadEventRow): boolean {
+/**
+ * The last-resort order for a row that names no turn the replay covers. It only
+ * ever compares against events, and only for rows whose turn has no anchor.
+ */
+function precedesEvent(message: Message, event: ThreadEventRow): boolean {
   if (message.createdAt === event.createdAt) return message.role === 'user';
   return message.createdAt < event.createdAt;
 }
@@ -344,6 +347,18 @@ export function groupTimeline({
     items.push(state.assistant);
   }
 
+  // Wall clocks cannot order a live renderer event against a persisted row, so
+  // the replay itself anchors both: a user row sits before its turn's first
+  // event and an assistant row after its turn's last one.
+  const firstEventIndex = new Map<string, number>();
+  const lastEventIndex = new Map<string, number>();
+  events.forEach((event, index) => {
+    const payload = event.payload;
+    if (!('turnId' in payload)) return;
+    if (!firstEventIndex.has(payload.turnId)) firstEventIndex.set(payload.turnId, index);
+    lastEventIndex.set(payload.turnId, index);
+  });
+
   const persisted = messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .filter((message) => {
@@ -355,21 +370,45 @@ export function groupTimeline({
       return left.createdAt < right.createdAt ? -1 : 1;
     });
 
-  const entries: (Message | ThreadEventRow)[] = [];
-  let nextMessage = 0;
-  for (const event of events) {
-    while (nextMessage < persisted.length) {
-      const message = persisted[nextMessage];
-      if (message === undefined || !beforeEvent(message, event)) break;
-      entries.push(message);
-      nextMessage += 1;
+  const usersBefore = new Map<number, Message[]>();
+  const assistantsAfter = new Map<number, Message[]>();
+  const loose: Message[] = [];
+
+  for (const message of persisted) {
+    const turnId = turnIdForMessage(message);
+    const anchor =
+      turnId === null
+        ? undefined
+        : message.role === 'user'
+          ? firstEventIndex.get(turnId)
+          : lastEventIndex.get(turnId);
+    if (anchor === undefined) {
+      loose.push(message);
+      continue;
     }
-    entries.push(event);
+    const bucket = message.role === 'user' ? usersBefore : assistantsAfter;
+    const list = bucket.get(anchor);
+    if (list) list.push(message);
+    else bucket.set(anchor, [message]);
   }
-  while (nextMessage < persisted.length) {
-    const message = persisted[nextMessage];
+
+  const entries: (Message | ThreadEventRow)[] = [];
+  let nextLoose = 0;
+  for (const [index, event] of events.entries()) {
+    while (nextLoose < loose.length) {
+      const message = loose[nextLoose];
+      if (message === undefined || !precedesEvent(message, event)) break;
+      entries.push(message);
+      nextLoose += 1;
+    }
+    for (const message of usersBefore.get(index) ?? []) entries.push(message);
+    entries.push(event);
+    for (const message of assistantsAfter.get(index) ?? []) entries.push(message);
+  }
+  while (nextLoose < loose.length) {
+    const message = loose[nextLoose];
     if (message !== undefined) entries.push(message);
-    nextMessage += 1;
+    nextLoose += 1;
   }
 
   for (const entry of entries) {
@@ -518,7 +557,58 @@ export function groupTimeline({
   }
   for (const message of pending) items.push(userItem(message));
 
+  closeStaleStreaming(items, events, superseded);
+
   return collapseToolRuns(items);
+}
+
+/**
+ * Only the newest unfinished turn may still stream. A finished turn, a turn that
+ * a later send superseded, or a turn the replay lost the end of all close, so a
+ * Stop, an error, a stacked send or a reconnect gap cannot leave a spinner up.
+ * A tool whose turn closed can never receive its `tool.finished`, so it settles
+ * the same way instead of showing a running row forever.
+ * This reads the event log alone: no clock and no timer decides it.
+ */
+function closeStaleStreaming(
+  items: TimelineItem[],
+  events: readonly ThreadEventRow[],
+  superseded: ReadonlySet<string>,
+): void {
+  const finishedTurns = new Set<string>();
+  const lastEventAt = new Map<string, string>();
+  let newestTurnId: string | null = null;
+
+  for (const event of events) {
+    const payload = event.payload;
+    if (!('turnId' in payload)) continue;
+    newestTurnId = payload.turnId;
+    lastEventAt.set(payload.turnId, event.createdAt);
+    if (payload.type === 'turn.finished') finishedTurns.add(payload.turnId);
+  }
+
+  const openTurnId =
+    newestTurnId !== null && !finishedTurns.has(newestTurnId) && !superseded.has(newestTurnId)
+      ? newestTurnId
+      : null;
+  const fallbackAt = events.at(-1)?.createdAt ?? null;
+
+  for (const item of items) {
+    if (item.kind === 'tool') {
+      if (!item.running || item.turnId === openTurnId) continue;
+      item.running = false;
+      if (item.finishedAt === null) {
+        item.finishedAt = lastEventAt.get(item.turnId) ?? fallbackAt;
+      }
+      continue;
+    }
+    if (item.kind !== 'assistant' && item.kind !== 'reasoning') continue;
+    if (!item.streaming || item.turnId === openTurnId) continue;
+    item.streaming = false;
+    if (item.kind === 'reasoning' && item.finishedAt === null) {
+      item.finishedAt = lastEventAt.get(item.turnId) ?? fallbackAt;
+    }
+  }
 }
 
 /** Two or more consecutive tool calls read better as one summary row. */

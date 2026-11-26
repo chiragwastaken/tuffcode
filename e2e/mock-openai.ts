@@ -350,6 +350,13 @@ async function handleChat(request: IncomingMessage, response: ServerResponse): P
     return;
   }
 
+  if (prompt.includes('think-only')) {
+    await streamReasoning(response, MOCK_THINKING);
+    await streamText(response, MOCK_TEXT);
+    response.end();
+    return;
+  }
+
   if (prompt.includes('show-timeline')) {
     await streamReasoning(response, MOCK_THINKING);
     await streamContent(response, MOCK_PROSE);

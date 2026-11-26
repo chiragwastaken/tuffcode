@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { groupTimeline } from './grouping';
 import {
   blockCopyText,
+  foldTurnSteps,
   formatDuration,
   groupTurnBlocks,
   outputTail,
+  stepsSummary,
   toolDetail,
   toolDiffLines,
   toolHeadline,
@@ -26,13 +28,15 @@ function event(seq: number, payload: AdapterEvent, at: string): ThreadEventRow {
 }
 
 function blocksOf(events: ThreadEventRow[], supersededTurns?: ReadonlySet<string>) {
-  return groupTurnBlocks(
-    groupTimeline({
-      events,
-      userMessages: [],
-      approvals: {},
-      ...(supersededTurns ? { supersededTurns } : {}),
-    }),
+  return foldTurnSteps(
+    groupTurnBlocks(
+      groupTimeline({
+        events,
+        userMessages: [],
+        approvals: {},
+        ...(supersededTurns ? { supersededTurns } : {}),
+      }),
+    ),
   );
 }
 
@@ -57,7 +61,7 @@ function toolCall(
 }
 
 describe('groupTurnBlocks', () => {
-  it('renders reasoning, prose, one tool group, then the closing answer', () => {
+  it('folds reasoning, prose and one tool group into steps above the closing answer', () => {
     const blocks = blocksOf([
       event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Plan ' }, '00'),
       event(2, { type: 'reasoning.delta', turnId: 'turn-1', text: 'the change' }, '01'),
@@ -68,8 +72,16 @@ describe('groupTurnBlocks', () => {
       event(9, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '05'),
     ]);
 
-    expect(blocks.map((block) => block.kind)).toEqual(['reasoning', 'prose', 'tools', 'final']);
-    const [reasoning, prose, tools, final] = blocks;
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final']);
+    const [steps, final] = blocks;
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.children.map((child) => child.kind)).toEqual(['reasoning', 'prose', 'tools']);
+    expect(steps.tools).toBe(2);
+    expect(steps.durationMs).toBe(2000);
+    expect(stepsSummary(steps.tools, steps.durationMs)).toBe(
+      'Ran 2 tools and thought for 2s',
+    );
+    const [reasoning, prose, tools] = steps.children;
     if (reasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning block.');
     expect(reasoning.text).toBe('Plan the change');
     expect(reasoning.durationMs).toBe(2000);
@@ -89,7 +101,7 @@ describe('groupTurnBlocks', () => {
     expect(blocks.map((block) => block.kind)).toEqual(['final']);
   });
 
-  it('keeps one reasoning block and one final answer when the turn runs no tools', () => {
+  it('folds a lone reasoning block into steps when the turn runs no tools', () => {
     const blocks = blocksOf([
       event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Weigh ' }, '00'),
       event(2, { type: 'reasoning.delta', turnId: 'turn-1', text: 'the options' }, '01'),
@@ -98,8 +110,13 @@ describe('groupTurnBlocks', () => {
       event(5, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '03'),
     ]);
 
-    expect(blocks.map((block) => block.kind)).toEqual(['reasoning', 'final']);
-    const [reasoning, final] = blocks;
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final']);
+    const [steps, final] = blocks;
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.tools).toBe(0);
+    expect(steps.durationMs).toBe(2000);
+    expect(stepsSummary(steps.tools, steps.durationMs)).toBe('Thought for 2s');
+    const [reasoning] = steps.children;
     if (reasoning?.kind !== 'reasoning') throw new Error('Expected a reasoning block.');
     expect(reasoning.text).toBe('Weigh the options');
     expect(reasoning.durationMs).toBe(2000);
@@ -107,7 +124,7 @@ describe('groupTurnBlocks', () => {
     expect(final.text).toBe('All done.');
   });
 
-  it('splits interleaved prose from the answer around each tool run', () => {
+  it('keeps the interleaved prose and tool order inside the folded steps', () => {
     const blocks = blocksOf([
       event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Opening the file.' }, '00'),
       ...toolCall('turn-1', 2, 'c1', 'read', { path: 'a.ts' }, '01', '02'),
@@ -117,17 +134,23 @@ describe('groupTurnBlocks', () => {
       event(8, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '06'),
     ]);
 
-    expect(blocks.map((block) => block.kind)).toEqual([
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final']);
+    const steps = blocks[0];
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.children.map((child) => child.kind)).toEqual([
       'prose',
       'tools',
       'prose',
       'tools',
-      'final',
     ]);
-    const texts = blocks.map((block) =>
-      block.kind === 'prose' || block.kind === 'final' ? block.text : null,
+    expect(steps.tools).toBe(2);
+    const texts = steps.children.map((child) =>
+      child.kind === 'prose' ? child.text : null,
     );
-    expect(texts).toEqual(['Opening the file.', null, 'Now searching.', null, 'Found two.']);
+    expect(texts).toEqual(['Opening the file.', null, 'Now searching.', null]);
+    const final = blocks.at(-1);
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.text).toBe('Found two.');
   });
 
   it('keeps the closing prose as prose when the turn ends with a tool call', () => {
@@ -201,11 +224,183 @@ describe('groupTurnBlocks', () => {
       approvals: {},
     });
 
-    const blocks = groupTurnBlocks(items);
-    expect(blocks.map((block) => block.kind)).toEqual(['prose', 'tools', 'final']);
+    const blocks = foldTurnSteps(groupTurnBlocks(items));
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final']);
+    const steps = blocks[0];
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.children.map((child) => child.kind)).toEqual(['prose', 'tools']);
     const final = blocks.at(-1);
     if (final?.kind !== 'final') throw new Error('Expected a final block.');
     expect(final.text).toBe('Final.');
+  });
+
+  it('keeps the flat blocks while the answer still streams', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Plan' }, '00'),
+      ...toolCall('turn-1', 2, 'c1', 'read', { path: 'a.ts' }, '01', '02'),
+      event(4, { type: 'text.delta', turnId: 'turn-1', text: 'Writing' }, '03'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['reasoning', 'tools', 'final']);
+    const final = blocks.at(-1);
+    if (final?.kind !== 'final') throw new Error('Expected a final block.');
+    expect(final.streaming).toBe(true);
+  });
+
+  it('counts individual tool calls, not groups, in the steps row', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'text.delta', turnId: 'turn-1', text: 'Working' }, '00'),
+      ...toolCall('turn-1', 2, 'c1', 'read', { path: 'a.ts' }, '01', '02'),
+      ...toolCall('turn-1', 4, 'c2', 'bash', { command: 'pnpm test' }, '02', '03'),
+      ...toolCall('turn-1', 6, 'c3', 'edit', { path: 'a.ts' }, '03', '04'),
+      event(8, { type: 'text.delta', turnId: 'turn-1', text: 'Done.' }, '05'),
+      event(9, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '05'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final']);
+    const steps = blocks[0];
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.children.map((child) => child.kind)).toEqual(['prose', 'tools']);
+    expect(steps.tools).toBe(3);
+    expect(steps.durationMs).toBeNull();
+    expect(stepsSummary(steps.tools, steps.durationMs)).toBe('Ran 3 tools');
+  });
+
+  it('never folds user, approval or notice blocks into the steps row', () => {
+    const items = groupTimeline({
+      events: [
+        event(1, { type: 'turn.started', turnId: 'turn-1' }, '2026-01-01T00:00:01.000Z'),
+        event(2, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Plan' }, '2026-01-01T00:00:02.000Z'),
+        event(
+          3,
+          {
+            type: 'approval.requested',
+            turnId: 'turn-1',
+            approvalId: 'a1',
+            toolCallId: 'c1',
+            name: 'write',
+            input: {},
+          },
+          '2026-01-01T00:00:03.000Z',
+        ),
+        event(
+          4,
+          {
+            type: 'tool.started',
+            turnId: 'turn-1',
+            toolCallId: 'c1',
+            name: 'write',
+            input: { path: 'a.ts', content: 'x' },
+          },
+          '2026-01-01T00:00:04.000Z',
+        ),
+        event(
+          5,
+          { type: 'tool.finished', turnId: 'turn-1', toolCallId: 'c1', output: 'ok', isError: false },
+          '2026-01-01T00:00:05.000Z',
+        ),
+        event(6, { type: 'text.delta', turnId: 'turn-1', text: 'Done.' }, '2026-01-01T00:00:06.000Z'),
+        event(
+          7,
+          { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' },
+          '2026-01-01T00:00:06.000Z',
+        ),
+        event(8, { type: 'session.ended', reason: 'complete' }, '2026-01-01T00:00:07.000Z'),
+      ],
+      messages: [
+        {
+          id: 'msg_turn-1_user',
+          threadId: 'thread-1',
+          role: 'user',
+          content: 'Do it',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      userMessages: [],
+      approvals: {},
+    });
+
+    const blocks = foldTurnSteps(groupTurnBlocks(items));
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'user',
+      'approval',
+      'steps',
+      'final',
+      'notice',
+    ]);
+    const steps = blocks[2];
+    if (steps?.kind !== 'steps') throw new Error('Expected a steps block.');
+    expect(steps.children.map((child) => child.kind)).toEqual(['reasoning', 'tools']);
+  });
+
+  it('folds each settled turn into its own steps row', () => {
+    const blocks = blocksOf([
+      event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'A' }, '00'),
+      event(2, { type: 'text.delta', turnId: 'turn-1', text: 'Answer one' }, '00'),
+      event(3, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '00'),
+      event(4, { type: 'reasoning.delta', turnId: 'turn-2', text: 'B' }, '01'),
+      event(5, { type: 'text.delta', turnId: 'turn-2', text: 'Answer two' }, '02'),
+      event(6, { type: 'turn.finished', turnId: 'turn-2', reason: 'complete' }, '02'),
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual(['steps', 'final', 'steps', 'final']);
+    const [first, , second] = blocks;
+    if (first?.kind !== 'steps' || second?.kind !== 'steps') {
+      throw new Error('Expected two steps blocks.');
+    }
+    expect(first.turnId).toBe('turn-1');
+    expect(second.turnId).toBe('turn-2');
+    expect(first.children).toHaveLength(1);
+    expect(second.children).toHaveLength(1);
+  });
+});
+
+describe('foldTurnSteps', () => {
+  it('is a separate pass, so a compact surface keeps the flat blocks', () => {
+    const events = [
+      event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Plan' }, '00'),
+      event(2, { type: 'text.delta', turnId: 'turn-1', text: 'Answer' }, '01'),
+      event(3, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }, '01'),
+    ];
+    const items = groupTimeline({ events, userMessages: [], approvals: {} });
+
+    expect(groupTurnBlocks(items).map((block) => block.kind)).toEqual(['reasoning', 'final']);
+    expect(foldTurnSteps(groupTurnBlocks(items)).map((block) => block.kind)).toEqual([
+      'steps',
+      'final',
+    ]);
+  });
+
+  it('leaves the list alone while the answer still streams', () => {
+    const blocks = groupTurnBlocks(
+      groupTimeline({
+        events: [
+          event(1, { type: 'reasoning.delta', turnId: 'turn-1', text: 'Plan' }, '00'),
+          event(2, { type: 'text.delta', turnId: 'turn-1', text: 'Writing' }, '01'),
+        ],
+        userMessages: [],
+        approvals: {},
+      }),
+    );
+
+    expect(foldTurnSteps(blocks).map((block) => block.kind)).toEqual(['reasoning', 'final']);
+  });
+});
+
+describe('stepsSummary', () => {
+  it('combines the tool count and the measured thought time', () => {
+    expect(stepsSummary(3, 12_000)).toBe('Ran 3 tools and thought for 12s');
+    expect(stepsSummary(1, 2_000)).toBe('Ran 1 tool and thought for 2s');
+  });
+
+  it('drops the half that has no data', () => {
+    expect(stepsSummary(0, 12_000)).toBe('Thought for 12s');
+    expect(stepsSummary(4, null)).toBe('Ran 4 tools');
+    expect(stepsSummary(1, null)).toBe('Ran 1 tool');
+  });
+
+  it('falls back to a neutral label with no tools and no measured thought', () => {
+    expect(stepsSummary(0, null)).toBe('Worked');
   });
 });
 

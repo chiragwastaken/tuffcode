@@ -40,6 +40,7 @@ import {
   elapsedMs,
   formatDuration,
   outputTail,
+  stepsSummary,
   toolDetail,
   toolDiffLines,
   toolHeadline,
@@ -48,6 +49,8 @@ import {
   type FinalBlock,
   type ProseBlock,
   type ReasoningBlock,
+  type StepsBlock,
+  type TimelineBlock,
   type ToolDiffLine,
   type ToolGroupBlock,
 } from './turn-blocks';
@@ -723,6 +726,62 @@ export function ToolGroup({ block }: { block: ToolGroupBlock }) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * The folded work of a finished turn, collapsed to one summary row above the
+ * answer. Expansion is local state and the row keeps the block's stable key, so
+ * opening it survives re-renders. The body reuses the same renderers as the flat
+ * timeline, so markdown and the tool hover actions behave exactly as before.
+ */
+export function StepsRow({ block, theme }: { block: StepsBlock; theme: MarkdownTheme }) {
+  const [open, setOpen] = useState(false);
+  const Icon = block.tools > 0 ? Wrench : Brain;
+
+  return (
+    <div data-testid="steps-block" className="rounded-md">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className={cn(
+          'flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-accent',
+          focusRing,
+        )}
+      >
+        <Icon aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+        <span className="shrink-0 font-medium">
+          {stepsSummary(block.tools, block.durationMs)}
+        </span>
+        <ChevronRight
+          aria-hidden="true"
+          strokeWidth={1.75}
+          className={cn(
+            'ml-auto size-3.5 shrink-0 transition-transform duration-150',
+            open && 'rotate-90',
+          )}
+        />
+      </button>
+      {open ? (
+        <div
+          data-testid="steps-body"
+          className="mt-0.5 flex flex-col gap-1.5 border-l border-border/60 pl-2"
+        >
+          {block.children.map((child) => (
+            <StepChild key={child.key} block={child} theme={theme} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A folded child; only reasoning, prose and tool blocks are ever folded. */
+function StepChild({ block, theme }: { block: TimelineBlock; theme: MarkdownTheme }) {
+  if (block.kind === 'reasoning') return <ReasoningRow block={block} />;
+  if (block.kind === 'prose') return <ProseText block={block} theme={theme} />;
+  if (block.kind === 'tools') return <ToolGroup block={block} />;
+  return null;
 }
 
 export function NoticeRow({ item }: { item: NoticeItem }) {

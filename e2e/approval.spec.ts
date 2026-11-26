@@ -32,7 +32,9 @@ test('denies a bash approval, keeps the thread alive, then allows one', async ({
   await expectAssistantText(page, MOCK_DENIED_TEXT);
   await expect(page.getByTestId('thread-status')).toHaveAttribute('data-status', 'ready-to-review');
 
-  const deniedTool = page.getByTestId('tool-row').last();
+  const deniedSteps = page.getByTestId('steps-block').last();
+  await deniedSteps.getByRole('button').first().click();
+  const deniedTool = deniedSteps.getByTestId('tool-row').last();
   await deniedTool.getByRole('button').click();
   await expect(page.getByTestId('tool-output').last()).toContainText('denied by user');
 
@@ -42,7 +44,9 @@ test('denies a bash approval, keeps the thread alive, then allows one', async ({
   await expectAssistantText(page, MOCK_ALLOWED_TEXT);
   await expect(page.getByTestId('thread-status')).toHaveAttribute('data-status', 'ready-to-review');
 
-  const allowedTool = page.getByTestId('tool-row').last();
+  const allowedSteps = page.getByTestId('steps-block').last();
+  await allowedSteps.getByRole('button').first().click();
+  const allowedTool = allowedSteps.getByTestId('tool-row').last();
   await allowedTool.getByRole('button').click();
   await expect(page.getByTestId('tool-output').last()).toContainText('tuffcode-ok');
 });

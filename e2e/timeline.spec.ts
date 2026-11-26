@@ -18,7 +18,15 @@ import {
   MOCK_TIMELINE_FINAL,
 } from './mock-openai';
 
-test('renders a turn as thinking, prose, one tool group, then the answer', async ({
+/** The three kinds a steps body can hold, in the order it renders them. */
+const STEP_SELECTOR = [
+  '[data-testid="reasoning-block"]',
+  '[data-testid="assistant-prose"]',
+  '[data-testid="tool-row"]',
+  '[data-testid="tool-group"]',
+].join(', ');
+
+test('renders a completed turn as one steps row above the answer, expanded on click', async ({
   session,
   workspace,
   mock,
@@ -33,17 +41,19 @@ test('renders a turn as thinking, prose, one tool group, then the answer', async
   await setPermissionMode(page, 'Full auto');
 
   await sendMessage(page, 'show-timeline');
+
+  // While the answer streams the work stays flat, so live progress is visible.
+  await expect(page.getByTestId('reasoning-block').last()).toBeVisible();
+  await expect(page.getByTestId('steps-block')).toHaveCount(0);
+
   await expectAssistantText(page, MOCK_TIMELINE_FINAL);
 
-  const reasoning = page.getByTestId('reasoning-block').last();
-  await expect(reasoning).toContainText('Thought for');
-  await reasoning.getByRole('button').click();
-  await expect(reasoning).toContainText(MOCK_THINKING);
-
-  await expect(page.getByTestId('assistant-prose').last()).toContainText(MOCK_PROSE);
-
-  const group = page.getByTestId('tool-group').last();
-  await expect(group).toContainText('Ran 3 tools');
+  // The finished turn folds its reasoning, prose and tools into one row above the
+  // answer, collapsed by default.
+  const steps = page.getByTestId('steps-block').last();
+  await expect(steps).toContainText('Ran 3 tools and thought for');
+  await expect(steps.getByTestId('steps-body')).toHaveCount(0);
+  await expect(page.getByTestId('reasoning-block')).toHaveCount(0);
 
   const shots = process.env['TUFFCODE_E2E_SHOTS'];
   const prefix = process.env['TUFFCODE_E2E_SHOT_PREFIX'] ?? 'timeline';
@@ -51,6 +61,25 @@ test('renders a turn as thinking, prose, one tool group, then the answer', async
     mkdirSync(shots, { recursive: true });
     await page.screenshot({ path: join(shots, `${prefix}-collapsed.png`) });
   }
+
+  await steps.getByRole('button').first().click();
+  const body = steps.getByTestId('steps-body');
+  await expect(body).toBeVisible();
+
+  const order = await body
+    .locator(STEP_SELECTOR)
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')));
+  expect(order).toEqual(['reasoning-block', 'assistant-prose', 'tool-group']);
+
+  const reasoning = body.getByTestId('reasoning-block');
+  await expect(reasoning).toContainText('Thought for');
+  await reasoning.getByRole('button').click();
+  await expect(reasoning).toContainText(MOCK_THINKING);
+
+  await expect(body.getByTestId('assistant-prose')).toContainText(MOCK_PROSE);
+
+  const group = body.getByTestId('tool-group');
+  await expect(group).toContainText('Ran 3 tools');
 
   await group.getByRole('button').first().click();
   const rows = group.getByTestId('tool-row');
@@ -101,4 +130,15 @@ test('renders a turn as thinking, prose, one tool group, then the answer', async
     page.getByTestId('user-message').filter({ hasText: 'Say hello after the edit' }),
   ).toBeVisible();
   await expectAssistantText(page, MOCK_TEXT);
+
+  // A finished turn with reasoning and no tools folds to a thought-only row.
+  await sendMessage(page, 'think-only');
+  const thought = page.getByTestId('steps-block').last();
+  await expect(thought).toContainText('Thought for');
+  await expect(thought).not.toContainText('Ran');
+  await thought.getByRole('button').first().click();
+  const thoughtReasoning = thought.getByTestId('reasoning-block');
+  await expect(thoughtReasoning).toBeVisible();
+  await thoughtReasoning.getByRole('button').click();
+  await expect(thoughtReasoning).toContainText(MOCK_THINKING);
 });
