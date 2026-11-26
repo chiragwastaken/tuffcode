@@ -5,6 +5,23 @@ the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-26
+
+### Fixes
+- The provider Vision toggle now applies to existing model rows written before the capability fix.
+  On startup, rows with no provenance whose capabilities exactly match the old default shape are
+  reset to unknown, so the provider toggle takes effect without re-saving the provider. Discovery
+  now records provenance on every row so the repair runs once.
+- The bash idle-output window is 60 seconds by default and is exposed to the model as
+  `idle_timeout_ms`, so a legitimately silent build can ask for more time instead of being stopped
+  at 30 seconds.
+- A folder-backed thread whose stored path is temporarily missing opens its terminal at the
+  project path instead of failing. Worktree threads keep the clear missing-worktree error.
+
+### Release
+- The release workflow builds without electron-builder publish, creates or reuses the GitHub
+  release, publishes it, and fails verification if the release is still a draft.
+
 ## [0.3.1] - 2026-11-26
 
 ### Reliability
@@ -39,6 +56,8 @@ the project uses semantic versioning.
   clean reopen.
 
 ### Known issues
+- Create PR is disabled for a thread that runs in the project folder; open a worktree thread for
+  PR work. Folder threads still support diff, checkpoint and commit.
 - Read-only bash can read any file the OS user can read; writes, exec and network are blocked.
 - Remote OAuth is proven against a local mock authorization server.
 - Plugin hooks and agents are listed but never run.

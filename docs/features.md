@@ -55,7 +55,8 @@ internal rationale lives in `decisions.md` (local only).
   honored when discovery reported no hints.
 - Council uses the configured planner, worker and reviewer models and shows provider error text.
 - New chat defaults to the project folder, with an explicit worktree option and deletion guards
-  that can never remove the checkout.
+  that can never remove the checkout. Create PR stays a worktree-thread action; folder threads
+  support diff, checkpoint and commit.
 - A Needs you inbox lists approvals, stalled runs, failures and ready-to-review threads across
   projects, with inline Allow and Deny.
 - The prompt loads AGENTS.md, CLAUDE.md and .tuffcode/rules/*.md under a token budget.
