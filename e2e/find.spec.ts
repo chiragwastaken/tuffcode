@@ -3,6 +3,7 @@ import {
   addMockProvider,
   addProjectThroughUi,
   closeDock,
+  confirmNewThreadDialog,
   createThreadThroughSidebar,
   expectAssistantText,
   seedDefaultModel,
@@ -121,6 +122,7 @@ test('Ctrl+F opens in the clicked pane, not the routed thread', async ({
     .locator('[data-testid="thread-row"][aria-current="page"]')
     .getAttribute('data-thread-id');
   await page.getByTestId('sidebar-new-thread').click();
+  await confirmNewThreadDialog(page);
   await expect(page.getByTestId('thread-title')).toBeVisible();
   await expect(page.getByTestId('thread-row')).toHaveCount(2);
   const otherThreadId = await page

@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { isInside, normalizePath } from '@tuffcode/shared';
+import { isInside, normalizePath, worktreesRoot } from '@tuffcode/shared';
 import { badRequest, conflict } from '../errors.js';
 import { runGit, tryRunGit } from './runGit.js';
 
@@ -39,6 +39,14 @@ function canonicalPath(path: string): string {
       current = parent;
     }
   }
+}
+
+/**
+ * Compares two canonical paths. Windows path comparison is case-insensitive, so a
+ * checkout reached through different casing must still count as the same directory.
+ */
+export function samePath(left: string, right: string): boolean {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 export async function isGitRepo(dir: string): Promise<boolean> {
@@ -130,14 +138,36 @@ export async function provisionWorktree(
   return { path: target, branch, baseBranch: input.baseBranch };
 }
 
+export interface RemoveWorktreeOptions {
+  /** Root the checkout must live under; defaults to the configured worktrees root. */
+  worktreesRoot?: string;
+}
+
 /**
  * Removes a worktree: `git worktree remove --force`, a filesystem fallback when git
  * refuses (for example after the directory was already partly deleted), then
  * `git worktree prune` so the repository stops listing it.
+ *
+ * The checkout is refused unless it sits strictly inside the worktrees root. A
+ * folder-backed thread stores the project checkout itself as its worktree path, so
+ * without this guard deleting the thread would delete the user's repository. The
+ * containment check runs before any git or filesystem call, and a path that fails it
+ * never falls back to a filesystem delete.
  */
-export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+export async function removeWorktree(
+  repoPath: string,
+  worktreePath: string,
+  options: RemoveWorktreeOptions = {},
+): Promise<void> {
   const target = canonicalPath(worktreePath);
   const repo = canonicalPath(repoPath);
+  const root = canonicalPath(options.worktreesRoot ?? worktreesRoot());
+  if (samePath(target, repo)) {
+    throw badRequest('refusing to remove the project checkout');
+  }
+  if (samePath(target, root) || !isInside(root, target)) {
+    throw badRequest('refusing to remove a path outside the worktrees root');
+  }
   const removed = await tryRunGit(['worktree', 'remove', '--force', target], repo);
   if (!removed.ok && existsSync(target)) {
     rmSync(target, { recursive: true, force: true });

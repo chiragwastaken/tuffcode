@@ -189,6 +189,8 @@ export const methods = {
       modelId: z.string(),
       executionMode: ExecutionModeSchema,
       permissionMode: PermissionModeSchema,
+      /** Where the thread runs: the project folder (default) or an isolated worktree. */
+      workspace: z.enum(['folder', 'worktree']).optional(),
       baseBranch: z.string().optional(),
     }),
     result: ThreadSchema,

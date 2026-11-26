@@ -61,11 +61,30 @@ export async function seedDefaultModel(rpc: HarnessRpc): Promise<string> {
   return provider.id;
 }
 
-/** Clicks New thread and waits for the thread view to mount. */
-export async function createThreadThroughSidebar(page: Page): Promise<string> {
+/**
+ * Confirms the New chat dialog. Folder mode is preselected, so a caller that wants
+ * the default workspace only clicks Start.
+ */
+export async function confirmNewThreadDialog(
+  page: Page,
+  options: { workspace?: 'folder' | 'worktree' } = {},
+): Promise<void> {
+  const dialog = page.getByTestId('new-thread-dialog');
+  await expect(dialog).toBeVisible();
+  if (options.workspace === 'worktree') await dialog.getByTestId('workspace-worktree').click();
+  await dialog.getByTestId('new-thread-start').click();
+  await expect(dialog).toBeHidden();
+}
+
+/** Clicks New thread, confirms the dialog, and waits for the thread view to mount. */
+export async function createThreadThroughSidebar(
+  page: Page,
+  options: { workspace?: 'folder' | 'worktree' } = {},
+): Promise<string> {
   const button = page.getByTestId('sidebar-new-thread');
   await expect(button).toBeEnabled();
   await button.click();
+  await confirmNewThreadDialog(page, options);
   const title = page.getByTestId('thread-title');
   await expect(title).toBeVisible();
   return (await title.innerText()).trim();

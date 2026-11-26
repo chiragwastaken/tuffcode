@@ -3,13 +3,13 @@ import type { Project, SubagentView, Thread } from '@tuffcode/contracts';
 import { Button, Kbd, cn } from '@tuffcode/ui';
 import { FolderPlus, Plug, Plus, Search, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { toast } from 'sonner';
 import { useAddProject } from '../../hooks/use-add-project';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import { requestInspectorTab } from '../inspector/panel-requests';
 import { childForThread } from '../subagents/subagent-model';
 import { requestThreadDelete, requestThreadRename } from '../thread/thread-dialogs';
+import { NewThreadDialog } from './NewThreadDialog';
 import { RemoveProjectDialog } from './RemoveProjectDialog';
 import { SearchDialog } from './SearchDialog';
 import { SidebarList, type SidebarItemActions } from './SidebarList';
@@ -26,7 +26,6 @@ export function Sidebar() {
   const projects = useAppStore((state) => state.projects);
   const threadsById = useAppStore((state) => state.threads);
   const activeThreadId = useAppStore((state) => state.activeThreadId);
-  const settings = useAppStore((state) => state.settings);
   const upsertThread = useAppStore((state) => state.upsertThread);
   const setActiveThread = useAppStore((state) => state.setActiveThread);
   const openSubagent = useAppStore((state) => state.openSubagent);
@@ -41,7 +40,8 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() =>
     readCollapsedProjects(typeof window === 'undefined' ? null : window.localStorage),
   );
-  const [creatingProjectId, setCreatingProjectId] = useState<string | null>(null);
+  const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [newThreadProjectId, setNewThreadProjectId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Project | null>(null);
 
   const groups = useMemo(
@@ -51,43 +51,27 @@ export function Sidebar() {
   const isCollapsed = useCallback((projectId: string) => collapsed.has(projectId), [collapsed]);
   const items = useMemo(() => buildSidebarItems(groups, isCollapsed), [groups, isCollapsed]);
   const virtual = needsVirtualization(groups);
-  /** New chat goes to the project of the open thread, else the most recent project. */
+  /** New chat preselects the project of the open thread, else the most recent project. */
   const newChatProjectId =
     (activeThreadId === null ? undefined : threadsById[activeThreadId]?.projectId) ?? projects[0]?.id ?? null;
 
-  const createThread = useCallback(
-    async (projectId: string) => {
-      const providerId = settings?.defaultProviderId;
-      const modelId = settings?.defaultModelId;
-      if (!providerId || !modelId) {
-        toast.error('Set a default provider and model in Settings before creating a thread.');
-        return;
-      }
+  /** New chat opens the workspace dialog; no thread exists until the user starts one. */
+  const openNewThread = useCallback((projectId: string | null) => {
+    setNewThreadProjectId(projectId);
+    setNewThreadOpen(true);
+  }, []);
 
-      setCreatingProjectId(projectId);
-      try {
-        const thread = await rpc.request('threads.create', {
-          projectId,
-          providerId,
-          modelId,
-          executionMode: 'work',
-          permissionMode: settings?.defaultPermissionMode ?? 'ask',
-        });
-        upsertThread(thread);
-        setActiveThread(thread.id);
-        await navigate({
-          to: '/project/$projectId/thread/$threadId',
-          params: { projectId, threadId: thread.id },
-        });
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Could not create the thread.');
-      } finally {
-        setCreatingProjectId(null);
-      }
+  const handleThreadCreated = useCallback(
+    (thread: Thread) => {
+      upsertThread(thread);
+      setActiveThread(thread.id);
+      void navigate({
+        to: '/project/$projectId/thread/$threadId',
+        params: { projectId: thread.projectId, threadId: thread.id },
+      });
     },
-    [navigate, rpc, setActiveThread, settings, upsertThread],
+    [navigate, setActiveThread, upsertThread],
   );
-
 
   const handleToggleProject = useCallback((projectId: string) => {
     setCollapsed((previous) => {
@@ -149,8 +133,8 @@ export function Sidebar() {
   );
 
   const handleNewThread = useCallback(
-    (projectId: string) => void createThread(projectId),
-    [createThread],
+    (projectId: string) => openNewThread(projectId),
+    [openNewThread],
   );
 
   const handleRemoveProject = useCallback((project: Project) => setRemoveTarget(project), []);
@@ -169,7 +153,6 @@ export function Sidebar() {
   const actions = useMemo<SidebarItemActions>(
     () => ({
       activeThreadId,
-      creatingProjectId,
       projectPathFor,
       onSelectThread: handleSelectThread,
       onOpenThread: handleOpenThread,
@@ -182,7 +165,6 @@ export function Sidebar() {
     }),
     [
       activeThreadId,
-      creatingProjectId,
       handleNewThread,
       handleOpenChild,
       handleOpenThread,
@@ -251,10 +233,7 @@ export function Sidebar() {
           icon={Plus}
           label="New chat"
           testId="sidebar-new-chat"
-          disabled={newChatProjectId === null || creatingProjectId !== null}
-          onClick={() => {
-            if (newChatProjectId !== null) void createThread(newChatProjectId);
-          }}
+          onClick={() => openNewThread(newChatProjectId)}
         />
         <NavButton
           icon={Search}
@@ -295,6 +274,13 @@ export function Sidebar() {
         </Button>
       </div>
 
+      <NewThreadDialog
+        open={newThreadOpen}
+        onOpenChange={setNewThreadOpen}
+        preferredProjectId={newThreadProjectId}
+        onAddProject={() => void addProject()}
+        onCreated={handleThreadCreated}
+      />
       <RemoveProjectDialog
         project={removeTarget}
         threadCount={removeThreadCount}

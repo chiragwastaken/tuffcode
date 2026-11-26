@@ -14,7 +14,6 @@ export interface ProjectGroupHeaderProps {
   project: Project;
   threadCount: number;
   collapsed: boolean;
-  creating: boolean;
   onToggle: (projectId: string) => void;
   onNewThread: (projectId: string) => void;
   onRemove: (project: Project) => void;
@@ -25,7 +24,6 @@ export function ProjectGroupHeader({
   project,
   threadCount,
   collapsed,
-  creating,
   onToggle,
   onNewThread,
   onRemove,
@@ -73,7 +71,6 @@ export function ProjectGroupHeader({
         icon={Plus}
         label={`New thread in ${project.name}`}
         size="sm"
-        disabled={creating}
         onClick={() => onNewThread(project.id)}
         className={cn(compactIcon, revealOnHover)}
       />

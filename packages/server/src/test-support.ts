@@ -121,7 +121,7 @@ export interface ProjectThread {
   thread: Thread;
 }
 
-/** Project plus a provisioned thread, the setup every git test needs. */
+/** Project plus a provisioned worktree thread, the setup every git test needs. */
 export async function createProjectThread(repos: Repos, repoPath: string): Promise<ProjectThread> {
   addTestProvider(repos);
   const project = await addProject(repos, repoPath);
@@ -131,6 +131,7 @@ export async function createProjectThread(repos: Repos, repoPath: string): Promi
     modelId: 'model-x',
     executionMode: 'work',
     permissionMode: 'ask',
+    workspace: 'worktree',
   });
   return { project, thread };
 }

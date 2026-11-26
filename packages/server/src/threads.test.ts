@@ -1,5 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { DEFAULT_CAPABILITIES } from '@tuffcode/contracts';
 import { isInside } from '@tuffcode/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addProject } from './projects.js';
@@ -26,7 +27,10 @@ describe('threads service', () => {
     ctx.dispose();
   });
 
-  async function createTestThread(baseBranch?: string) {
+  async function createTestThread(
+    baseBranch?: string,
+    workspace: 'folder' | 'worktree' = 'worktree',
+  ) {
     const project = await addProject(ctx.repos, repo);
     return createThread(ctx.repos, {
       projectId: project.id,
@@ -34,6 +38,7 @@ describe('threads service', () => {
       modelId: 'model-x',
       executionMode: 'work',
       permissionMode: 'ask',
+      workspace,
       ...(baseBranch === undefined ? {} : { baseBranch }),
     });
   }
@@ -91,5 +96,93 @@ describe('threads service', () => {
     const worktreePath = thread.worktreePath ?? '';
     await deleteThread(ctx.repos, thread.id, false);
     expect(existsSync(worktreePath)).toBe(true);
+  });
+
+  it('creates a folder thread in the project checkout without a branch', async () => {
+    const project = await addProject(ctx.repos, repo);
+    const thread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      workspace: 'folder',
+    });
+    expect(thread.worktreePath).toBe(project.path);
+    expect(thread.branch).toBeNull();
+    expect(thread.baseBranch).toBe('main');
+    const listed = git(repo, ['worktree', 'list', '--porcelain']).toLowerCase();
+    expect(listed).not.toContain('tuffcode/');
+  });
+
+  it('defaults to the project folder when the request omits the workspace', async () => {
+    const project = await addProject(ctx.repos, repo);
+    const thread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+    });
+    expect(thread.worktreePath).toBe(project.path);
+    expect(thread.branch).toBeNull();
+  });
+
+  it('forces folder mode when the capability is off even if a worktree is requested', async () => {
+    ctx.repos.settings.patch({ capabilities: { ...DEFAULT_CAPABILITIES, worktrees: false } });
+    const project = await addProject(ctx.repos, repo);
+    const thread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      workspace: 'worktree',
+    });
+    expect(thread.worktreePath).toBe(project.path);
+    expect(thread.branch).toBeNull();
+  });
+
+  it('deleting a folder thread never removes the project checkout', async () => {
+    const project = await addProject(ctx.repos, repo);
+    const thread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      workspace: 'folder',
+    });
+    await deleteThread(ctx.repos, thread.id, true);
+    expect(ctx.repos.threads.get(thread.id)).toBeUndefined();
+    expect(existsSync(join(repo, 'README.md'))).toBe(true);
+    expect(git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
+  });
+
+  it('deleting a worktree thread removes only its worktree', async () => {
+    const project = await addProject(ctx.repos, repo);
+    const folderThread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      workspace: 'folder',
+    });
+    const worktreeThread = await createThread(ctx.repos, {
+      projectId: project.id,
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      workspace: 'worktree',
+    });
+    const worktreePath = worktreeThread.worktreePath ?? '';
+    expect(existsSync(worktreePath)).toBe(true);
+
+    await deleteThread(ctx.repos, worktreeThread.id, true);
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(existsSync(join(repo, 'README.md'))).toBe(true);
+    expect(ctx.repos.threads.get(folderThread.id)).toBeDefined();
   });
 });

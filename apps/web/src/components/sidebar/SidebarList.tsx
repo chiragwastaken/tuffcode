@@ -13,7 +13,6 @@ import {
 
 export interface SidebarItemActions {
   activeThreadId: string | null;
-  creatingProjectId: string | null;
   projectPathFor: (projectId: string) => string | undefined;
   onSelectThread: (threadId: string) => void;
   onOpenThread: (thread: Thread) => void;
@@ -94,7 +93,6 @@ function SidebarItemView({ item, actions }: { item: SidebarItem; actions: Sideba
           project={item.project}
           threadCount={item.threadCount}
           collapsed={item.collapsed}
-          creating={actions.creatingProjectId === item.project.id}
           onToggle={actions.onToggleProject}
           onNewThread={actions.onNewThread}
           onRemove={actions.onRemoveProject}
