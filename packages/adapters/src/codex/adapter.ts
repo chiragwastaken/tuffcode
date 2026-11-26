@@ -110,7 +110,13 @@ interface ActiveTurn {
 }
 
 /** Approval policy values accepted by `thread/start` and `turn/start`. */
-export function codexApprovalPolicy(mode: PermissionMode): 'untrusted' | 'on-request' | 'never' {
+export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never';
+
+/** Sandbox mode values accepted by `thread/start`. */
+export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+
+/** The approval policy one Tuffcode mode maps to. */
+export function codexApprovalPolicy(mode: PermissionMode): CodexApprovalPolicy {
   switch (mode) {
     case 'read-only':
       return 'never';
@@ -122,10 +128,8 @@ export function codexApprovalPolicy(mode: PermissionMode): 'untrusted' | 'on-req
   }
 }
 
-/** Sandbox mode value accepted by `thread/start`. */
-export function codexSandboxMode(
-  mode: PermissionMode,
-): 'read-only' | 'workspace-write' | 'danger-full-access' {
+/** The sandbox mode one Tuffcode mode maps to. */
+export function codexSandboxMode(mode: PermissionMode): CodexSandboxMode {
   switch (mode) {
     case 'read-only':
       return 'read-only';

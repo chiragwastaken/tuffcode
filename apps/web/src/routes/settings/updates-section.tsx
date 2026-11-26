@@ -80,7 +80,7 @@ export function UpdatesSection() {
           <SettingsRow
             label="Channel"
             htmlFor="updates-channel"
-            description="Beta builds may include unfinished features."
+            description="Stable installs published releases only. Beta also installs prerelease builds, which may be unfinished."
           >
             <Select
               id="updates-channel"

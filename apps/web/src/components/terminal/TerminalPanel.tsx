@@ -1,11 +1,20 @@
-import { Button, EmptyState, IconButton, Spinner, cn, focusRing } from '@tuffcode/ui';
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  Spinner,
+  TERMINAL_FONT_SIZE,
+  cn,
+  focusRing,
+} from '@tuffcode/ui';
 import { Plus, X } from 'lucide-react';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
+import { useAppStore } from '../../store/app-store';
 import { TerminalError, terminalErrorMessage } from './TerminalError';
 import { TerminalView } from './TerminalView';
-import { TERMINAL_FONT_SIZE, measureTerminalSize } from './terminal-size';
+import { measureTerminalSize } from './terminal-size';
 import {
   subscribeTerminalRequests,
   takeTerminalRequest,
@@ -31,6 +40,11 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
   const [tabs, dispatch] = useReducer(terminalTabsReducer, initialTerminalTabs);
   const [openState, setOpenState] = useState<OpenState>(IDLE);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  // The pty opens at the size the current font implies. It lives in a ref so a font
+  // change does not restart the terminal: xterm refits and sends terminal.resize.
+  const fontSize = useAppStore((state) => state.settings?.terminalFontSize ?? TERMINAL_FONT_SIZE);
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   const ownedRef = useRef<Set<string>>(new Set<string>());
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
@@ -58,7 +72,7 @@ export function TerminalPanel({ threadId, className }: TerminalPanelProps) {
     spawningRef.current = true;
     const generation = generationRef.current;
     setOpenState({ status: 'opening' });
-    const size = measureTerminalSize(bodyRef.current, TERMINAL_FONT_SIZE);
+    const size = measureTerminalSize(bodyRef.current, fontSizeRef.current);
     let openedId: string | null = null;
 
     try {

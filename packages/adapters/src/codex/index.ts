@@ -4,7 +4,9 @@ export {
   codexSandboxMode,
   codexSandboxPolicy,
   type CodexAdapterOverrides,
+  type CodexApprovalPolicy,
   type CodexChild,
+  type CodexSandboxMode,
   type CodexSpawn,
 } from './adapter.js';
 export {

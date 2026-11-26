@@ -46,13 +46,16 @@ export function TerminalSection() {
     <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
       <SettingsSectionHeader
         title="Terminal"
-        description="The shell the in-app terminal starts, and how much history it keeps. New terminals pick these up."
+        description="The shell the in-app terminal starts, and how it looks. Scrollback, font size and cursor style apply to open terminals immediately."
       />
 
       <Card>
         <CardHeader>
           <CardTitle>Terminal</CardTitle>
-          <CardDescription>Applies to the inspector terminal and the bash tool.</CardDescription>
+          <CardDescription>
+            Shell applies to the inspector terminal and the bash tool; the rest apply to the
+            inspector terminal.
+          </CardDescription>
         </CardHeader>
 
         <div className="divide-y divide-border border-t border-border">

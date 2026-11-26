@@ -1,5 +1,4 @@
-/** Matches the default `fontSize` of the ui Terminal wrapper. */
-export const TERMINAL_FONT_SIZE = 13;
+import { TERMINAL_FONT_SIZE } from '@tuffcode/ui';
 
 /** Fallback when the panel has not been laid out yet (hidden route, first paint). */
 const DEFAULT_TERMINAL_SIZE = { cols: 80, rows: 24 } as const;

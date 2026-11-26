@@ -80,3 +80,12 @@ export {
   type DiffViewerProps,
 } from './diff';
 export { Terminal, type TerminalHandle, type TerminalProps } from './terminal';
+export {
+  TERMINAL_CURSOR_STYLE,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_SCROLLBACK,
+  terminalOptions,
+  type TerminalAppearance,
+  type TerminalCursorStyle,
+  type TerminalOptions,
+} from './terminal-options';

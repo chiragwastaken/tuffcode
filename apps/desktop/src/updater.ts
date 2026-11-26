@@ -3,12 +3,18 @@ import { app, dialog, type BrowserWindow } from 'electron';
 // electron-updater is CommonJS; Node's ESM loader cannot see its named exports,
 // so import the module object and destructure it at runtime.
 import electronUpdater from 'electron-updater';
-import type { Logger } from '@tuffcode/shared';
+import { dbPath, type Logger } from '@tuffcode/shared';
 import type { UpdateCheckOutcome } from './bridge';
 
 const { autoUpdater } = electronUpdater;
 
 export const DISABLE_UPDATES_ENV = 'TUFFCODE_DISABLE_UPDATES';
+
+/** The release channel a build follows; mirrors the stored `updateChannel` setting. */
+export type UpdateChannel = 'stable' | 'beta';
+
+/** electron-updater's name for the feed that carries published releases. */
+const STABLE_FEED = 'latest';
 
 /** Delay before the launch check so the window is usable while it runs. */
 const LAUNCH_CHECK_DELAY_MS = 3000;
@@ -19,6 +25,10 @@ const BUSY_DETAIL = 'An update check is already in progress.';
 export interface UpdaterOptions {
   env?: Record<string, string | undefined>;
   packaged?: boolean;
+  /** Release channel; when omitted the stored setting is read from `dbFile`. */
+  channel?: UpdateChannel;
+  /** Settings database to read the channel from; defaults to the app's user data path. */
+  dbFile?: string;
 }
 
 export interface SetupUpdaterOptions extends UpdaterOptions {
@@ -52,6 +62,40 @@ export function checkUpdatesOnStart(dbFile: string): boolean {
   }
 }
 
+/**
+ * Reads the stored `updateChannel` setting from the settings table. A missing row, a
+ * missing table or an unreadable file keeps the contract default, stable.
+ */
+export function storedUpdateChannel(dbFile: string): UpdateChannel {
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbFile, { readOnly: true });
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('updateChannel');
+    if (row === undefined) return 'stable';
+    const stored: unknown = JSON.parse(String(row['value']));
+    return stored === 'beta' ? 'beta' : 'stable';
+  } catch {
+    return 'stable';
+  } finally {
+    db?.close();
+  }
+}
+
+/** The channel this check follows: the explicit option, else the stored setting. */
+export function resolveUpdateChannel(options: UpdaterOptions = {}): UpdateChannel {
+  return options.channel ?? storedUpdateChannel(options.dbFile ?? dbPath());
+}
+
+/**
+ * Points electron-updater at the channel before a check. Stable reads the published
+ * `latest` feed and refuses prereleases; beta allows them, so prerelease builds are
+ * offered alongside published ones.
+ */
+export function applyUpdateChannel(channel: UpdateChannel): void {
+  autoUpdater.allowPrerelease = channel === 'beta';
+  autoUpdater.channel = channel === 'beta' ? 'beta' : STABLE_FEED;
+}
+
 async function promptRestart(version: string, window: BrowserWindow | null): Promise<void> {
   const options = {
     type: 'info' as const,
@@ -77,6 +121,7 @@ export async function checkNow(options: UpdaterOptions = {}): Promise<UpdateChec
   }
 
   try {
+    applyUpdateChannel(resolveUpdateChannel(options));
     const result = await autoUpdater.checkForUpdates();
     if (result === null) {
       return { status: 'unavailable', version: null, detail: BUSY_DETAIL, checkedAt };
@@ -116,6 +161,9 @@ export function setupUpdater(logger: Logger, options: SetupUpdaterOptions = {}):
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  // The channel must be set before the launch check reads the feed. A manual check
+  // applies it again, so a settings change takes effect without a restart.
+  applyUpdateChannel(resolveUpdateChannel(options));
 
   autoUpdater.on('error', (error: Error) => {
     logger.error('update check failed', { message: error.message });

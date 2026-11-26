@@ -5,7 +5,15 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Logger } from '@tuffcode/shared';
 import type { BrowserWindow } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkNow, checkUpdatesOnStart, setupUpdater, updaterEnabled } from './updater';
+import {
+  applyUpdateChannel,
+  checkNow,
+  checkUpdatesOnStart,
+  resolveUpdateChannel,
+  setupUpdater,
+  storedUpdateChannel,
+  updaterEnabled,
+} from './updater';
 
 const appMock = vi.hoisted(() => ({
   isPackaged: true,
@@ -25,6 +33,8 @@ const updaterMock = vi.hoisted(() => {
     autoUpdater: {
       autoDownload: false,
       autoInstallOnAppQuit: false,
+      allowPrerelease: false,
+      channel: null as string | null,
       on: (event: string, handler: (payload: unknown) => void): void => {
         handlers.set(event, handler);
       },
@@ -86,12 +96,14 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const enabledOptions = { env: {}, packaged: true };
+const enabledOptions = { env: {}, packaged: true, channel: 'stable' as const };
 
 beforeEach(() => {
   updaterMock.handlers.clear();
   updaterMock.autoUpdater.autoDownload = false;
   updaterMock.autoUpdater.autoInstallOnAppQuit = false;
+  updaterMock.autoUpdater.allowPrerelease = false;
+  updaterMock.autoUpdater.channel = null;
   updaterMock.autoUpdater.checkForUpdates.mockReset();
   updaterMock.autoUpdater.quitAndInstall.mockReset();
   appMock.getVersion.mockReset();
@@ -142,6 +154,61 @@ describe('checkUpdatesOnStart', () => {
   });
 });
 
+describe('storedUpdateChannel', () => {
+  it('defaults to stable when the row is missing', () => {
+    expect(storedUpdateChannel(settingsDb([]))).toBe('stable');
+  });
+
+  it('reads a stored beta channel', () => {
+    expect(storedUpdateChannel(settingsDb([['updateChannel', '"beta"']]))).toBe('beta');
+  });
+
+  it('reads a stored stable channel', () => {
+    expect(storedUpdateChannel(settingsDb([['updateChannel', '"stable"']]))).toBe('stable');
+  });
+
+  it('defaults to stable for an unknown value', () => {
+    expect(storedUpdateChannel(settingsDb([['updateChannel', '"nightly"']]))).toBe('stable');
+    expect(storedUpdateChannel(settingsDb([['updateChannel', 'not json']]))).toBe('stable');
+  });
+
+  it('defaults to stable when the database cannot be opened', () => {
+    expect(storedUpdateChannel(join(tmpdir(), 'tuffcode-updater-missing', 'tuffcode.db'))).toBe(
+      'stable',
+    );
+  });
+});
+
+describe('resolveUpdateChannel', () => {
+  it('prefers the explicit option over the stored setting', () => {
+    const dbFile = settingsDb([['updateChannel', '"beta"']]);
+
+    expect(resolveUpdateChannel({ channel: 'stable', dbFile })).toBe('stable');
+  });
+
+  it('falls back to the stored setting', () => {
+    const dbFile = settingsDb([['updateChannel', '"beta"']]);
+
+    expect(resolveUpdateChannel({ dbFile })).toBe('beta');
+  });
+});
+
+describe('applyUpdateChannel', () => {
+  it('clears prereleases and reads the latest feed on stable', () => {
+    applyUpdateChannel('stable');
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(false);
+    expect(updaterMock.autoUpdater.channel).toBe('latest');
+  });
+
+  it('allows prereleases on the beta feed', () => {
+    applyUpdateChannel('beta');
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(true);
+    expect(updaterMock.autoUpdater.channel).toBe('beta');
+  });
+});
+
 describe('checkNow', () => {
   it('reports unavailable without contacting the feed when updates are disabled', async () => {
     const outcome = await checkNow({ env: { TUFFCODE_DISABLE_UPDATES: '1' }, packaged: true });
@@ -161,6 +228,36 @@ describe('checkNow', () => {
     expect(outcome.status).toBe('available');
     expect(outcome.version).toBe('0.1.4');
     expect(outcome.detail).toBe('Tuffcode 0.1.4 is available.');
+  });
+
+  it('follows the stored beta channel before reading the feed', async () => {
+    updaterMock.autoUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.2.0' } });
+    const dbFile = settingsDb([['updateChannel', '"beta"']]);
+
+    await checkNow({ env: {}, packaged: true, dbFile });
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(true);
+    expect(updaterMock.autoUpdater.channel).toBe('beta');
+    expect(updaterMock.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows the stored stable channel before reading the feed', async () => {
+    updaterMock.autoUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.1.3' } });
+    updaterMock.autoUpdater.allowPrerelease = true;
+    updaterMock.autoUpdater.channel = 'beta';
+    const dbFile = settingsDb([['updateChannel', '"stable"']]);
+
+    await checkNow({ env: {}, packaged: true, dbFile });
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(false);
+    expect(updaterMock.autoUpdater.channel).toBe('latest');
+  });
+
+  it('leaves the channel alone when updates are disabled', async () => {
+    await checkNow({ env: { TUFFCODE_DISABLE_UPDATES: '1' }, packaged: true, channel: 'beta' });
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(false);
+    expect(updaterMock.autoUpdater.channel).toBeNull();
   });
 
   it('reports current when the feed matches the running version', async () => {
@@ -289,5 +386,28 @@ describe('setupUpdater', () => {
       message: 'update check finished',
       fields: { status: 'current', version: '0.1.3', detail: 'Tuffcode 0.1.3 is up to date.' },
     });
+  });
+
+  it('sets the stored beta channel before the launch check runs', async () => {
+    const { logger } = createLogger();
+    updaterMock.autoUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.1.3' } });
+    const dbFile = settingsDb([['updateChannel', '"beta"']]);
+    setupUpdater(logger, { env: {}, packaged: true, dbFile });
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(true);
+    expect(updaterMock.autoUpdater.channel).toBe('beta');
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(updaterMock.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets the stable channel before the launch check runs', async () => {
+    const { logger } = createLogger();
+    updaterMock.autoUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '0.1.3' } });
+    const dbFile = settingsDb([['updateChannel', '"stable"']]);
+    setupUpdater(logger, { env: {}, packaged: true, dbFile });
+
+    expect(updaterMock.autoUpdater.allowPrerelease).toBe(false);
+    expect(updaterMock.autoUpdater.channel).toBe('latest');
   });
 });
