@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
+  DEFAULT_MODEL_CAPABILITIES,
   ModelCapabilitiesSchema,
   ProviderConfigSchema,
   ReasoningEffortSchema,
@@ -70,6 +71,12 @@ export interface ProvidersRepo {
     models: ReplaceModelInput[],
     refreshedAt?: string | null,
   ): Model[];
+  /**
+   * Nulls every stored capability object that deep-equals the default shape and was
+   * written without a discovery source, so a row that predates the "unknown stays
+   * unknown" discovery contract stops reading as a declaration. Idempotent.
+   */
+  repairDefaultCapabilities(): number;
 }
 
 const PROVIDER_COLUMNS = 'id, kind, label, config, secret_ref, enabled, created_at, updated_at';
@@ -103,6 +110,19 @@ function parseReasoningEffort(row: SqlRow): ReasoningEffort | null | undefined {
   if (raw === null) return undefined;
   const parsed = ReasoningEffortSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+/** True when a stored object is exactly what discovery assumes when nothing was declared. */
+function isDefaultCapabilities(value: unknown): boolean {
+  const parsed = ModelCapabilitiesSchema.safeParse(value);
+  if (!parsed.success) return false;
+  const { tools, vision, reasoning, reasoningEfforts } = parsed.data;
+  return (
+    tools === DEFAULT_MODEL_CAPABILITIES.tools &&
+    vision === DEFAULT_MODEL_CAPABILITIES.vision &&
+    reasoning === DEFAULT_MODEL_CAPABILITIES.reasoning &&
+    reasoningEfforts.length === DEFAULT_MODEL_CAPABILITIES.reasoningEfforts.length
+  );
 }
 
 export function toProviderView(record: ProviderRecord): ProviderView {
@@ -139,6 +159,12 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
   );
   const selectRefreshedAt = db.prepare(
     'SELECT MAX(refreshed_at) AS refreshed_at FROM provider_models WHERE provider_id = ?',
+  );
+  const selectCapabilityCandidates = db.prepare(
+    'SELECT provider_id, model_id, capabilities FROM provider_models WHERE source IS NULL AND capabilities IS NOT NULL',
+  );
+  const clearModelCapabilities = db.prepare(
+    'UPDATE provider_models SET capabilities = NULL WHERE provider_id = ? AND model_id = ?',
   );
 
   function get(id: string): ProviderRecord | undefined {
@@ -229,6 +255,24 @@ export function createProvidersRepo(db: DatabaseSync): ProvidersRepo {
           );
         }
         return listModels(providerId);
+      }),
+    repairDefaultCapabilities: () =>
+      transaction(db, () => {
+        let repaired = 0;
+        for (const row of selectCapabilityCandidates.all()) {
+          const record = asRow(row);
+          let stored: unknown;
+          try {
+            stored = json(record, 'capabilities');
+          } catch {
+            // A corrupt object reads as unknown already; leave it for the next write.
+            continue;
+          }
+          if (!isDefaultCapabilities(stored)) continue;
+          clearModelCapabilities.run(text(record, 'provider_id'), text(record, 'model_id'));
+          repaired += 1;
+        }
+        return repaired;
       }),
   };
 }

@@ -116,6 +116,29 @@ function seedMcpServers(dbFile: string, root: string): void {
   closeDb(db);
 }
 
+/** Seeds one provider whose stored model row carries the pre-fix default capability shape. */
+function seedStaleCapabilities(dbFile: string): void {
+  const db = openDb(dbFile);
+  migrate(db);
+  const repos = createRepos(db);
+  repos.providers.upsert({
+    id: 'prv_a',
+    kind: 'openai-compatible',
+    label: 'Gateway',
+    config: { baseUrl: 'https://gateway.test' },
+  });
+  repos.providers.replaceModels('prv_a', [
+    {
+      modelId: 'gpt-6.1-sol',
+      label: 'GPT 6.1 Sol',
+      contextWindow: null,
+      capabilities: { tools: true, vision: false, reasoning: false, reasoningEfforts: [] },
+      isDefault: true,
+    },
+  ]);
+  closeDb(db);
+}
+
 describe('server bootstrap', () => {
   let env: TempEnv | undefined;
   let running: RunningServer | undefined;
@@ -146,6 +169,19 @@ describe('server bootstrap', () => {
     const body = (await health.json()) as Record<string, unknown>;
     expect(body['ok']).toBe(true);
     expect(body['version']).toBe('2.0.0');
+  });
+
+  it('repairs a stale default capability row at boot so the provider toggle applies', async () => {
+    env = createTempEnv();
+    const dbFile = join(env.root, 'server.db');
+    seedStaleCapabilities(dbFile);
+    running = await startServer({ dbFile, writeServerJson: false });
+
+    // The row predates the "unknown stays unknown" discovery contract, so boot must drop
+    // the object instead of letting it keep answering for the model.
+    const [row] = running.repos.providers.listModels('prv_a');
+    expect(row?.modelId).toBe('gpt-6.1-sol');
+    expect(row).not.toHaveProperty('capabilities');
   });
 
   it('closes idempotently', async () => {

@@ -212,4 +212,23 @@ describe('threadVision', () => {
 
     expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
   });
+
+  it('applies the provider toggle to a stale default-shaped row after the repair', () => {
+    seed(true);
+    // Exactly what pre-fix discovery stored for a payload that declared nothing.
+    ctx.repos.providers.replaceModels('prv_vision', [
+      {
+        modelId: 'model-x',
+        label: 'Model X',
+        contextWindow: null,
+        capabilities: { tools: true, vision: false, reasoning: false, reasoningEfforts: [] },
+        isDefault: true,
+      },
+    ]);
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(false);
+
+    expect(ctx.repos.providers.repairDefaultCapabilities()).toBe(1);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
+  });
 });
