@@ -1,5 +1,6 @@
 import type { AdapterSession, Message, ServerEvent } from '@tuffcode/contracts';
 import { AdapterUnavailableError, RPC_METHODS, methods } from '@tuffcode/contracts';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCommandHandlers } from './commands/handlers.js';
 import { createEventBus, type EventBus } from './events.js';
@@ -55,6 +56,7 @@ const IMPLEMENTED = [
   'threads.approve',
   'threads.context',
   'threads.create',
+  'threads.dashboard',
   'threads.delete',
   'threads.events',
   'threads.get',
@@ -524,5 +526,114 @@ describe('rpc registry', () => {
     const exhaustedPage = methods['threads.events'].result.parse(exhausted.result);
     expect(exhaustedPage.events).toHaveLength(0);
     expect(exhaustedPage.hasMore).toBe(false);
+  });
+
+  it('answers threads.dashboard across projects with an approval, a stall and a failure', async () => {
+    const { ctx, handlers } = fixture();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const oldIso = new Date(now.getTime() - 10 * 60_000).toISOString();
+    ctx.repos.projects.add({
+      id: 'prj_a',
+      name: 'alpha',
+      path: join(ctx.env.root, 'alpha'),
+      defaultBranch: 'main',
+      createdAt: nowIso,
+    });
+    ctx.repos.projects.add({
+      id: 'prj_b',
+      name: 'beta',
+      path: join(ctx.env.root, 'beta'),
+      defaultBranch: 'main',
+      createdAt: nowIso,
+    });
+    const addThread = (
+      id: string,
+      projectId: string,
+      status: 'idle' | 'running' | 'needs-approval' | 'failed',
+      parentThreadId: string | null = null,
+    ): void => {
+      ctx.repos.threads.create({
+        id,
+        projectId,
+        parentThreadId,
+        title: 'thread ' + id,
+        providerId: 'prv_test',
+        modelId: 'model-x',
+        executionMode: 'work',
+        permissionMode: 'ask',
+        status,
+        worktreePath: null,
+        branch: null,
+        baseBranch: null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    };
+    addThread('thr_approval', 'prj_a', 'needs-approval');
+    addThread('thr_stalled', 'prj_a', 'running');
+    addThread('thr_failed', 'prj_b', 'failed');
+    // A child thread must not appear: its parent already answers for it.
+    addThread('thr_child', 'prj_b', 'failed', 'thr_failed');
+
+    ctx.repos.events.append(
+      'thr_stalled',
+      'turn.started',
+      { type: 'turn.started', turnId: 'turn_1' },
+      oldIso,
+    );
+    ctx.repos.events.append(
+      'thr_failed',
+      'turn.finished',
+      { type: 'turn.finished', turnId: 'turn_1', reason: 'error' },
+      nowIso,
+    );
+    ctx.repos.approvals.create({
+      id: 'apr_1',
+      threadId: 'thr_approval',
+      toolCallId: 'call_1',
+      toolName: 'bash',
+      input: { command: 'echo tuffcode-ok' },
+      createdAt: nowIso,
+    });
+
+    const response = await dispatch(handlers, {
+      id: 'dashboard',
+      method: 'threads.dashboard',
+      params: {},
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok) return;
+    const dashboard = methods['threads.dashboard'].result.parse(response.result);
+    expect(dashboard.threads.map((entry) => entry.threadId)).toEqual([
+      'thr_approval',
+      'thr_stalled',
+      'thr_failed',
+    ]);
+
+    const [approval, stalled, failed] = dashboard.threads;
+    expect(approval).toMatchObject({
+      projectId: 'prj_a',
+      projectName: 'alpha',
+      status: 'needs-approval',
+      lastEventAt: null,
+      stalled: false,
+      pendingApprovals: [
+        { approvalId: 'apr_1', toolName: 'bash', inputSummary: 'bash: echo tuffcode-ok' },
+      ],
+    });
+    expect(stalled).toMatchObject({
+      projectName: 'alpha',
+      status: 'running',
+      lastEventAt: oldIso,
+      stalled: true,
+      pendingApprovals: [],
+    });
+    expect(failed).toMatchObject({
+      projectName: 'beta',
+      status: 'failed',
+      lastEventAt: nowIso,
+      stalled: false,
+    });
   });
 });

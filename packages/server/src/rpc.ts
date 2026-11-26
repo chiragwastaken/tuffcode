@@ -20,6 +20,7 @@ import { createCommentHandlers } from './comments/rpc.js';
 import { createContextHandlers } from './context/rpc.js';
 import { createCouncilHandlers } from './council/rpc.js';
 import type { Council } from './council/types.js';
+import { dashboardThreads } from './dashboard.js';
 import type { Repos } from './db/repos/index.js';
 import type { DiagnosticsInput } from './diagnostics.js';
 import { createDiagnosticsHandlers } from './diagnostics.js';
@@ -136,6 +137,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   define('projects.refresh', ({ id }) => refreshProject(deps.repos, id));
 
   define('threads.list', ({ projectId }) => listThreads(deps.repos, projectId));
+  define('threads.dashboard', () => ({ threads: dashboardThreads(deps.repos) }));
   define('threads.create', async (params) => {
     const thread = await createThread(deps.repos, params);
     emitThread(thread);

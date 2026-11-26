@@ -190,6 +190,32 @@ export const ApprovalSchema = z.object({
 });
 export type Approval = z.infer<typeof ApprovalSchema>;
 
+/** One approval waiting on the user, reduced to what a cross-project row shows. */
+export const DashboardApprovalSchema = z.object({
+  approvalId: IdSchema,
+  toolName: z.string(),
+  inputSummary: z.string(),
+});
+export type DashboardApproval = z.infer<typeof DashboardApprovalSchema>;
+
+/**
+ * One root thread as the Needs you view sees it: where it lives, what it is doing,
+ * whether it went quiet, and which approvals are waiting. `stalled` is decided on
+ * the server so every client agrees on the threshold.
+ */
+export const DashboardThreadSchema = z.object({
+  threadId: IdSchema,
+  projectId: IdSchema,
+  projectName: z.string(),
+  title: z.string(),
+  status: ThreadStatusSchema,
+  updatedAt: IsoDateTimeSchema,
+  lastEventAt: IsoDateTimeSchema.nullable(),
+  stalled: z.boolean(),
+  pendingApprovals: DashboardApprovalSchema.array(),
+});
+export type DashboardThread = z.infer<typeof DashboardThreadSchema>;
+
 /** What a model can do; every flag is known once a row carries the object. */
 export const ModelCapabilitiesSchema = z.object({
   tools: z.boolean(),
