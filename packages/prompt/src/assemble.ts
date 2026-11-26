@@ -1,11 +1,11 @@
 /**
  * One prompt assembly path shared by the turn runner and `prompt.preview`.
  *
- * Section order is fixed: base prompt, custom instructions, brain always block,
- * retrieved memory, turn context, user message. Empty optional sections are omitted,
- * so a preview can never show a heading the adapter never receives. Everything except
- * the user message is joined into the system prompt; the user message travels as the
- * turn text.
+ * Section order is fixed: base prompt, custom instructions, project rules, skills,
+ * available skills, brain always block, retrieved memory, turn context, user message.
+ * Empty optional sections are omitted, so a preview can never show a heading the
+ * adapter never receives. Everything except the user message is joined into the system
+ * prompt; the user message travels as the turn text.
  */
 import { BASE_SYSTEM_PROMPT } from './base';
 import { buildTurnContext, estimateTokens, type TurnContextInput } from './context';
@@ -13,6 +13,7 @@ import { buildCustomInstructions, buildPersonalSection, type PersonalProfile, ty
 
 export const CUSTOM_INSTRUCTIONS_HEADING = '## Custom instructions';
 export const ABOUT_USER_HEADING = '## About the user';
+export const PROJECT_RULES_HEADING = '## Project rules';
 
 const BRAIN_NOTES_HEADING = '## Brain notes';
 const RETRIEVED_MEMORY_HEADING = '## Retrieved memory';
@@ -23,6 +24,7 @@ export type PromptSectionName =
   | 'base'
   | 'about-user'
   | 'custom-instructions'
+  | 'project-rules'
   | 'skills'
   | 'available-skills'
   | 'brain-always'
@@ -39,6 +41,8 @@ export interface PromptSection {
 export interface PromptAssemblyInput {
   /** Raw `settings.customInstructions`; trimmed and capped here. */
   customInstructions?: string;
+  /** Rendered project rule blocks from the repository, already budgeted. */
+  projectRules?: string;
   /** Your Tuffcode profile; empty fields are left out. */
   profile?: PersonalProfile;
   responseStyle?: ResponseStyleName;
@@ -68,6 +72,7 @@ function section(name: PromptSectionName, text: string): PromptSection {
 
 export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
   const custom = buildCustomInstructions(input.customInstructions ?? '');
+  const projectRules = input.projectRules?.trim() ?? '';
   const brainAlways = input.brainAlways?.trim() ?? '';
   const retrieved = input.retrievedMemory?.trim() ?? '';
   const skills = input.skills?.trim() ?? '';
@@ -81,6 +86,14 @@ export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
   }
   if (custom !== undefined) {
     sections.push(section('custom-instructions', `${CUSTOM_INSTRUCTIONS_HEADING}\n${custom}`));
+  }
+  if (projectRules.length > 0) {
+    sections.push(
+      section(
+        'project-rules',
+        `${PROJECT_RULES_HEADING}\nRules committed in this repository. Follow them for this turn.\n${projectRules}`,
+      ),
+    );
   }
   if (skills.length > 0) {
     sections.push(section('skills', `${SKILLS_HEADING}\n${skills}`));
