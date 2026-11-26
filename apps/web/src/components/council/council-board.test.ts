@@ -1,4 +1,4 @@
-import type { Goal, Review, Task, TaskState } from '@tuffcode/contracts';
+import type { Goal, ProviderView, Review, Task, TaskState } from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   COLUMN_ROW_LIMIT,
@@ -13,6 +13,7 @@ import {
   fitViewport,
   goalStateColor,
   layoutCouncilBoard,
+  plannerModelLabel,
   reportLabel,
   reportStateColor,
   reviewerChipLabel,
@@ -428,5 +429,77 @@ describe('viewport', () => {
 
   it('never enlarges past 1:1', () => {
     expect(fitViewport({ width: 100, height: 80 }, { width: 400, height: 300 }).scale).toBe(1);
+  });
+});
+
+describe('plannerModelLabel', () => {
+  const created = '2026-01-01T00:00:00.000Z';
+  const provider = (id: string, enabled: boolean): ProviderView => ({
+    id,
+    kind: 'codex',
+    label: id,
+    config: {},
+    enabled,
+    hasSecret: false,
+    createdAt: created,
+    updatedAt: created,
+  });
+  const providers = [provider('prv_a', true), provider('prv_off', false)];
+
+  it('prefers the configured planner model on an enabled provider', () => {
+    expect(
+      plannerModelLabel({
+        choice: { providerId: 'prv_a', model: 'planner-model' },
+        providers,
+        threadProviderId: 'prv_a',
+        threadModelId: 'thread-model',
+      }),
+    ).toBe('planner-model');
+  });
+
+  it('uses the fallback model when the primary model is blank', () => {
+    expect(
+      plannerModelLabel({
+        choice: { providerId: 'prv_a', model: '  ', fallbackModel: 'fallback-model' },
+        providers,
+        threadProviderId: 'prv_a',
+        threadModelId: 'thread-model',
+      }),
+    ).toBe('fallback-model');
+  });
+
+  it('falls back to the goal thread model when the provider is disabled', () => {
+    expect(
+      plannerModelLabel({
+        choice: { providerId: 'prv_off', model: 'planner-model' },
+        providers,
+        threadProviderId: 'prv_a',
+        threadModelId: 'thread-model',
+      }),
+    ).toBe('thread-model');
+  });
+
+  it('returns the goal thread model when no planner is configured', () => {
+    expect(
+      plannerModelLabel({
+        choice: {},
+        providers,
+        threadProviderId: 'prv_a',
+        threadModelId: 'thread-model',
+      }),
+    ).toBe('thread-model');
+    expect(
+      plannerModelLabel({
+        choice: undefined,
+        providers,
+        threadProviderId: undefined,
+        threadModelId: undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it('draws the planner node with that label', () => {
+    const layout = layoutCouncilBoard(goal(), [task('Plan schema')], [], 'planner-model');
+    expect(nodeById(layout.nodes, 'planner').model).toBe('planner-model');
   });
 });

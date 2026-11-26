@@ -19,6 +19,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { useElementSize } from '../../hooks/use-element-size';
+import { useRpc } from '../../rpc/rpc-context';
+import { useAppStore } from '../../store/app-store';
 import {
   GOAL_STATE_LABEL,
   REVIEW_VERDICT_TONE,
@@ -33,6 +35,7 @@ import {
   fitViewport,
   goalStateColor,
   layoutCouncilBoard,
+  plannerModelLabel,
   reportLabel,
   reportStateColor,
   reviewVerdictColor,
@@ -109,10 +112,12 @@ export function CouncilBoard({
   className,
 }: CouncilBoardProps) {
   const { ref, size } = useElementSize<HTMLDivElement>();
+  const rpc = useRpc();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState<BoardViewport>({ scale: 1, x: 0, y: 0 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const drag = useRef<{
     pointerId: number;
     startX: number;
@@ -120,15 +125,65 @@ export function CouncilBoard({
     from: BoardViewport;
   } | null>(null);
 
+  const settings = useAppStore((state) => state.settings);
+  const providers = useAppStore((state) => state.providers);
+  const goalThreadId = status?.goal.threadId ?? null;
+  const goalThread = useAppStore((state) =>
+    goalThreadId === null ? undefined : state.threads[goalThreadId],
+  );
+  const plannerModel = useMemo(
+    () =>
+      plannerModelLabel({
+        choice: settings?.subagentModels.planner,
+        providers,
+        threadProviderId: goalThread?.providerId,
+        threadModelId: goalThread?.modelId,
+      }),
+    [settings, providers, goalThread],
+  );
+
   const empty = status === null;
   const layout = useMemo(
-    () => layoutCouncilBoard(status?.goal ?? null, status?.tasks ?? [], status?.reviews ?? []),
-    [status],
+    () =>
+      layoutCouncilBoard(
+        status?.goal ?? null,
+        status?.tasks ?? [],
+        status?.reviews ?? [],
+        plannerModel,
+      ),
+    [status, plannerModel],
   );
   const tasksById = useMemo(
     () => new Map((status?.tasks ?? []).map((task) => [task.id, task])),
     [status],
   );
+
+  const goalState = status?.goal.state ?? null;
+  // A failed goal reports only its state on the board; the planner or worker error is
+  // written to the goal thread as the last assistant message, so read it back and
+  // show it above the nodes instead of leaving the user with a bare Failed.
+  useEffect(() => {
+    if (goalState !== 'failed' || goalThreadId === null) {
+      setFailure(null);
+      return;
+    }
+    let live = true;
+    void rpc.request('messages.list', { threadId: goalThreadId }).then(
+      (rows) => {
+        if (!live) return;
+        const last = rows.findLast(
+          (message) => message.role === 'assistant' && message.content.trim().length > 0,
+        );
+        setFailure(last?.content.trim() ?? null);
+      },
+      () => {
+        if (live) setFailure(null);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [goalState, goalThreadId, rpc]);
 
   const activeId = hoveredId ?? selectedNodeId;
   const legend = councilBoardCounts(status?.goal ?? null, status?.tasks ?? []);
@@ -226,265 +281,277 @@ export function CouncilBoard({
 
   return (
     <div
-      ref={ref}
       data-testid="council-board"
       data-node-count={layout.nodes.length}
       data-edge-count={layout.edges.length}
       data-columns={layout.columns}
       data-empty={empty ? 'true' : 'false'}
       data-zoom={viewport.scale.toFixed(2)}
-      className={cn(
-        'relative min-h-0 overflow-hidden bg-card',
-        dragging ? 'cursor-grabbing' : 'cursor-grab',
-        className,
-      )}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+      className={cn('flex min-h-0 flex-col overflow-hidden bg-card', className)}
     >
+      {failure === null ? null : (
+        <p
+          role="alert"
+          data-testid="council-board-failure"
+          className="max-h-20 shrink-0 overflow-y-auto border-b border-border bg-error/10 px-2.5 py-1 text-2xs leading-4 break-words whitespace-pre-wrap text-error"
+        >
+          {failure}
+        </p>
+      )}
       <div
-        ref={viewportRef}
-        className="absolute inset-0 touch-none"
-        role="group"
-        aria-label={
-          empty ? 'Council board, no goal yet' : `Council board with ${layout.nodes.length} nodes`
-        }
+        ref={ref}
+        className={cn(
+          'relative min-h-0 flex-1 overflow-hidden',
+          dragging ? 'cursor-grabbing' : 'cursor-grab',
+        )}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
       >
-        {empty ? null : (
-          <div
-            className="absolute top-0 left-0 origin-top-left"
-            style={{
-              width: layout.width,
-              height: layout.height,
-              transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
-            }}
-          >
-            <svg
-              width={layout.width}
-              height={layout.height}
-              aria-hidden="true"
-              className="pointer-events-none absolute top-0 left-0"
+        <div
+          ref={viewportRef}
+          className="absolute inset-0 touch-none"
+          role="group"
+          aria-label={
+            empty ? 'Council board, no goal yet' : `Council board with ${layout.nodes.length} nodes`
+          }
+        >
+          {empty ? null : (
+            <div
+              className="absolute top-0 left-0 origin-top-left"
+              style={{
+                width: layout.width,
+                height: layout.height,
+                transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
+              }}
             >
-              {layout.edges.map((edge) => {
-                const active =
-                  activeId !== null && (edge.from === activeId || edge.to === activeId);
-                const dimmed = activeId !== null && !active;
+              <svg
+                width={layout.width}
+                height={layout.height}
+                aria-hidden="true"
+                className="pointer-events-none absolute top-0 left-0"
+              >
+                {layout.edges.map((edge) => {
+                  const active =
+                    activeId !== null && (edge.from === activeId || edge.to === activeId);
+                  const dimmed = activeId !== null && !active;
+                  return (
+                    <path
+                      key={edge.id}
+                      data-testid="council-board-edge"
+                      data-kind={edge.kind}
+                      data-active={active ? 'true' : 'false'}
+                      d={edge.path}
+                      fill="none"
+                      stroke={active ? 'var(--primary)' : 'var(--muted-foreground)'}
+                      strokeWidth={active ? 1.75 : 1}
+                      strokeOpacity={active ? 0.95 : dimmed ? 0.12 : 0.35}
+                      strokeDasharray={edge.kind === 'review' ? '3 3' : undefined}
+                    />
+                  );
+                })}
+              </svg>
+
+              {layout.nodes.map((node) => {
+                const Icon = NODE_ICON[node.kind];
+                const accent = nodeAccent(node);
+                const selected = node.id === selectedNodeId;
+                const task = node.taskId === null ? undefined : tasksById.get(node.taskId);
+                const opensThread = node.kind === 'task' && task?.threadId !== null;
+                const tooltip =
+                  node.kind === 'task' || node.kind === 'reviewer'
+                    ? `${node.title}${node.model === null ? '' : ` · ${node.model}`}`
+                    : node.kind === 'planner'
+                      ? 'Planner: this goal thread turns the goal into tasks'
+                      : 'Report: the goal summary at the end of the run';
                 return (
-                  <path
-                    key={edge.id}
-                    data-testid="council-board-edge"
-                    data-kind={edge.kind}
-                    data-active={active ? 'true' : 'false'}
-                    d={edge.path}
-                    fill="none"
-                    stroke={active ? 'var(--primary)' : 'var(--muted-foreground)'}
-                    strokeWidth={active ? 1.75 : 1}
-                    strokeOpacity={active ? 0.95 : dimmed ? 0.12 : 0.35}
-                    strokeDasharray={edge.kind === 'review' ? '3 3' : undefined}
-                  />
+                  <button
+                    key={node.id}
+                    type="button"
+                    data-board-node="true"
+                    data-testid="council-board-node"
+                    data-node-id={node.id}
+                    data-kind={node.kind}
+                    data-state={node.state}
+                    data-verdict={node.verdict ?? undefined}
+                    aria-pressed={selected}
+                    aria-label={`${node.title} (${node.kind}, ${nodeStateLabel(node)})`}
+                    title={tooltip}
+                    className={cn(
+                      'absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded-lg border bg-background px-2 text-left outline-none',
+                      'transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring',
+                      node.kind === 'reviewer' ? 'border-dashed py-0.5' : 'py-1.5',
+                      selected ? 'ring-2 ring-ring' : 'hover:bg-accent/60',
+                      opensThread ? 'cursor-pointer' : 'cursor-default',
+                    )}
+                    style={{
+                      left: node.x,
+                      top: node.y,
+                      width: node.width,
+                      height: node.height,
+                      borderColor: selected ? 'var(--ring)' : 'var(--border)',
+                      borderLeftColor: accent,
+                      borderLeftWidth: 3,
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleNodeClick(node);
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onMouseEnter={() => setHoveredId(node.id)}
+                    onMouseLeave={() =>
+                      setHoveredId((current) => (current === node.id ? null : current))
+                    }
+                    onFocus={() => setHoveredId(node.id)}
+                    onBlur={() => setHoveredId((current) => (current === node.id ? null : current))}
+                  >
+                    {node.kind === 'reviewer' ? (
+                      <span className="flex min-w-0 items-center gap-1">
+                        {node.verdict === null ? (
+                          <span className="shrink-0 text-2xs font-medium" style={{ color: accent }}>
+                            {reviewerChipLabel(node)}
+                          </span>
+                        ) : (
+                          <Badge variant={REVIEW_VERDICT_TONE[node.verdict]} size="sm">
+                            {reviewerChipLabel(node)}
+                          </Badge>
+                        )}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="flex min-w-0 items-center gap-1">
+                          <Icon
+                            aria-hidden="true"
+                            className="size-3 shrink-0"
+                            style={{ color: accent }}
+                          />
+                          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                            {node.title}
+                          </span>
+                          {node.critical ? (
+                            <span
+                              aria-label="Critical task"
+                              className="size-1.5 shrink-0 rounded-full bg-warning"
+                            />
+                          ) : null}
+                          {node.round > 0 ? (
+                            <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
+                              r{node.round}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground">
+                          <span className="shrink-0 whitespace-nowrap" style={{ color: accent }}>
+                            {nodeStateLabel(node)}
+                          </span>
+                          {node.model !== null ? (
+                            <>
+                              <span aria-hidden="true" className="text-muted-foreground/40">
+                                ·
+                              </span>
+                              <span className="truncate font-mono">{node.model}</span>
+                            </>
+                          ) : null}
+                        </span>
+                      </>
+                    )}
+                  </button>
                 );
               })}
-            </svg>
+            </div>
+          )}
+        </div>
 
-            {layout.nodes.map((node) => {
-              const Icon = NODE_ICON[node.kind];
-              const accent = nodeAccent(node);
-              const selected = node.id === selectedNodeId;
-              const task = node.taskId === null ? undefined : tasksById.get(node.taskId);
-              const opensThread = node.kind === 'task' && task?.threadId !== null;
-              const tooltip =
-                node.kind === 'task' || node.kind === 'reviewer'
-                  ? `${node.title}${node.model === null ? '' : ` · ${node.model}`}`
-                  : node.kind === 'planner'
-                    ? 'Planner: this goal thread turns the goal into tasks'
-                    : 'Report: the goal summary at the end of the run';
-              return (
-                <button
-                  key={node.id}
-                  type="button"
-                  data-board-node="true"
-                  data-testid="council-board-node"
-                  data-node-id={node.id}
-                  data-kind={node.kind}
-                  data-state={node.state}
-                  data-verdict={node.verdict ?? undefined}
-                  aria-pressed={selected}
-                  aria-label={`${node.title} (${node.kind}, ${nodeStateLabel(node)})`}
-                  title={tooltip}
-                  className={cn(
-                    'absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded-lg border bg-background px-2 text-left outline-none',
-                    'transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring',
-                    node.kind === 'reviewer' ? 'border-dashed py-0.5' : 'py-1.5',
-                    selected ? 'ring-2 ring-ring' : 'hover:bg-accent/60',
-                    opensThread ? 'cursor-pointer' : 'cursor-default',
-                  )}
-                  style={{
-                    left: node.x,
-                    top: node.y,
-                    width: node.width,
-                    height: node.height,
-                    borderColor: selected ? 'var(--ring)' : 'var(--border)',
-                    borderLeftColor: accent,
-                    borderLeftWidth: 3,
-                  }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleNodeClick(node);
-                  }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onMouseEnter={() => setHoveredId(node.id)}
-                  onMouseLeave={() =>
-                    setHoveredId((current) => (current === node.id ? null : current))
-                  }
-                  onFocus={() => setHoveredId(node.id)}
-                  onBlur={() => setHoveredId((current) => (current === node.id ? null : current))}
-                >
-                  {node.kind === 'reviewer' ? (
-                    <span className="flex min-w-0 items-center gap-1">
-                      {node.verdict === null ? (
-                        <span className="shrink-0 text-2xs font-medium" style={{ color: accent }}>
-                          {reviewerChipLabel(node)}
-                        </span>
-                      ) : (
-                        <Badge variant={REVIEW_VERDICT_TONE[node.verdict]} size="sm">
-                          {reviewerChipLabel(node)}
-                        </Badge>
-                      )}
-                    </span>
-                  ) : (
-                    <>
-                      <span className="flex min-w-0 items-center gap-1">
-                        <Icon
-                          aria-hidden="true"
-                          className="size-3 shrink-0"
-                          style={{ color: accent }}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-                          {node.title}
-                        </span>
-                        {node.critical ? (
-                          <span
-                            aria-label="Critical task"
-                            className="size-1.5 shrink-0 rounded-full bg-warning"
-                          />
-                        ) : null}
-                        {node.round > 0 ? (
-                          <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
-                            r{node.round}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground">
-                        <span className="shrink-0 whitespace-nowrap" style={{ color: accent }}>
-                          {nodeStateLabel(node)}
-                        </span>
-                        {node.model !== null ? (
-                          <>
-                            <span aria-hidden="true" className="text-muted-foreground/40">
-                              ·
-                            </span>
-                            <span className="truncate font-mono">{node.model}</span>
-                          </>
-                        ) : null}
-                      </span>
-                    </>
-                  )}
-                </button>
-              );
-            })}
+        {empty ? (
+          <div
+            data-testid="council-board-empty"
+            className="pointer-events-none absolute inset-0 grid place-items-center p-6"
+          >
+            <div className="flex max-w-60 flex-col items-center gap-1.5 text-center">
+              <Network aria-hidden="true" className="size-5 text-muted-foreground" />
+              <p className="text-xs font-medium text-foreground">No council goal yet</p>
+              <p className="text-2xs leading-4 text-muted-foreground">
+                Start a council goal from the thread composer. The board fills in with the plan, the
+                workers, each review and the final report.
+              </p>
+            </div>
           </div>
+        ) : null}
+
+        {canCancel ? (
+          <div className="absolute top-1.5 right-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="council-board-cancel"
+              disabled={cancelling}
+              onClick={onCancel}
+            >
+              <CircleSlash strokeWidth={1.75} />
+              Cancel
+            </Button>
+          </div>
+        ) : null}
+
+        {empty ? null : (
+          <>
+            <div
+              data-testid="council-board-controls"
+              className="absolute right-1.5 bottom-1.5 flex items-center gap-0.5 rounded-md border border-border bg-background/90 p-0.5 backdrop-blur-sm"
+            >
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="Zoom out"
+                disabled={viewport.scale <= MIN_BOARD_ZOOM}
+                onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
+              >
+                <Minus strokeWidth={1.75} />
+              </Button>
+              <span className="w-9 text-center text-2xs tabular-nums text-muted-foreground">
+                {Math.round(viewport.scale * 100)}%
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="Zoom in"
+                disabled={viewport.scale >= MAX_BOARD_ZOOM}
+                onClick={() => zoomFromCenter(ZOOM_STEP)}
+              >
+                <Plus strokeWidth={1.75} />
+              </Button>
+              <Button size="sm" variant="ghost" aria-label="Fit board" onClick={fit}>
+                <Maximize2 strokeWidth={1.75} />
+              </Button>
+            </div>
+
+            <div
+              data-testid="council-board-legend"
+              className="pointer-events-none absolute bottom-1.5 left-1.5 flex max-w-[calc(100%-9rem)] flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-muted-foreground"
+            >
+              {LEGEND_ENTRIES.map((entry) => (
+                <span
+                  key={entry.key}
+                  data-legend={entry.key}
+                  className="flex items-center gap-1 whitespace-nowrap"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: entry.color }}
+                  />
+                  <span>{entry.label}</span>
+                  <span className="tabular-nums text-foreground">{legend[entry.key]}</span>
+                </span>
+              ))}
+              <span className="whitespace-nowrap tabular-nums text-muted-foreground/60">
+                {layout.nodes.length} nodes · {layout.edges.length} edges
+              </span>
+            </div>
+          </>
         )}
       </div>
-
-      {empty ? (
-        <div
-          data-testid="council-board-empty"
-          className="pointer-events-none absolute inset-0 grid place-items-center p-6"
-        >
-          <div className="flex max-w-60 flex-col items-center gap-1.5 text-center">
-            <Network aria-hidden="true" className="size-5 text-muted-foreground" />
-            <p className="text-xs font-medium text-foreground">No council goal yet</p>
-            <p className="text-2xs leading-4 text-muted-foreground">
-              Start a council goal from the thread composer. The board fills in with the plan, the
-              workers, each review and the final report.
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {canCancel ? (
-        <div className="absolute top-1.5 right-1.5">
-          <Button
-            size="sm"
-            variant="outline"
-            data-testid="council-board-cancel"
-            disabled={cancelling}
-            onClick={onCancel}
-          >
-            <CircleSlash strokeWidth={1.75} />
-            Cancel
-          </Button>
-        </div>
-      ) : null}
-
-      {empty ? null : (
-        <>
-          <div
-            data-testid="council-board-controls"
-            className="absolute right-1.5 bottom-1.5 flex items-center gap-0.5 rounded-md border border-border bg-background/90 p-0.5 backdrop-blur-sm"
-          >
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label="Zoom out"
-              disabled={viewport.scale <= MIN_BOARD_ZOOM}
-              onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
-            >
-              <Minus strokeWidth={1.75} />
-            </Button>
-            <span className="w-9 text-center text-2xs tabular-nums text-muted-foreground">
-              {Math.round(viewport.scale * 100)}%
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-label="Zoom in"
-              disabled={viewport.scale >= MAX_BOARD_ZOOM}
-              onClick={() => zoomFromCenter(ZOOM_STEP)}
-            >
-              <Plus strokeWidth={1.75} />
-            </Button>
-            <Button size="sm" variant="ghost" aria-label="Fit board" onClick={fit}>
-              <Maximize2 strokeWidth={1.75} />
-            </Button>
-          </div>
-
-          <div
-            data-testid="council-board-legend"
-            className="pointer-events-none absolute bottom-1.5 left-1.5 flex max-w-[calc(100%-9rem)] flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-muted-foreground"
-          >
-            {LEGEND_ENTRIES.map((entry) => (
-              <span
-                key={entry.key}
-                data-legend={entry.key}
-                className="flex items-center gap-1 whitespace-nowrap"
-              >
-                <span
-                  aria-hidden="true"
-                  className="size-1.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: entry.color }}
-                />
-                <span>{entry.label}</span>
-                <span className="tabular-nums text-foreground">{legend[entry.key]}</span>
-              </span>
-            ))}
-            <span className="whitespace-nowrap tabular-nums text-muted-foreground/60">
-              {layout.nodes.length} nodes · {layout.edges.length} edges
-            </span>
-          </div>
-        </>
-      )}
     </div>
   );
 }

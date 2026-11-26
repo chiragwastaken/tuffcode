@@ -1,9 +1,11 @@
 import type {
   Goal,
   GoalState,
+  ProviderView,
   Review,
   ReviewVerdict,
   RpcResult,
+  SubagentModelChoice,
   Task,
   TaskState,
 } from '@tuffcode/contracts';
@@ -69,9 +71,7 @@ function columnHeight(rows: number): number {
 /** Distance from the top of the task area to the row at `row` in a column. */
 function rowOffset(row: number): number {
   if (row < COLUMN_ROW_LIMIT) return row * ROW_STEP;
-  return (
-    bandHeight(COLUMN_ROW_LIMIT) + COLUMN_WRAP_GAP + (row - COLUMN_ROW_LIMIT) * ROW_STEP
-  );
+  return bandHeight(COLUMN_ROW_LIMIT) + COLUMN_WRAP_GAP + (row - COLUMN_ROW_LIMIT) * ROW_STEP;
 }
 
 export const MIN_BOARD_ZOOM = 0.35;
@@ -81,13 +81,7 @@ export type BoardNodeKind = 'planner' | 'task' | 'reviewer' | 'report';
 export type BoardEdgeKind = 'plan' | 'depends' | 'review' | 'report';
 
 /** States a report node can hold: the goal states it mirrors, plus `queued`. */
-export type ReportNodeState =
-  | 'intake'
-  | 'queued'
-  | 'reporting'
-  | 'done'
-  | 'failed'
-  | 'cancelled';
+export type ReportNodeState = 'intake' | 'queued' | 'reporting' | 'done' | 'failed' | 'cancelled';
 
 export interface BoardNode {
   /** Stable across renders: `planner`, `task:<id>`, `reviewer:<id>`, `report`. */
@@ -256,10 +250,7 @@ function countStates(tasks: readonly Task[], states: Partial<Record<TaskState, t
  * queued, running, passed, failed and blocked add up to the task count; the planner
  * is one node once a goal exists.
  */
-export function councilBoardCounts(
-  goal: Goal | null,
-  tasks: readonly Task[],
-): CouncilBoardCounts {
+export function councilBoardCounts(goal: Goal | null, tasks: readonly Task[]): CouncilBoardCounts {
   return {
     planner: goal === null ? 0 : 1,
     queued: countStates(tasks, QUEUED_TASK_STATES),
@@ -339,6 +330,7 @@ export function layoutCouncilBoard(
   goal: Goal | null,
   tasks: readonly Task[],
   reviews: readonly Review[],
+  plannerModel: string | null = null,
 ): CouncilBoardLayout {
   const nodes: BoardNode[] = [];
   const edges: BoardEdge[] = [];
@@ -377,7 +369,7 @@ export function layoutCouncilBoard(
     taskId: null,
     title: 'Planner',
     state: goal?.state ?? 'intake',
-    model: null,
+    model: plannerModel,
     verdict: null,
     round: 0,
     critical: false,
@@ -557,6 +549,35 @@ export interface BoardViewport {
   scale: number;
   x: number;
   y: number;
+}
+
+/**
+ * The model label on the planner node. `council.status` carries no planner model, so
+ * the board resolves it from the live settings and provider list with the same order
+ * the council service uses: the `planner` setting's model on an enabled provider, that
+ * setting's fallback model, then the goal thread's own model. Keep this in step with
+ * `resolveCouncilModel` in `packages/server/src/council/service.ts`.
+ */
+export function plannerModelLabel(input: {
+  choice: SubagentModelChoice | undefined;
+  providers: readonly ProviderView[];
+  threadProviderId: string | undefined;
+  threadModelId: string | undefined;
+}): string | null {
+  const usable = (providerId: string | undefined): boolean =>
+    providerId !== undefined &&
+    input.providers.some((provider) => provider.id === providerId && provider.enabled);
+  const configured = input.choice?.providerId?.trim() ?? '';
+  const providerId = configured.length > 0 ? configured : input.threadProviderId;
+  const model = input.choice?.model?.trim() ?? '';
+  if (model.length > 0 && usable(providerId)) return model;
+  const fallbackModel = input.choice?.fallbackModel?.trim() ?? '';
+  if (fallbackModel.length > 0) {
+    const fallbackProvider = usable(providerId) ? providerId : input.threadProviderId;
+    if (usable(fallbackProvider)) return fallbackModel;
+  }
+  const threadModel = input.threadModelId?.trim() ?? '';
+  return threadModel.length > 0 ? threadModel : null;
 }
 
 export interface BoardSize {

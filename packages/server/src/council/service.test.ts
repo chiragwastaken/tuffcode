@@ -1,10 +1,16 @@
-import type { Approval, ServerEvent, Thread } from '@tuffcode/contracts';
+import {
+  emptySubagentModels,
+  type Approval,
+  type ProviderView,
+  type ServerEvent,
+  type Thread,
+} from '@tuffcode/contracts';
 import { describe, expect, it } from 'vitest';
 import { createEventBus, type EventBus } from '../events.js';
 import type { Runner } from '../runner/runner.js';
 import { createTestContext, silentLogger, type TestContext } from '../test-support.js';
 import { createBusTurnRunner } from './runner-turn.js';
-import { createCouncil } from './service.js';
+import { createCouncil, resolveCouncilModel } from './service.js';
 import type {
   ChildThreadRequest,
   Council,
@@ -117,11 +123,7 @@ class FakePorts implements CouncilPorts {
     }
   }
 
-  async approve(
-    threadId: string,
-    approvalId: string,
-    decision: 'allow' | 'deny',
-  ): Promise<void> {
+  async approve(threadId: string, approvalId: string, decision: 'allow' | 'deny'): Promise<void> {
     this.approvals.push({ threadId, approvalId, decision });
   }
 
@@ -339,6 +341,26 @@ async function startGoal(harness: Harness, goal = 'Ship the widget'): Promise<st
   return goalId;
 }
 
+interface ModelChoice {
+  providerId?: string;
+  model?: string;
+  fallbackModel?: string;
+}
+
+/** Writes the per-type model settings the council roles read. */
+function configureModels(
+  harness: Harness,
+  choice: { planner?: ModelChoice; worker?: ModelChoice; reviewer?: ModelChoice },
+): void {
+  harness.ctx.repos.settings.patch({
+    subagentModels: { ...emptySubagentModels(), ...choice },
+  });
+}
+
+function createdThread(harness: Harness, prefix: string): ChildThreadRequest | undefined {
+  return harness.ports.created.find((request) => request.title.startsWith(prefix));
+}
+
 describe('council goal lifecycle', () => {
   it('plans, runs a worker, opens a PR, reviews it, and reports done', async () => {
     const harness = createHarness();
@@ -478,7 +500,11 @@ describe('council goal lifecycle', () => {
       expect(goal.state).toBe('failed');
       const task = harness.council.status(goalId).tasks[0];
       expect(task?.state).toBe('failed');
-      expect(task?.error).toContain('no changes');
+      expect(task?.error).toBe('worker produced no changes');
+      const report = harness.ctx.repos.messages
+        .list('thr_goal')
+        .find((message) => message.content.includes('Council report'));
+      expect(report?.content).toContain('worker produced no changes');
     } finally {
       await harness.dispose();
     }
@@ -792,6 +818,195 @@ describe('council cancellation', () => {
   });
 });
 
+describe('council model selection', () => {
+  it('runs the planner with the configured planner model', async () => {
+    const harness = createHarness();
+    configureModels(harness, { planner: { providerId: 'prv_codex', model: 'gpt-plan' } });
+    try {
+      const goalId = await startGoal(harness);
+      await harness.council.awaitGoal(goalId);
+      const planner = createdThread(harness, 'Plan:');
+      expect(planner?.providerId).toBe('prv_codex');
+      expect(planner?.modelId).toBe('gpt-plan');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('runs workers with the configured worker model and records it on the task', async () => {
+    const harness = createHarness();
+    configureModels(harness, { worker: { providerId: 'prv_codex', model: 'gpt-worker' } });
+    try {
+      const goalId = await startGoal(harness);
+      await harness.council.awaitGoal(goalId);
+      const worker = createdThread(harness, 'Council:');
+      expect(worker?.providerId).toBe('prv_codex');
+      expect(worker?.modelId).toBe('gpt-worker');
+      const task = harness.council.status(goalId).tasks[0];
+      expect(task?.authorProvider).toBe('prv_codex');
+      expect(task?.authorModel).toBe('gpt-worker');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('falls back to the goal thread model when the configured provider is disabled', async () => {
+    const harness = createHarness();
+    harness.ctx.repos.providers.upsert({
+      id: 'prv_off',
+      kind: 'codex',
+      label: 'Disabled',
+      config: {},
+      enabled: false,
+    });
+    configureModels(harness, {
+      planner: { providerId: 'prv_off', model: 'gpt-plan' },
+      worker: { providerId: 'prv_off', model: 'gpt-worker' },
+    });
+    try {
+      const goalId = await startGoal(harness);
+      await harness.council.awaitGoal(goalId);
+      expect(createdThread(harness, 'Plan:')?.providerId).toBe('prv_claude');
+      expect(createdThread(harness, 'Plan:')?.modelId).toBe('claude-x');
+      expect(createdThread(harness, 'Council:')?.providerId).toBe('prv_claude');
+      expect(createdThread(harness, 'Council:')?.modelId).toBe('claude-x');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('uses the fallback model when the primary model is blank', async () => {
+    const harness = createHarness();
+    configureModels(harness, {
+      worker: { providerId: 'prv_codex', model: '   ', fallbackModel: 'gpt-fallback' },
+    });
+    try {
+      const goalId = await startGoal(harness);
+      await harness.council.awaitGoal(goalId);
+      expect(createdThread(harness, 'Council:')?.providerId).toBe('prv_codex');
+      expect(createdThread(harness, 'Council:')?.modelId).toBe('gpt-fallback');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('runs the reviewer with the configured reviewer model and labels it', async () => {
+    const harness = createHarness();
+    configureModels(harness, { reviewer: { providerId: 'prv_claude', model: 'claude-review' } });
+    try {
+      const goalId = await startGoal(harness);
+      await harness.council.awaitGoal(goalId);
+      const review = createdThread(harness, 'Review:');
+      expect(review?.providerId).toBe('prv_claude');
+      expect(review?.modelId).toBe('claude-review');
+      const status = harness.council.status(goalId);
+      expect(status.tasks[0]?.reviewerProvider).toBe('prv_claude');
+      expect(status.tasks[0]?.reviewerModel).toBe('claude-review');
+      expect(status.reviews[0]?.providerId).toBe('prv_claude');
+      expect(status.reviews[0]?.modelId).toBe('claude-review');
+      // The author ran on the same family, so the review is labelled for the captain.
+      const report = harness.ctx.repos.messages
+        .list('thr_goal')
+        .find((message) => message.content.includes('Council report'));
+      expect(report?.content).toContain('same-family');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('keeps cross-family review when the configured reviewer provider is disabled', async () => {
+    const harness = createHarness();
+    harness.ctx.repos.providers.upsert({
+      id: 'prv_off',
+      kind: 'codex',
+      label: 'Disabled',
+      config: {},
+      enabled: false,
+    });
+    configureModels(harness, { reviewer: { providerId: 'prv_off', model: 'gpt-review' } });
+    try {
+      const goalId = await startGoal(harness);
+      await harness.council.awaitGoal(goalId);
+      const review = createdThread(harness, 'Review:');
+      expect(review?.providerId).toBe('prv_codex');
+      expect(review?.modelId).toBe('gpt-x');
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('resolves a blank choice to the goal thread model', () => {
+    const at = '2026-01-01T00:00:00.000Z';
+    const provider = (id: string, enabled: boolean): ProviderView => ({
+      id,
+      kind: 'codex',
+      label: id,
+      config: {},
+      enabled,
+      hasSecret: false,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const providers = [provider('prv_a', true), provider('prv_b', false)];
+    const fallback = { providerId: 'prv_a', modelId: 'thread-model' };
+    expect(resolveCouncilModel({ choice: undefined, providers, fallback })).toEqual(fallback);
+    expect(resolveCouncilModel({ choice: {}, providers, fallback })).toEqual(fallback);
+    expect(
+      resolveCouncilModel({
+        choice: { providerId: 'prv_b', model: 'm', fallbackModel: 'fm' },
+        providers,
+        fallback,
+      }),
+    ).toEqual({ providerId: 'prv_a', modelId: 'fm' });
+    expect(
+      resolveCouncilModel({
+        choice: { providerId: 'prv_missing', model: 'm' },
+        providers,
+        fallback,
+      }),
+    ).toEqual(fallback);
+  });
+});
+
+describe('council planning failure', () => {
+  it('reports the adapter error text in the goal message and fails the goal', async () => {
+    const harness = createHarness((ports, bus) => {
+      ports.handler = (input, title) => {
+        if (title.startsWith('Plan:')) {
+          bus.emit({
+            kind: 'event',
+            type: 'thread.event',
+            threadId: input.threadId,
+            seq: 1,
+            createdAt: new Date().toISOString(),
+            payload: {
+              type: 'error',
+              message: 'openai: request failed with status 502',
+              retryable: false,
+            },
+          });
+          return Promise.resolve(result(input, '', 'error'));
+        }
+        return Promise.resolve(result(input, PASS_REVIEW));
+      };
+    });
+    try {
+      const goalId = await startGoal(harness);
+      const goal = await harness.council.awaitGoal(goalId);
+      expect(goal.state).toBe('failed');
+      expect(harness.council.status(goalId).tasks).toHaveLength(0);
+      const messages = harness.ctx.repos.messages.list('thr_goal');
+      expect(
+        messages.some((message) =>
+          message.content.includes('openai: request failed with status 502'),
+        ),
+      ).toBe(true);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
 describe('council.latest', () => {
   it('returns the newest goal on the thread with its tasks and reviews', async () => {
     const harness = createHarness();
@@ -822,8 +1037,7 @@ describe('council approval policy', () => {
       ports.runTurn = createBusTurnRunner({
         bus,
         runner: approvalRunner(bus, ports.titles),
-        approve: (threadId, approvalId, decision) =>
-          ports.approve(threadId, approvalId, decision),
+        approve: (threadId, approvalId, decision) => ports.approve(threadId, approvalId, decision),
         logger: silentLogger(),
       });
     });

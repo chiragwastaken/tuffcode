@@ -1,8 +1,10 @@
 import type {
   Goal,
   GoalState,
+  ProviderView,
   Review,
   ReviewVerdict,
+  SubagentModelChoice,
   Task,
   TaskState,
   Thread,
@@ -36,6 +38,7 @@ import type {
   CouncilPlan,
   PlanTask,
   PullRequest,
+  TurnResult,
 } from './types.js';
 
 export interface CouncilDeps {
@@ -60,6 +63,11 @@ interface GoalRun {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Why a child turn failed: the adapter's own text, then its throw, then its status. */
+function turnFailure(role: string, result: TurnResult, detail: string | null): Error {
+  return new Error(detail ?? result.error ?? `${role} turn ${result.status}`);
 }
 
 function pullRequestNumber(url: string): number {
@@ -97,6 +105,43 @@ function escalationQuestion(
     .slice(0, 12)
     .join('\n');
   return `Task "${planTask.title}": ${reason}. Captain decision required.\n\n${detail}`;
+}
+
+/** The provider and model one council role actually runs with. */
+export interface CouncilModelTarget {
+  providerId: string;
+  modelId: string;
+}
+
+export interface CouncilModelInput {
+  /** The role's `settings.subagentModels` entry; empty when the user never chose. */
+  choice: SubagentModelChoice | undefined;
+  providers: readonly ProviderView[];
+  /** The goal thread's own provider and model. */
+  fallback: CouncilModelTarget;
+}
+
+/**
+ * Picks the provider and model for one council role. Order: the per-type setting's
+ * model on its configured provider (or the goal thread's provider when only a model
+ * was named), that setting's fallback model when the primary cannot run, then the goal
+ * thread's own model. A candidate whose provider is missing or disabled never runs,
+ * so a stale settings entry degrades to the thread model instead of failing the goal.
+ */
+export function resolveCouncilModel(input: CouncilModelInput): CouncilModelTarget {
+  const usable = (providerId: string): boolean =>
+    providerId.length > 0 &&
+    input.providers.some((provider) => provider.id === providerId && provider.enabled);
+  const configured = input.choice?.providerId?.trim() ?? '';
+  const providerId = configured.length > 0 ? configured : input.fallback.providerId;
+  const model = input.choice?.model?.trim() ?? '';
+  if (model.length > 0 && usable(providerId)) return { providerId, modelId: model };
+  const fallbackModel = input.choice?.fallbackModel?.trim() ?? '';
+  if (fallbackModel.length > 0) {
+    const fallbackProvider = usable(providerId) ? providerId : input.fallback.providerId;
+    if (usable(fallbackProvider)) return { providerId: fallbackProvider, modelId: fallbackModel };
+  }
+  return { providerId: input.fallback.providerId, modelId: input.fallback.modelId };
 }
 
 /**
@@ -160,6 +205,57 @@ export function createCouncil(deps: CouncilDeps): Council {
     const thread = repos.threads.get(threadId);
     if (thread === undefined) throw notFound('thread not found');
     return thread;
+  }
+
+  /** The provider and model one role runs with, from the live settings and providers. */
+  function modelTarget(
+    role: 'planner' | 'worker' | 'reviewer',
+    thread: Thread,
+  ): CouncilModelTarget {
+    return resolveCouncilModel({
+      choice: repos.settings.get().subagentModels[role],
+      providers: repos.providers.list(),
+      fallback: { providerId: thread.providerId, modelId: thread.modelId },
+    });
+  }
+
+  /**
+   * A reviewer the user configured explicitly, or null when the reviewer setting names
+   * no model the provider list can run. An unusable entry falls through to the
+   * cross-family rule rather than reviewing with the author's own model.
+   */
+  function configuredReviewer(thread: Thread): CouncilModelTarget | null {
+    const choice = repos.settings.get().subagentModels.reviewer;
+    const named =
+      (choice.model?.trim() ?? '').length > 0 || (choice.fallbackModel?.trim() ?? '').length > 0;
+    if (!named) return null;
+    const target = modelTarget('reviewer', thread);
+    return target.providerId === thread.providerId && target.modelId === thread.modelId
+      ? null
+      : target;
+  }
+
+  /**
+   * Runs one child turn and keeps the adapter's own error frame, which the runner
+   * appends before `turn.finished`. A turn that ends as `error` then reports the
+   * provider's text (an upstream 502, a refused request) instead of only its status.
+   */
+  async function runChildTurn(
+    threadId: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<{ result: TurnResult; detail: string | null }> {
+    let detail: string | null = null;
+    const unsubscribe = bus.subscribe((event) => {
+      if (event.type !== 'thread.event' || event.threadId !== threadId) return;
+      if (event.payload.type !== 'error') return;
+      detail = event.payload.message;
+    });
+    try {
+      return { result: await ports.runTurn({ threadId, text, signal }), detail };
+    } finally {
+      unsubscribe();
+    }
   }
 
   function advanceGoal(goalId: string, state: GoalState, reportedAt: string | null = null): Goal {
@@ -226,32 +322,31 @@ export function createCouncil(deps: CouncilDeps): Council {
     const project = repos.projects.get(thread.projectId);
     if (project === undefined) throw notFound('project not found');
     const baseBranch = thread.baseBranch ?? project.defaultBranch;
+    const plannerModel = modelTarget('planner', thread);
     const planner = await ports.createThread({
       projectId: project.id,
       parentThreadId: thread.id,
       title: `Plan: ${deriveTitle(goal.text, 54) ?? 'council goal'}`,
-      providerId: thread.providerId,
-      modelId: thread.modelId,
+      providerId: plannerModel.providerId,
+      modelId: plannerModel.modelId,
       executionMode: 'plan',
       permissionMode: 'full-auto',
       baseBranch,
     });
     run.childThreads.add(planner.id);
     try {
-      const result = await ports.runTurn({
-        threadId: planner.id,
-        text: buildPlannerPrompt({
+      const { result, detail } = await runChildTurn(
+        planner.id,
+        buildPlannerPrompt({
           goal: goal.text,
           projectName: project.name,
           projectPath: project.path,
           baseBranch,
         }),
-        signal: run.controller.signal,
-      });
+        run.controller.signal,
+      );
       if (run.cancelled) return { tasks: [], question: null };
-      if (result.status !== 'complete') {
-        throw new Error(result.error ?? `planner turn ${result.status}`);
-      }
+      if (result.status !== 'complete') throw turnFailure('planner', result, detail);
       return parsePlan(result.text);
     } finally {
       await disposeChild(run, planner.id);
@@ -260,6 +355,7 @@ export function createCouncil(deps: CouncilDeps): Council {
 
   function createTasks(goal: Goal, run: GoalRun, planTasks: readonly PlanTask[]): void {
     const thread = requireThread(goal.threadId);
+    const workerModel = modelTarget('worker', thread);
     for (const planTask of planTasks) {
       const task = repos.council.createTask({
         goalId: goal.id,
@@ -267,8 +363,8 @@ export function createCouncil(deps: CouncilDeps): Council {
         brief: planTask.brief,
         dependsOn: planTask.dependsOn,
         state: 'queued',
-        authorProvider: thread.providerId,
-        authorModel: thread.modelId,
+        authorProvider: workerModel.providerId,
+        authorModel: workerModel.modelId,
         critical: planTask.critical,
         round: 0,
       });
@@ -327,18 +423,20 @@ export function createCouncil(deps: CouncilDeps): Council {
     pullRequest: PullRequest,
     workerReport: string,
   ): Promise<void> {
-    const selection = selectReviewer({
-      providers: repos.providers.list(),
-      models: (providerId) => repos.providers.listModels(providerId),
-      authorProviderId: task.authorProvider,
-      authorModelId: task.authorModel,
-    });
+    const goalThread = requireThread(goal.threadId);
+    const selection =
+      configuredReviewer(goalThread) ??
+      selectReviewer({
+        providers: repos.providers.list(),
+        models: (providerId) => repos.providers.listModels(providerId),
+        authorProviderId: task.authorProvider,
+        authorModelId: task.authorModel,
+      });
     let reviewThreadId: string | null = null;
     let round = task.round;
     try {
       for (;;) {
         if (run.cancelled) return;
-        const goalThread = requireThread(goal.threadId);
         const project = repos.projects.get(goalThread.projectId);
         if (project === undefined) throw notFound('project not found');
         const baseBranch = goalThread.baseBranch ?? project.defaultBranch;
@@ -360,23 +458,23 @@ export function createCouncil(deps: CouncilDeps): Council {
         maybeEnterReviewing(goal);
         advanceTask(run, task.id, 'reviewing');
         const changes = await ports.changesForThread(child.id);
-        const review = await ports.runTurn({
-          threadId: reviewThreadId,
-          text: buildReviewPrompt({
+        const { result: review, detail } = await runChildTurn(
+          reviewThreadId,
+          buildReviewPrompt({
             task: planTask,
             prUrl: pullRequest.url,
             workerReport,
             patch: changes.patch,
           }),
-          signal: run.controller.signal,
-        });
+          run.controller.signal,
+        );
         if (run.cancelled) return;
         const verdict = review.status === 'complete' ? parseReviewVerdict(review.text) : 'escalate';
         round += 1;
         const body =
           review.text.trim().length > 0
             ? review.text
-            : (review.error ?? `review turn ${review.status}`);
+            : (detail ?? review.error ?? `review turn ${review.status}`);
         const stored = repos.council.createReview({
           taskId: task.id,
           providerId: selection.providerId,
@@ -405,14 +503,14 @@ export function createCouncil(deps: CouncilDeps): Council {
 
         advanceTask(run, task.id, 'changes-requested');
         advanceTask(run, task.id, 'running');
-        const revision = await ports.runTurn({
-          threadId: child.id,
-          text: buildRevisionBrief({ round, findings: stored.body }),
-          signal: run.controller.signal,
-        });
+        const revision = await runChildTurn(
+          child.id,
+          buildRevisionBrief({ round, findings: stored.body }),
+          run.controller.signal,
+        );
         if (run.cancelled) return;
-        if (revision.status !== 'complete') {
-          throw new Error(revision.error ?? `revision turn ${revision.status}`);
+        if (revision.result.status !== 'complete') {
+          throw turnFailure('revision', revision.result, revision.detail);
         }
         advanceTask(run, task.id, 'pr-open');
       }
@@ -438,8 +536,8 @@ export function createCouncil(deps: CouncilDeps): Council {
       projectId: project.id,
       parentThreadId: goalThread.id,
       title: `Council: ${planTask.title}`,
-      providerId: goalThread.providerId,
-      modelId: goalThread.modelId,
+      providerId: task.authorProvider,
+      modelId: task.authorModel,
       executionMode: 'work',
       permissionMode: 'full-auto',
       baseBranch,
@@ -449,9 +547,9 @@ export function createCouncil(deps: CouncilDeps): Council {
     const running = advanceTask(run, task.id, 'running', { threadId: child.id }) ?? task;
 
     const order = [...run.planTasks.keys()];
-    const worker = await ports.runTurn({
-      threadId: child.id,
-      text: buildWorkerBrief({
+    const worker = await runChildTurn(
+      child.id,
+      buildWorkerBrief({
         task: planTask,
         goal: goal.text,
         goalId: goal.id,
@@ -463,17 +561,17 @@ export function createCouncil(deps: CouncilDeps): Council {
         taskIndex: Math.max(0, order.indexOf(task.id)),
         taskCount: order.length,
       }),
-      signal: run.controller.signal,
-    });
+      run.controller.signal,
+    );
     if (run.cancelled) return;
-    if (worker.status !== 'complete') {
-      throw new Error(worker.error ?? `worker turn ${worker.status}`);
+    if (worker.result.status !== 'complete') {
+      throw turnFailure('worker', worker.result, worker.detail);
     }
 
-    const pullRequest = await ensurePullRequest(goal, planTask, child, worker.text);
+    const pullRequest = await ensurePullRequest(goal, planTask, child, worker.result.text);
     if (run.cancelled) return;
     advanceTask(run, task.id, 'pr-open');
-    await reviewTask(goal, run, running, planTask, child, pullRequest, worker.text);
+    await reviewTask(goal, run, running, planTask, child, pullRequest, worker.result.text);
   }
 
   async function executeTasks(goal: Goal, run: GoalRun): Promise<void> {
