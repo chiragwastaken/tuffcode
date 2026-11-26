@@ -30,8 +30,9 @@ const MODE_EXAMPLES: readonly ModeExample[] = [
   {
     value: 'read-only',
     label: 'Read only',
-    summary: 'Reads, searches and fetches run. Anything that writes or executes is refused.',
-    example: 'Read a file: runs. Run the test suite: refused without asking.',
+    summary:
+      'Reads, searches and read-only commands run. Anything that writes, fetches, or runs an arbitrary program is refused.',
+    example: 'Read a file or run git log: runs. Run the test suite: refused without asking.',
   },
   {
     value: 'ask',
@@ -59,7 +60,7 @@ const MODE_OPTIONS: readonly SelectOption[] = MODE_EXAMPLES.map((mode) => ({
 }));
 
 const REFUSED_IN_READ_ONLY = [
-  'Shell commands and scripts (bash, build, test, git)',
+  'Shell commands that write or run an arbitrary program (builds, tests, installs)',
   'File edits, moves, renames and deletions',
   'Writes to remote services and anything else the CLI cannot classify',
 ];

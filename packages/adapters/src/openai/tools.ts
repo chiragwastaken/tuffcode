@@ -24,6 +24,7 @@ const MAX_READ_LINES = 2000;
 const DEFAULT_BASH_TIMEOUT = 120000;
 const MAX_BASH_TIMEOUT = 600000;
 const MAX_GLOB_ENTRIES = 200;
+const MAX_DIR_ENTRIES = 200;
 const MAX_GREP_RESULTS = 200;
 const LF = String.fromCharCode(10);
 const IGNORED_DIRS: Record<string, true> = {
@@ -190,6 +191,225 @@ export function classifyExtraTool(
   return 'allow';
 }
 
+/** Programs whose arguments cannot write, spawn, or reach the network. */
+const READ_ONLY_PROGRAMS: Record<string, true> = {
+  ls: true,
+  dir: true,
+  pwd: true,
+  cd: true,
+  echo: true,
+  cat: true,
+  type: true,
+  head: true,
+  tail: true,
+  wc: true,
+  where: true,
+};
+
+/** PowerShell cmdlets and aliases that only read; their parameters are checked separately. */
+const READ_ONLY_POWERSHELL_PROGRAMS: Record<string, true> = {
+  'get-childitem': true,
+  'get-content': true,
+  'select-string': true,
+  'get-location': true,
+  'test-path': true,
+  'resolve-path': true,
+  'measure-object': true,
+  gci: true,
+  gc: true,
+  sls: true,
+  gl: true,
+  gps: true,
+};
+
+/** Parameters that make an otherwise read-only cmdlet write or run something. */
+const POWERSHELL_MUTATION_PARAMS: Record<string, true> = {
+  '-outfile': true,
+  '-destination': true,
+  '-value': true,
+  '-append': true,
+  '-set': true,
+  '-remove': true,
+  '-delete': true,
+  '-create': true,
+  '-execute': true,
+  '-command': true,
+  '-encodedcommand': true,
+  '-scriptblock': true,
+  '-expression': true,
+};
+
+/**
+ * Words that run a command wherever they appear in a segment, not only in the command
+ * position. `curl` and `wget` are absent on purpose: they cannot be a command here
+ * because they are not on the allowlist, and a bare word is often a search pattern.
+ */
+const FORBIDDEN_WORDS: Record<string, true> = {
+  'invoke-expression': true,
+  iex: true,
+  'start-process': true,
+  'start-job': true,
+  'stop-process': true,
+  'out-file': true,
+  'set-content': true,
+  'add-content': true,
+  'clear-content': true,
+  'new-item': true,
+  'remove-item': true,
+  'move-item': true,
+  'copy-item': true,
+  'rename-item': true,
+  'set-item': true,
+  'invoke-webrequest': true,
+};
+
+/** A hyphenated PowerShell cmdlet name that mutates something, e.g. `Remove-ItemProperty`. */
+const POWERSHELL_MUTATION_VERB =
+  /^(?:add|clear|copy|disable|enable|export|import|install|invoke|move|new|out|pop|push|register|remove|rename|restart|resume|save|set|start|stop|suspend|uninstall|unregister|update|write)-[a-z]+$/;
+
+const GIT_READ_SUBCOMMANDS: Record<string, true> = {
+  status: true,
+  log: true,
+  show: true,
+  diff: true,
+  branch: true,
+  'rev-parse': true,
+  'ls-files': true,
+  grep: true,
+  blame: true,
+  remote: true,
+};
+
+/** `git branch` lists only; every flag that creates, moves or deletes is absent. */
+const GIT_BRANCH_READ_FLAGS: Record<string, true> = {
+  '--list': true,
+  '-a': true,
+  '-r': true,
+  '-v': true,
+  '--show-current': true,
+};
+
+/** find predicates that run a program, delete, or write a file. */
+const FIND_WRITE_FLAGS: Record<string, true> = {
+  '-exec': true,
+  '-execdir': true,
+  '-ok': true,
+  '-okdir': true,
+  '-delete': true,
+  '-fprint': true,
+  '-fprint0': true,
+  '-fprintf': true,
+  '-fls': true,
+};
+
+/** Global git options that redirect a command to another repository or program. */
+const GIT_GLOBAL_FLAGS: readonly string[] = ['--exec-path', '--git-dir', '--work-tree'];
+
+/**
+ * Prefixes of options that write a file or run a program. Git accepts an unambiguous
+ * abbreviation of a long option, so `--outp=x` reaches `--output=x`; a prefix check is
+ * the only way to close that. Each prefix names one option for these subcommands.
+ */
+const GIT_DENIED_PREFIXES: readonly string[] = [
+  '--out',
+  '--ext',
+  '--text',
+  '--pag',
+  '--open',
+  '--config',
+  '--exec',
+  '--git',
+  '--work',
+];
+
+function isReadOnlyGit(tokens: readonly string[]): boolean {
+  const sub = tokens[1]?.toLowerCase();
+  if (sub === undefined || GIT_READ_SUBCOMMANDS[sub] !== true) return false;
+  const args = tokens.slice(2);
+  for (const arg of args) {
+    const lower = arg.toLowerCase();
+    // Lowercase -c sets config, including an alias that runs an external command. Uppercase
+    // -C is copy detection or grep context and is read-only.
+    if (arg.startsWith('-c') && !arg.startsWith('--')) return false;
+    if (arg.startsWith('-O')) return false;
+    if (GIT_DENIED_PREFIXES.some((prefix) => lower.startsWith(prefix))) return false;
+  }
+  if (sub === 'branch') {
+    return args.every((arg) => GIT_BRANCH_READ_FLAGS[arg.toLowerCase()] === true);
+  }
+  if (sub === 'remote') {
+    return args.length === 0 || (args.length === 1 && args[0]?.toLowerCase() === '-v');
+  }
+  return true;
+}
+
+function isReadOnlyRipgrep(tokens: readonly string[]): boolean {
+  for (const arg of tokens.slice(1)) {
+    const lower = arg.toLowerCase();
+    if (lower === '--pre' || lower.startsWith('--pre=')) return false;
+    if (lower === '--pre-glob' || lower.startsWith('--pre-glob=')) return false;
+    if (lower === '--hostname-bin' || lower.startsWith('--hostname-bin=')) return false;
+    if (lower === '--search-zip' || lower.startsWith('--search-zip=')) return false;
+    // A config file can carry --pre, which runs a program per file.
+    if (lower === '--config' || lower.startsWith('--config=')) return false;
+    // -z is search-zip and may be bundled with other short flags.
+    if (arg.startsWith('-') && !arg.startsWith('--') && arg.slice(1).includes('z')) return false;
+  }
+  return true;
+}
+
+function isReadOnlySegment(segment: string): boolean {
+  const tokens = segment.split(/\s+/).filter((token) => token.length > 0);
+  const first = tokens[0];
+  if (first === undefined) return false;
+  // FOO=bar cmd runs cmd with a changed environment, which the allowlist cannot see.
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return false;
+  for (const token of tokens) {
+    const bare = token.replace(/^[(&]+/, '').replace(/[)]+$/, '').toLowerCase();
+    if (FORBIDDEN_WORDS[bare] === true) return false;
+    if (POWERSHELL_MUTATION_VERB.test(bare)) return false;
+  }
+  const program = first.toLowerCase();
+  // A path is a different binary with a familiar name, so only bare program names count.
+  if (program.includes('/') || program.includes('\\') || program.includes(':')) return false;
+  const name = program.endsWith('.exe') ? program.slice(0, -4) : program;
+  if (READ_ONLY_PROGRAMS[name] === true) return true;
+  if (READ_ONLY_POWERSHELL_PROGRAMS[name] === true) {
+    return !tokens.slice(1).some((arg) => POWERSHELL_MUTATION_PARAMS[arg.toLowerCase()] === true);
+  }
+  if (name === 'git') return isReadOnlyGit(tokens);
+  if (name === 'rg') return isReadOnlyRipgrep(tokens);
+  if (name === 'find') {
+    return !tokens.slice(1).some((arg) => FIND_WRITE_FLAGS[arg.toLowerCase()] === true);
+  }
+  if (name === 'grep') return true;
+  return false;
+}
+
+/**
+ * Whether a shell command only reads. Every segment of a chain must be a conservative
+ * allowlisted program, and the whole line is refused before that when it can redirect,
+ * substitute, group, assign an environment, or reach a known writing verb. The allowlist
+ * is the security boundary; the denials only narrow it further.
+ */
+export function isReadOnlyCommand(command: string): boolean {
+  if (typeof command !== 'string') return false;
+  const normalized = command.replace(/\r\n?/g, '\n').trim();
+  if (normalized.length === 0) return false;
+  // Redirects, process substitution, grouping and PowerShell script blocks.
+  if (/[<>()`{}]/.test(normalized)) return false;
+  if (normalized.includes('--%')) return false;
+  // -c sets a config, an encoded command, or a count, none of which is safe to guess at.
+  if (/(^|\s)-c(?=\s|$)/.test(normalized)) return false;
+  if (GIT_GLOBAL_FLAGS.some((flag) => normalized.includes(flag))) return false;
+  const segments = normalized.split(/&&|\|\||[;|&\n]/);
+  if (segments.length === 0) return false;
+  return segments.every((segment) => {
+    const trimmed = segment.trim();
+    return trimmed.length > 0 && isReadOnlySegment(trimmed);
+  });
+}
+
 export function classifyTool(
   name: ToolName | ExtraToolName,
   args: Record<string, unknown>,
@@ -197,7 +417,12 @@ export function classifyTool(
 ): PermissionDecision {
   if (isExtraToolName(name)) return classifyExtraTool(name, args, mode);
   if (name === 'read' || name === 'glob' || name === 'grep') return 'allow';
-  if (mode === 'read-only') return 'deny';
+  if (mode === 'read-only') {
+    if (name === 'bash' && typeof args.command === 'string' && isReadOnlyCommand(args.command)) {
+      return 'allow';
+    }
+    return 'deny';
+  }
   if (mode === 'ask') return 'approve';
   if (mode === 'accept-edits') return name === 'bash' ? 'approve' : 'allow';
   if (name === 'bash' && typeof args.command === 'string') {
@@ -207,11 +432,35 @@ export function classifyTool(
   return 'allow';
 }
 
+async function listDirectory(target: string, label: string): Promise<string> {
+  const entries = await readdir(target, { withFileTypes: true });
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const shown = entries.slice(0, MAX_DIR_ENTRIES);
+  const lines = shown.map((entry) => (entry.isDirectory() ? entry.name + '/' : entry.name));
+  const body = lines.length === 0 ? '(empty directory)' : lines.join(LF);
+  const note =
+    entries.length > shown.length
+      ? LF + '[showing ' + shown.length + ' of ' + entries.length + ' entries]'
+      : '';
+  const noun = entries.length === 1 ? 'entry' : 'entries';
+  return capOutput(
+    label + ' is a directory (' + entries.length + ' ' + noun + '):' + LF + body + note,
+  );
+}
+
 const readTool: ToolExecutor = async (args, ctx, state) => {
   try {
     const target = resolvePath(ctx, args.path, 'path');
     const label = displayPath(ctx.cwd, target);
-    const bytes = await readFile(target);
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EISDIR') {
+        return ok(await listDirectory(target, label));
+      }
+      throw error;
+    }
     const text = decodeText(bytes);
     if (text === null) return fail(`cannot read ${label}: binary or non-UTF-8 file`);
     state.readSet.set(readKey(target), hashBytes(bytes));

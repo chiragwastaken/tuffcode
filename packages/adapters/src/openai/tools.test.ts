@@ -15,6 +15,7 @@ import {
   classifyTool,
   createToolSessionState,
   executeTool,
+  isReadOnlyCommand,
   ripgrepArgs,
 } from './tools.js';
 
@@ -106,6 +107,28 @@ describe('read and edit', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.output).toBe('path escapes root: ../outside.txt');
+  });
+
+  it('lists a directory instead of failing with EISDIR', async () => {
+    await mkdir(join(root, 'src', 'nested'), { recursive: true });
+    await writeFile(join(root, 'src', 'b.ts'), 'b');
+    await writeFile(join(root, 'src', 'a.ts'), 'a');
+    const result = await executeTool(
+      'read',
+      { path: 'src' },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain('src is a directory (3 entries):');
+    expect(result.output).not.toContain('EISDIR');
+    const a = result.output.indexOf('a.ts');
+    const b = result.output.indexOf('b.ts');
+    const nested = result.output.indexOf('nested/');
+    expect(a).toBeGreaterThan(-1);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(nested);
   });
 
   it('round-trips CRLF files and keeps untouched lines', async () => {
@@ -554,11 +577,185 @@ describe('bash', () => {
   });
 });
 
+describe('isReadOnlyCommand', () => {
+  it('allows the read-only commands an explorer or planner needs', () => {
+    const allowed = [
+      'ls',
+      'ls -la',
+      'dir',
+      'pwd',
+      'cd src',
+      'echo hello',
+      'cat package.json',
+      'type package.json',
+      'head -n 5 README.md',
+      'tail -n 5 README.md',
+      'wc -l src/index.ts',
+      'where node',
+      'git status',
+      'git status --porcelain',
+      'git log --oneline -5',
+      'git show HEAD',
+      'git diff --stat',
+      'git branch',
+      'git branch --show-current',
+      'git branch -a -v',
+      'git rev-parse --abbrev-ref HEAD',
+      'git ls-files src',
+      'git grep -n needle',
+      'git grep -C 3 needle',
+      'git log -C',
+      'git blame src/index.ts',
+      'git remote',
+      'git remote -v',
+      'rg needle',
+      'rg -n "needle" src',
+      'rg curl',
+      'find . -name "*.ts" -type f',
+      'grep -rn "needle" src',
+      'Get-ChildItem -Path src -Recurse',
+      'Select-String -Path *.ts -Pattern needle',
+      'Get-Content package.json',
+      'Get-Location',
+      'Test-Path src',
+      'Resolve-Path src',
+      'Measure-Object -InputObject 1,2',
+      'gci src',
+      'gc package.json',
+      'sls needle src',
+      'gl',
+      'gps',
+      'git log && git status',
+      'ls | wc -l',
+      'git log\ngit status',
+      'git log\r\ngit status',
+    ];
+    for (const command of allowed) expect(isReadOnlyCommand(command), command).toBe(true);
+  });
+
+  it('refuses writes, chains, redirects, substitutions and unknown programs', () => {
+    const denied = [
+      '',
+      '   ',
+      'garbage command',
+      'npm install',
+      'pnpm test',
+      'git commit -m x',
+      'git push',
+      'git checkout main',
+      'git branch -d main',
+      'git branch -D main',
+      'git branch -m old new',
+      'git branch --delete main',
+      'git branch --force x',
+      'git branch --set-upstream-to=origin/main',
+      'git log --output=x',
+      'git log --output x',
+      'git log --outp=x',
+      'git diff --output=x',
+      'git diff --outp=x',
+      'git log -O order.txt',
+      'git log --ext-diff',
+      'git log --ext-dif',
+      'git show --textconv',
+      'git show --textcon',
+      'git log --open-files-in-pager=calc',
+      'git log --open=calc',
+      'git log --paginate',
+      'git log --pag',
+      'git log --config-env=a=b',
+      'git log --exec-p=C:\\x',
+      'git log --git-d=C:\\x',
+      'git log --work-t=C:\\x',
+      'git -c alias.x=!calc log',
+      'git --exec-path=C:\\x log',
+      'git --git-dir=C:\\x status',
+      'git --work-tree=C:\\x status',
+      'git remote add origin x',
+      'git remote set-url origin x',
+      'Remove-Item x',
+      'Move-Item a b',
+      'Copy-Item a b',
+      'Start-Process calc',
+      'Start-Job calc',
+      'Invoke-Expression calc',
+      'Invoke-Command calc',
+      'iex calc',
+      'type Invoke-Command',
+      'echo Invoke-RestMethod x',
+      'curl https://example.com',
+      'wget https://example.com',
+      'rg --pre calc foo',
+      'rg --pre-glob *.ts --pre calc foo',
+      'rg --hostname-bin calc foo',
+      'rg --config rg.conf foo',
+      'rg --config=rg.conf foo',
+      'rg -z foo',
+      'rg -nz foo',
+      'find . -exec calc {} ;',
+      'find . -execdir calc {} ;',
+      'find . -ok calc {} ;',
+      'find . -delete',
+      'find . -fprint out.txt',
+      'find . -fls out.txt',
+      'Get-ChildItem | ForEach-Object { Remove-Item $_ }',
+      'Get-Content x -OutFile y',
+      'Get-ChildItem (Remove-Item x)',
+      'type Remove-Item',
+      'echo $(Remove-Item x)',
+      'echo (Remove-Item x)',
+      'FOO=bar ls',
+      'ls > out.txt',
+      'ls >> out.txt',
+      'ls 2> out.txt',
+      'ls &> out.txt',
+      'ls; rm -rf x',
+      'ls && rm -rf x',
+      'ls || rm -rf x',
+      'ls | sh',
+      'ls & rm -rf x',
+      'ls\nrm -rf x',
+      'echo `whoami`',
+      'cat < file',
+      'ls --% rm x',
+      'rm -rf x',
+      'mv a b',
+      'cp a b',
+      'mkdir x',
+      'touch x',
+      'sed -i s/a/b/ x',
+      'node -e "require(1)"',
+      './ls',
+      'C:\\Windows\\System32\\cmd.exe /c dir',
+      'bash -c "rm -rf x"',
+      'git log -c',
+      'git',
+      'ls;;',
+      '&&',
+      '|',
+    ];
+    for (const command of denied) expect(isReadOnlyCommand(command), command).toBe(false);
+  });
+});
+
 describe('classifyTool', () => {
   it('allows read tools in every mode', () => {
     expect(classifyTool('read', {}, 'read-only')).toBe('allow');
     expect(classifyTool('glob', {}, 'read-only')).toBe('allow');
     expect(classifyTool('grep', {}, 'read-only')).toBe('allow');
+  });
+
+  it('allows a read-only command in read-only mode and denies the rest', () => {
+    expect(classifyTool('bash', { command: 'git log --oneline' }, 'read-only')).toBe('allow');
+    expect(classifyTool('bash', { command: 'ls' }, 'read-only')).toBe('allow');
+    expect(classifyTool('bash', { command: 'git commit -m x' }, 'read-only')).toBe('deny');
+    expect(classifyTool('bash', { command: 'npm install' }, 'read-only')).toBe('deny');
+    expect(classifyTool('bash', {}, 'read-only')).toBe('deny');
+    expect(classifyTool('bash', { command: 42 }, 'read-only')).toBe('deny');
+    expect(classifyTool('write', { path: 'a' }, 'read-only')).toBe('deny');
+    expect(
+      classifyTool('edit', { path: 'a', old_string: 'x', new_string: 'y' }, 'read-only'),
+    ).toBe('deny');
   });
 
   it('asks for writes in ask mode and allows them in accept-edits', () => {
