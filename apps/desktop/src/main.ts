@@ -20,16 +20,20 @@ import {
   MENU_ACTION_CHANNEL,
   NAVIGATE_ACTION_PREFIX,
   NOTIFY_CHANNEL,
+  NOTIFY_TEST_CHANNEL,
   OPEN_EXTERNAL_CHANNEL,
   PICK_FILE_CHANNEL,
   PICK_FOLDER_CHANNEL,
   SET_THEME_CHANNEL,
   attachSecretBridge,
+  deliverNotification,
   isExternalUrl,
   isTheme,
   parseNotifyRequest,
   parsePickFileRequest,
   type BootstrapInfo,
+  type NotificationDelivery,
+  type NotifyTestResult,
   type UpdateCheckOutcome,
 } from './bridge';
 import { createMainLogger } from './logger';
@@ -124,6 +128,28 @@ function setKeepAwake(on: boolean): void {
   }
 }
 
+/** A notification click restores the window and lets the renderer route itself. */
+function focusForNotification(route: string | undefined): void {
+  const window = mainWindow;
+  if (window === null || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+  if (route !== undefined) {
+    window.webContents.send(MENU_ACTION_CHANNEL, `${NAVIGATE_ACTION_PREFIX}${route}`);
+  }
+}
+
+const notificationDelivery: NotificationDelivery = {
+  isSupported: () => Notification.isSupported(),
+  show: (options, route) => {
+    const notification = new Notification(options);
+    notification.on('click', () => {
+      focusForNotification(route);
+    });
+    notification.show();
+  },
+};
+
 function registerIpcHandlers(): void {
   ipcMain.handle(BOOTSTRAP_CHANNEL, (): BootstrapInfo => {
     if (bootstrap === null) throw new Error('The Tuffcode server is not ready yet.');
@@ -165,22 +191,28 @@ function registerIpcHandlers(): void {
 
   ipcMain.on(NOTIFY_CHANNEL, (_event, raw: unknown) => {
     const request = parseNotifyRequest(raw);
-    if (request === null || !Notification.isSupported()) return;
-    const notification = new Notification({
-      title: request.title,
-      body: request.body,
-      silent: request.silent === true,
-    });
-    notification.on('click', () => {
-      const window = mainWindow;
-      if (window === null || window.isDestroyed()) return;
-      if (window.isMinimized()) window.restore();
-      window.focus();
-      if (request.route !== undefined) {
-        window.webContents.send(MENU_ACTION_CHANNEL, `${NAVIGATE_ACTION_PREFIX}${request.route}`);
-      }
-    });
-    notification.show();
+    if (request === null) return;
+    const result = deliverNotification(request, notificationDelivery);
+    if (result.error !== undefined) {
+      logger.warn('notification failed', { reason: result.error });
+    }
+  });
+
+  // Invoked by the Settings test button so the renderer can report what happened.
+  ipcMain.handle(NOTIFY_TEST_CHANNEL, (_event, raw: unknown): NotifyTestResult => {
+    const request = parseNotifyRequest(raw);
+    if (request === null) {
+      return {
+        supported: Notification.isSupported(),
+        shown: false,
+        error: 'The notification request was rejected.',
+      };
+    }
+    const result = deliverNotification(request, notificationDelivery);
+    if (result.error !== undefined) {
+      logger.warn('test notification failed', { reason: result.error });
+    }
+    return result;
   });
 
   ipcMain.on(KEEP_AWAKE_CHANNEL, (_event, on: unknown) => {

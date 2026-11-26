@@ -29,6 +29,31 @@ export interface NotifyRequest {
   silent?: boolean;
 }
 
+/** The options one notification is constructed with. */
+export interface NotificationShowOptions {
+  title: string;
+  body: string;
+  silent: boolean;
+}
+
+/** The Electron surface needed to deliver one notification; faked in tests. */
+export interface NotificationDelivery {
+  isSupported(): boolean;
+  /** Constructs the notification, wires its click to `route`, and shows it. */
+  show(options: NotificationShowOptions, route: string | undefined): void;
+}
+
+/**
+ * What actually happened to a test notification. `shown` means the notification was
+ * constructed and `show()` returned; it does not mean a banner became visible,
+ * because Windows Focus Assist and quiet hours can still suppress it.
+ */
+export interface NotifyTestResult {
+  supported: boolean;
+  shown: boolean;
+  error?: string;
+}
+
 export interface PickFileRequest {
   title?: string;
   /** Extensions without the dot, for example ['zip', 'skill', 'md']. */
@@ -46,6 +71,7 @@ export interface TuffcodeBridge {
   setTheme(theme: Theme): void;
   checkForUpdates(): Promise<UpdateCheckOutcome>;
   notify(request: NotifyRequest): void;
+  notifyTest(request: NotifyRequest): Promise<NotifyTestResult>;
   setKeepAwake(on: boolean): void;
   openExternal(url: string): void;
 }
@@ -56,6 +82,7 @@ export const PICK_FOLDER_CHANNEL = 'dialog:pick-folder';
 export const MENU_ACTION_CHANNEL = 'menu:action';
 export const SET_THEME_CHANNEL = 'theme:set';
 export const NOTIFY_CHANNEL = 'notify:show';
+export const NOTIFY_TEST_CHANNEL = 'notify:test';
 export const KEEP_AWAKE_CHANNEL = 'power:keep-awake';
 export const OPEN_EXTERNAL_CHANNEL = 'shell:open-external';
 export const PICK_FILE_CHANNEL = 'dialog:pick-file';
@@ -65,20 +92,51 @@ export const NAVIGATE_ACTION_PREFIX = 'navigate:';
 
 const ROUTE = /^\/[A-Za-z0-9/_{}$.-]{0,300}$/;
 
+/** The renderer clips to these; anything longer is malformed and dropped. */
+const TITLE_LIMIT = 120;
+const BODY_LIMIT = 400;
+
 /** Validates what the renderer asked to show; anything malformed is dropped. */
 export function parseNotifyRequest(value: unknown): NotifyRequest | null {
   if (typeof value !== 'object' || value === null) return null;
   const record = value as Record<string, unknown>;
-  const title = typeof record['title'] === 'string' ? record['title'].trim().slice(0, 120) : '';
-  const body = typeof record['body'] === 'string' ? record['body'].trim().slice(0, 400) : '';
-  if (title.length === 0) return null;
-  const route = typeof record['route'] === 'string' && ROUTE.test(record['route']) ? record['route'] : undefined;
+  const title = typeof record['title'] === 'string' ? record['title'].trim() : '';
+  const body = typeof record['body'] === 'string' ? record['body'].trim() : '';
+  if (title.length === 0 || title.length > TITLE_LIMIT || body.length > BODY_LIMIT) return null;
+  const route =
+    typeof record['route'] === 'string' && ROUTE.test(record['route'])
+      ? record['route']
+      : undefined;
   return {
     title,
     body,
     ...(route === undefined ? {} : { route }),
     silent: record['silent'] === true,
   };
+}
+
+/**
+ * Delivers one already-validated notification and reports what happened. The click
+ * route is forwarded untouched; only `parseNotifyRequest` may produce one.
+ */
+export function deliverNotification(
+  request: NotifyRequest,
+  delivery: NotificationDelivery,
+): NotifyTestResult {
+  if (!delivery.isSupported()) return { supported: false, shown: false };
+  try {
+    delivery.show(
+      { title: request.title, body: request.body, silent: request.silent === true },
+      request.route,
+    );
+    return { supported: true, shown: true };
+  } catch (error) {
+    return {
+      supported: true,
+      shown: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /** Only web links leave the app; file:, javascript: and custom schemes are refused. */

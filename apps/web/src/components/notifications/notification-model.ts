@@ -4,7 +4,7 @@ import type { NotifyRequest } from '../../types';
 /**
  * Which server events become a desktop notification. Pure, so the rules are tested
  * without a bridge: a turn that finished or failed, an approval waiting, a subagent
- * that settled, and a council task that needs the captain.
+ * that settled, and a council review that needs the captain or failed.
  */
 export interface NotificationContext {
   settings: NotificationSettings;
@@ -13,13 +13,87 @@ export interface NotificationContext {
   previousStatus: ReadonlyMap<string, ThreadStatus>;
 }
 
-function threadRoute(thread: Thread): string {
+/** The desktop bridge drops a title over 120 characters and a body over 400. */
+const TITLE_LIMIT = 120;
+const BODY_LIMIT = 400;
+
+function clip(value: string, limit: number): string {
+  return value.length > limit ? value.slice(0, limit) : value;
+}
+
+/** Route for a thread's chat; a notification click never navigates anywhere else. */
+export function threadNotificationRoute(thread: Thread): string {
   return `/project/${thread.projectId}/thread/${thread.id}`;
 }
 
 function shortTitle(thread: Thread | undefined): string {
   const title = thread?.title.trim() ?? '';
-  return title.length > 0 ? title : 'A chat';
+  return clip(title.length > 0 ? title : 'A chat', TITLE_LIMIT);
+}
+
+/** True when the focused-window rule still allows a notification. */
+export function shouldNotify(settings: NotificationSettings, focused: boolean): boolean {
+  return !(settings.onlyWhenUnfocused && focused);
+}
+
+/** True while any thread runs, which is what the keep-awake blocker follows. */
+export function hasRunningThread(threads: Readonly<Record<string, Thread>>): boolean {
+  return Object.values(threads).some((thread) => thread.status === 'running');
+}
+
+/** Keep the machine awake only when the setting is on and an agent is running. */
+export function keepAwakeFor(enabled: boolean, anyRunning: boolean): boolean {
+  return enabled && anyRunning;
+}
+
+/**
+ * Advances the tracked status after an event is judged. Turn boundaries and approval
+ * frames move the status too, so a finish that follows a replayed turn still fires
+ * once even when no `thread.updated` frame announced the start.
+ */
+export function trackThreadStatus(
+  previousStatus: Map<string, ThreadStatus>,
+  event: ServerEvent,
+): void {
+  switch (event.type) {
+    case 'thread.updated':
+      previousStatus.set(event.payload.id, event.payload.status);
+      return;
+    case 'approval.requested':
+      previousStatus.set(event.payload.threadId, 'needs-approval');
+      return;
+    case 'thread.event':
+      if (event.payload.type === 'turn.started') {
+        previousStatus.set(event.threadId, 'running');
+      } else if (event.payload.type === 'turn.finished') {
+        previousStatus.set(
+          event.threadId,
+          event.payload.reason === 'error' ? 'failed' : 'ready-to-review',
+        );
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * A test notification for the Settings button. It points at a thread that already
+ * exists (the newest top-level one) and never invents a route of its own.
+ */
+export function testNotificationRequest(
+  threads: Readonly<Record<string, Thread>>,
+  silent: boolean,
+): NotifyRequest {
+  const thread = Object.values(threads)
+    .filter((candidate) => candidate.parentThreadId === null)
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  return {
+    title: 'Test notification',
+    body: 'Tuffcode notifications are working.',
+    ...(thread === undefined ? {} : { route: threadNotificationRoute(thread) }),
+    silent,
+  };
 }
 
 export function notificationFor(event: ServerEvent, context: NotificationContext): NotifyRequest | null {
@@ -34,10 +108,20 @@ export function notificationFor(event: ServerEvent, context: NotificationContext
       if (before !== 'running' && before !== 'needs-approval') return null;
       if (!settings.turnFinished) return null;
       if (thread.status === 'ready-to-review' || thread.status === 'idle') {
-        return { title: 'Turn finished', body: shortTitle(thread), route: threadRoute(thread), silent };
+        return {
+          title: 'Turn finished',
+          body: shortTitle(thread),
+          route: threadNotificationRoute(thread),
+          silent,
+        };
       }
       if (thread.status === 'failed') {
-        return { title: 'Turn failed', body: shortTitle(thread), route: threadRoute(thread), silent };
+        return {
+          title: 'Turn failed',
+          body: shortTitle(thread),
+          route: threadNotificationRoute(thread),
+          silent,
+        };
       }
       return null;
     }
@@ -46,8 +130,8 @@ export function notificationFor(event: ServerEvent, context: NotificationContext
       const thread = context.threads[event.payload.threadId];
       return {
         title: 'Approval needed',
-        body: `${shortTitle(thread)}: ${event.payload.toolName}`,
-        ...(thread === undefined ? {} : { route: threadRoute(thread) }),
+        body: clip(`${shortTitle(thread)}: ${event.payload.toolName}`, BODY_LIMIT),
+        ...(thread === undefined ? {} : { route: threadNotificationRoute(thread) }),
         silent,
       };
     }
@@ -59,23 +143,24 @@ export function notificationFor(event: ServerEvent, context: NotificationContext
       return {
         title: `Subagent ${outcome}`,
         body: shortTitle(thread),
-        ...(thread === undefined ? {} : { route: threadRoute(thread) }),
+        ...(thread === undefined ? {} : { route: threadNotificationRoute(thread) }),
         silent,
       };
     }
     case 'council.updated': {
       if (!settings.councilEscalation) return null;
+      // `reviewing` is the first state where the captain may have to decide; the
+      // server publishes no task-level escalation event, so this is the earliest
+      // observable signal. `failed` is a review that ended without a passing verdict.
       if (event.payload.state !== 'reviewing' && event.payload.state !== 'failed') return null;
       const thread = event.threadId === undefined ? undefined : context.threads[event.threadId];
-      if (event.payload.state === 'failed') {
-        return {
-          title: 'Council goal failed',
-          body: shortTitle(thread),
-          ...(thread === undefined ? {} : { route: threadRoute(thread) }),
-          silent,
-        };
-      }
-      return null;
+      const failed = event.payload.state === 'failed';
+      return {
+        title: failed ? 'Council review failed' : 'Council needs you',
+        body: shortTitle(thread),
+        ...(thread === undefined ? {} : { route: threadNotificationRoute(thread) }),
+        silent,
+      };
     }
     default:
       return null;
