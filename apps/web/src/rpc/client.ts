@@ -28,6 +28,8 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export const RECONNECT_BASE_MS = 500;
 export const RECONNECT_MAX_MS = 10_000;
 export const RECONNECT_JITTER_RATIO = 0.2;
+/** Upper bound on `threads.events` pages one replay drains, so a bug cannot spin. */
+export const REPLAY_MAX_PAGES = 200;
 
 export function reconnectDelay(attempt: number, jitter: number): number {
   const exponential = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt));
@@ -360,9 +362,20 @@ export function createRpcClient(options: RpcClientOptions): RpcClient {
   }
 
   async function replay(threadId: string, sinceSeq = 0): Promise<{ hasMore: boolean }> {
-    const result = await request('threads.events', { id: threadId, sinceSeq });
-    for (const event of result.events) store.getState().appendEvent(threadId, event);
-    return { hasMore: result.hasMore };
+    let cursor = sinceSeq;
+    for (let page = 0; page < REPLAY_MAX_PAGES; page += 1) {
+      const result = await request('threads.events', { id: threadId, sinceSeq: cursor });
+      // An empty page means the server has nothing past the cursor; stop even if
+      // it still reports more, so a server bug cannot spin this loop.
+      if (result.events.length === 0) return { hasMore: false };
+      for (const event of result.events) store.getState().appendEvent(threadId, event);
+      const nextCursor = result.events[result.events.length - 1]?.seq ?? cursor;
+      // A page that does not advance the cursor would be fetched forever.
+      if (nextCursor <= cursor) return { hasMore: result.hasMore };
+      cursor = nextCursor;
+      if (!result.hasMore) return { hasMore: false };
+    }
+    return { hasMore: true };
   }
 
   function close(): void {

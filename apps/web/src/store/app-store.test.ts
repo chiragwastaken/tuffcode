@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_EVENTS_PER_SUBAGENT,
   MAX_EVENTS_PER_THREAD,
+  coalesceStreamDelta,
   createAppStore,
   mergeSubagentView,
+  trimThreadEvents,
   type SubagentChild,
 } from './app-store';
 
@@ -33,6 +35,16 @@ function seqs(store: ReturnType<typeof createAppStore>, threadId = 'thread-1'): 
   return (store.getState().events[threadId] ?? []).map((event) => event.seq);
 }
 
+const AT = (second: number): string => `2026-01-01T00:00:${String(second).padStart(2, '0')}.000Z`;
+
+function eventRow(seq: number, payload: AdapterEvent, createdAt = AT(0)): ThreadEventRow {
+  return { id: seq + 1, threadId: 'thread-1', seq, type: payload.type, payload, createdAt };
+}
+
+function delta(seq: number, text: string, turnId = 'turn-1', createdAt = AT(0)): ThreadEventRow {
+  return eventRow(seq, { type: 'text.delta', turnId, text }, createdAt);
+}
+
 describe('app store appendEvent', () => {
   it('keeps events ordered and ignores seq values at or below the last event', () => {
     const store = createAppStore();
@@ -56,17 +68,119 @@ describe('app store appendEvent', () => {
     expect(seqs(store, 'thread-2')).toEqual([1]);
   });
 
-  it('caps each thread at 5000 events and keeps the newest ones', () => {
+  it('coalesces contiguous deltas into one row with the first timestamp and newest seq', () => {
     const store = createAppStore();
 
-    for (let seq = 0; seq <= MAX_EVENTS_PER_THREAD; seq += 1) {
-      store.getState().appendEvent('thread-1', textEvent(seq));
+    store.getState().appendEvent('thread-1', delta(1, 'Hel', 'turn-1', AT(1)));
+    store.getState().appendEvent('thread-1', delta(2, 'lo', 'turn-1', AT(2)));
+    store.getState().appendEvent('thread-1', delta(3, ' there', 'turn-1', AT(3)));
+
+    const rows = store.getState().events['thread-1'] ?? [];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.seq).toBe(3);
+    expect(rows[0]?.createdAt).toBe(AT(1));
+    expect(rows[0]?.payload).toEqual({ type: 'text.delta', turnId: 'turn-1', text: 'Hello there' });
+  });
+
+  it('keeps deltas separate across a tool event and across turns', () => {
+    const store = createAppStore();
+
+    store.getState().appendEvent('thread-1', delta(1, 'a'));
+    store.getState().appendEvent(
+      'thread-1',
+      eventRow(2, {
+        type: 'tool.started',
+        turnId: 'turn-1',
+        toolCallId: 'call_1',
+        name: 'bash',
+        input: {},
+      }),
+    );
+    store.getState().appendEvent('thread-1', delta(3, 'b'));
+    store.getState().appendEvent('thread-1', delta(4, 'c'));
+
+    const rows = store.getState().events['thread-1'] ?? [];
+    expect(rows.map((entry) => entry.type)).toEqual(['text.delta', 'tool.started', 'text.delta']);
+    expect(rows.map((entry) => entry.seq)).toEqual([1, 2, 4]);
+
+    const turnStore = createAppStore();
+    turnStore.getState().appendEvent('thread-1', delta(1, 'x', 'turn-1'));
+    turnStore.getState().appendEvent('thread-1', delta(2, 'y', 'turn-2'));
+    expect(turnStore.getState().events['thread-1']).toHaveLength(2);
+  });
+
+  it('never evicts structural events, even when they alone exceed the cap', () => {
+    const store = createAppStore();
+    const turns = 1400;
+    let seq = 0;
+    for (let turn = 0; turn < turns; turn += 1) {
+      const turnId = `turn-${turn}`;
+      store.getState().appendEvent('thread-1', eventRow(++seq, { type: 'turn.started', turnId }));
+      store.getState().appendEvent(
+        'thread-1',
+        eventRow(++seq, {
+          type: 'tool.started',
+          turnId,
+          toolCallId: `call_${turn}`,
+          name: 'bash',
+          input: {},
+        }),
+      );
+      store.getState().appendEvent('thread-1', delta(++seq, 'streamed', turnId));
+      store.getState().appendEvent(
+        'thread-1',
+        eventRow(++seq, {
+          type: 'tool.finished',
+          turnId,
+          toolCallId: `call_${turn}`,
+          output: 'ok',
+          isError: false,
+        }),
+      );
+      store.getState().appendEvent(
+        'thread-1',
+        eventRow(++seq, { type: 'turn.finished', turnId, reason: 'complete' }),
+      );
     }
 
-    const kept = seqs(store);
-    expect(kept).toHaveLength(MAX_EVENTS_PER_THREAD);
-    expect(kept[0]).toBe(1);
-    expect(kept.at(-1)).toBe(MAX_EVENTS_PER_THREAD);
+    const rows = store.getState().events['thread-1'] ?? [];
+    expect(rows.length).toBeGreaterThan(MAX_EVENTS_PER_THREAD);
+    const counts = new Map<string, number>();
+    for (const entry of rows) counts.set(entry.type, (counts.get(entry.type) ?? 0) + 1);
+    expect(counts.get('turn.started')).toBe(turns);
+    expect(counts.get('turn.finished')).toBe(turns);
+    expect(counts.get('tool.started')).toBe(turns);
+    expect(counts.get('tool.finished')).toBe(turns);
+    expect(counts.get('text.delta')).toBeUndefined();
+  });
+
+  it('trims the oldest deltas first and keeps structural rows above the cap', () => {
+    const events = [
+      delta(1, 'old'),
+      eventRow(2, {
+        type: 'tool.started',
+        turnId: 'turn-1',
+        toolCallId: 'call_1',
+        name: 'bash',
+        input: {},
+      }),
+      delta(3, 'mid'),
+      eventRow(4, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }),
+    ];
+    expect(trimThreadEvents(events, 3).map((entry) => entry.seq)).toEqual([2, 3, 4]);
+
+    const structuralOnly = [
+      eventRow(1, { type: 'turn.started', turnId: 'turn-1' }),
+      eventRow(2, { type: 'turn.finished', turnId: 'turn-1', reason: 'complete' }),
+    ];
+    expect(trimThreadEvents(structuralOnly, 1)).toHaveLength(2);
+  });
+
+  it('reports no merge for a delta that does not extend the previous row', () => {
+    const previous = delta(1, 'a');
+    expect(coalesceStreamDelta(previous, delta(3, 'b'))).toBeNull();
+    expect(coalesceStreamDelta(previous, eventRow(2, { type: 'usage', turnId: 'turn-1' }))).toBeNull();
+    expect(coalesceStreamDelta(undefined, delta(1, 'a'))).toBeNull();
   });
 });
 

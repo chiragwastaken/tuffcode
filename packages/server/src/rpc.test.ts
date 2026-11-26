@@ -1,5 +1,5 @@
 import type { AdapterSession, Message, ServerEvent } from '@tuffcode/contracts';
-import { AdapterUnavailableError, RPC_METHODS } from '@tuffcode/contracts';
+import { AdapterUnavailableError, RPC_METHODS, methods } from '@tuffcode/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCommandHandlers } from './commands/handlers.js';
 import { createEventBus, type EventBus } from './events.js';
@@ -426,5 +426,86 @@ describe('rpc registry', () => {
       expect(response.error.message).toContain('install the CLI');
     }
     expect(ctx.repos.threads.get('thr_a')?.status).toBe('failed');
+  });
+
+  it('pages threads.events with an exclusive cursor and an exact hasMore', async () => {
+    const { ctx, handlers } = fixture();
+    ctx.repos.projects.add({
+      id: 'prj_a',
+      name: 'alpha',
+      path: ctx.env.root,
+      defaultBranch: 'main',
+      createdAt: new Date().toISOString(),
+    });
+    ctx.repos.threads.create({
+      id: 'thr_a',
+      projectId: 'prj_a',
+      parentThreadId: null,
+      title: 'thread',
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      status: 'idle',
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    for (let index = 1; index <= 1001; index += 1) {
+      ctx.repos.events.append('thr_a', 'text.delta', {
+        type: 'text.delta',
+        turnId: 'turn-1',
+        text: `chunk ${index}`,
+      });
+    }
+
+    const first = await dispatch(handlers, {
+      id: 'page-1',
+      method: 'threads.events',
+      params: { id: 'thr_a', sinceSeq: 0 },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const firstPage = methods['threads.events'].result.parse(first.result);
+    expect(firstPage.events).toHaveLength(200);
+    expect(firstPage.events[0]?.seq).toBe(1);
+    expect(firstPage.events.at(-1)?.seq).toBe(200);
+    expect(firstPage.hasMore).toBe(true);
+
+    const capped = await dispatch(handlers, {
+      id: 'page-cap',
+      method: 'threads.events',
+      params: { id: 'thr_a', sinceSeq: 0, limit: 5000 },
+    });
+    expect(capped.ok).toBe(true);
+    if (!capped.ok) return;
+    const cappedPage = methods['threads.events'].result.parse(capped.result);
+    expect(cappedPage.events).toHaveLength(1000);
+    expect(cappedPage.hasMore).toBe(true);
+
+    const middle = await dispatch(handlers, {
+      id: 'page-2',
+      method: 'threads.events',
+      params: { id: 'thr_a', sinceSeq: 200 },
+    });
+    expect(middle.ok).toBe(true);
+    if (!middle.ok) return;
+    const middlePage = methods['threads.events'].result.parse(middle.result);
+    expect(middlePage.events[0]?.seq).toBe(201);
+    expect(middlePage.events).toHaveLength(200);
+    expect(middlePage.hasMore).toBe(true);
+
+    const last = await dispatch(handlers, {
+      id: 'page-3',
+      method: 'threads.events',
+      params: { id: 'thr_a', sinceSeq: 1000 },
+    });
+    expect(last.ok).toBe(true);
+    if (!last.ok) return;
+    const lastPage = methods['threads.events'].result.parse(last.result);
+    expect(lastPage.events.map((event) => event.seq)).toEqual([1001]);
+    expect(lastPage.hasMore).toBe(false);
   });
 });

@@ -31,6 +31,83 @@ export function isTerminalSubagentStatus(status: SubagentStatus): boolean {
   return TERMINAL_SUBAGENT_STATUSES.includes(status);
 }
 
+/**
+ * The skeleton of a transcript: turn boundaries, tool calls, approvals and errors.
+ * Trimming never drops these, because losing one breaks the grouped view.
+ */
+const STRUCTURAL_EVENT_TYPES: Record<string, true> = {
+  'turn.started': true,
+  'turn.finished': true,
+  'tool.started': true,
+  'tool.finished': true,
+  'approval.requested': true,
+  error: true,
+  usage: true,
+};
+
+export function isStructuralEventType(type: string): boolean {
+  return STRUCTURAL_EVENT_TYPES[type] === true || type.startsWith('session.');
+}
+
+/** Streamed token rows; contiguous rows of one type merge into a single row. */
+const MERGEABLE_DELTA_TYPES: Record<string, true> = {
+  'text.delta': true,
+  'reasoning.delta': true,
+};
+
+/**
+ * Drops the oldest delta rows until the list fits `max`. Structural rows stay even
+ * when they alone exceed the cap, so a reopened 10k-event thread still has every
+ * tool call and turn boundary.
+ */
+export function trimThreadEvents(
+  events: ThreadEventRow[],
+  max = MAX_EVENTS_PER_THREAD,
+): ThreadEventRow[] {
+  const overflow = events.length - max;
+  if (overflow <= 0) return events;
+  const drop = new Set<number>();
+  for (let index = 0; index < events.length && drop.size < overflow; index += 1) {
+    if (!isStructuralEventType(events[index]!.type)) drop.add(index);
+  }
+  if (drop.size === 0) return events;
+  return events.filter((_, index) => !drop.has(index));
+}
+
+/**
+ * Merges a contiguous delta into the row it extends: the segment keeps its first
+ * `createdAt` (so "Thought for Ns" counts from the start) and takes the newest
+ * `seq` (so the replay cursor stays exact). A tool event, a turn change or a gap
+ * in the sequence leaves the rows separate.
+ */
+export function coalesceStreamDelta(
+  previous: ThreadEventRow | undefined,
+  event: ThreadEventRow,
+): ThreadEventRow | null {
+  if (previous === undefined) return null;
+  if (event.seq !== previous.seq + 1) return null;
+  if (event.type !== previous.type) return null;
+  if (MERGEABLE_DELTA_TYPES[event.type] !== true) return null;
+  if (event.payload.type !== previous.payload.type) return null;
+  if (event.payload.type === 'text.delta' && previous.payload.type === 'text.delta') {
+    if (event.payload.turnId !== previous.payload.turnId) return null;
+    return {
+      ...previous,
+      seq: event.seq,
+      payload: { ...event.payload, text: previous.payload.text + event.payload.text },
+    };
+  }
+  if (event.payload.type === 'reasoning.delta' && previous.payload.type === 'reasoning.delta') {
+    if (event.payload.turnId !== previous.payload.turnId) return null;
+    return {
+      ...previous,
+      seq: event.seq,
+      payload: { ...event.payload, text: previous.payload.text + event.payload.text },
+    };
+  }
+  return null;
+}
+
 /** One spawned child, keyed by `childId`, with its own event log. */
 export interface SubagentChild {
   childId: string;
@@ -360,10 +437,11 @@ export function createAppStore() {
         const last = list[list.length - 1];
         if (last && event.seq <= last.seq) return {};
 
-        const next = [...list, event];
-        if (next.length > MAX_EVENTS_PER_THREAD) {
-          next.splice(0, next.length - MAX_EVENTS_PER_THREAD);
-        }
+        // A contiguous delta extends the open segment instead of adding a row.
+        const merged = coalesceStreamDelta(last, event);
+        const appended =
+          merged === null ? [...list, event] : [...list.slice(0, -1), merged];
+        const next = trimThreadEvents(appended);
 
         const thread = state.threads[threadId];
         const threads =

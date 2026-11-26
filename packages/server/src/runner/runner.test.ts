@@ -254,6 +254,9 @@ describe('thread runner', () => {
     for (const broadcast of broadcasts) {
       const stored = f.ctx.repos.events.since('thr_a', broadcast.seq - 1, 1)[0];
       expect(stored?.payload).toEqual(broadcast.payload);
+      // One timestamp per event: the live frame carries the persisted row's time.
+      expect(broadcast.createdAt).toBe(stored?.createdAt);
+      expect(broadcast.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     }
 
     expect(f.threadStatus()).toBe('ready-to-review');

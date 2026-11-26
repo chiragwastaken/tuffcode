@@ -224,12 +224,15 @@ export function createRunner(deps: RunnerDeps): Runner {
   }
 
   function appendEvent(threadId: string, event: AdapterEvent): number {
-    const seq = repos.events.append(threadId, event.type, event);
+    // One timestamp per event, so the persisted row and the live frame agree.
+    const createdAt = nowIso();
+    const seq = repos.events.append(threadId, event.type, event, createdAt);
     bus.emit({
       kind: 'event',
       type: 'thread.event',
       threadId,
       seq,
+      createdAt,
       payload: event,
     });
     return seq;

@@ -65,7 +65,14 @@ function fakeRunner(bus: EventBus, behavior: SendBehavior): FakeRunner {
 }
 
 function emitEvent(bus: EventBus, threadId: string, event: AdapterEvent): void {
-  bus.emit({ kind: 'event', type: 'thread.event', threadId, seq: 1, payload: event });
+  bus.emit({
+    kind: 'event',
+    type: 'thread.event',
+    threadId,
+    seq: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    payload: event,
+  });
 }
 
 interface ApprovalCall {
@@ -172,6 +179,7 @@ describe('createBusTurnRunner', () => {
       type: 'thread.event',
       threadId: 'thr_other',
       seq: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
       payload: { type: 'text.delta', turnId: 'turn_x', text: 'not mine' },
     });
     await promise;
