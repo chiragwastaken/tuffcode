@@ -115,16 +115,16 @@ async function readJson(response: Response, what: string): Promise<Record<string
   if (response.body === null) throw new Error(`${what} answered with an empty body`);
   const text = await response.text();
   if (text.length > BODY_LIMIT) throw new Error(`${what} answered with an oversized body`);
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error(`${what} did not answer with a JSON object`);
-    }
-    return parsed as Record<string, unknown>;
+    parsed = JSON.parse(text);
   } catch (error) {
-    if (error instanceof Error && error.message.includes('did not answer')) throw error;
-    throw new Error(`${what} did not answer with JSON`);
+    throw new Error(`${what} did not answer with JSON`, { cause: error });
   }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${what} did not answer with a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 async function getJson(url: string, fetchFn: McpFetch, what: string): Promise<Record<string, unknown>> {
@@ -736,7 +736,8 @@ export function createOAuthManager(deps: OAuthManagerDeps): OAuthManager {
     },
 
     dispose: () => {
-      for (const flow of [...pending.values()]) closeFlow(flow);
+      // Map iteration tolerates deleting the entry it just yielded.
+      for (const flow of pending.values()) closeFlow(flow);
       bundles.clear();
       needsAuth.clear();
     },

@@ -155,11 +155,11 @@ function CustomConnectorDialog({ open, onClose }: { open: boolean; onClose: () =
       });
       if (authMode === 'oauth') {
         const flow = await rpc.request('mcp.oauth.start', { id: saved.id });
-        const open = window.tuffcode?.openExternal;
-        if (open === undefined) {
+        const openExternal = window.tuffcode?.openExternal;
+        if (openExternal === undefined) {
           toast.success(`${name.trim()} added. Open ${flow.authorizeUrl} to sign in.`);
         } else {
-          open(flow.authorizeUrl);
+          openExternal(flow.authorizeUrl);
           toast.success(`${name.trim()} added. Finish signing in in your browser.`);
         }
       } else {
