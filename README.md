@@ -33,31 +33,46 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
 - **Brain.** Typed memory entries selected per turn, a kill switch, standing-rule capture, typed
   links, a live prompt preview with injected entry ids, an interactive node graph, and memory
   search and add tools for the agent.
-- **MCP.** Local stdio MCP servers are managed in Settings > MCP. The built-in harness reaches
-  them through one `mcp` tool, and Claude subscription threads receive the same servers through
-  the Agent SDK. Codex keeps its own MCP configuration.
-- **Self-configuration.** The built-in harness can add a provider or model, add an MCP server, and
-  change an allowlisted setting through a `config` tool, with the same validation as the UI. The
-  memory and config tools are harness-only; subscription CLIs keep their own toolset.
+- **MCP.** Local stdio and remote HTTP MCP servers are managed in Settings > MCP. Connectors
+  support three auth modes: none, a bearer token or API key with a custom header, and browser
+  OAuth 2.1 with PKCE, discovery, dynamic client registration, a loopback callback and automatic
+  refresh. Tokens live in the OS keychain. The built-in harness reaches them through one `mcp`
+  tool, and Claude subscription threads receive the same servers through the Agent SDK. Codex
+  keeps its own MCP configuration.
+- **Self-configuration.** A built-in `edit-tuffcode` skill loads automatically when you ask
+  Tuffcode to change itself. The agent can add a provider or model, add an MCP server and change
+  an allowlisted setting through a `config` tool, and a credential you give it in chat is written
+  to the OS keychain and redacted from tool events. `/reload` refreshes providers, models,
+  connectors, skills, commands and settings without a restart.
 - **Diff review.** Changed files grouped by directory, real file line numbers, inline review
   comments, checkpoint comparison, and a collapsible file tree.
 - **Timeline.** Reasoning, prose, grouped tool calls with results and diffs, and a final answer,
-  with copy, retry, edit, and right-click actions.
-- **Panes.** Two or three resizable panes per thread for the conversation, subagents, diff,
-  terminal, or brain.
+  with copy, retry, edit, and right-click actions. A finished turn folds its pre-answer work into
+  one `Ran N tools and thought for Xs` row that expands to the exact original order. History is
+  lossless: every event page replays, deltas coalesce, and tool calls and turn boundaries are
+  never evicted.
+- **Search.** `Ctrl+F` searches the active conversation, including text inside collapsed steps and
+  tool groups, expands what it needs, scrolls the virtualized timeline and highlights matches. The
+  agent's `grep` tool prefers ripgrep with a fast parallel fallback and can list files or counts.
+- **Stop and send.** Stop settles the turn once with a visible boundary, and an immediate Send
+  starts a clean new turn instead of merging or colliding. The Thinking spinner always clears.
+- **Panes.** Up to four nested tiles, side by side or stacked, created by dragging a tab, a pane or
+  a sidebar chat onto an edge drop zone. Dividers resize, double-click resets, and every tile is a
+  full session surface with its own thread, composer, model and permission controls.
 - **Terminal.** ConPTY terminals through `node-pty`, with tabs and `pwsh.exe`,
-  `powershell.exe`, or `cmd.exe` as the shell.
+  `powershell.exe`, or `cmd.exe` as the shell. Scrollback, font size and cursor style apply live.
 - **Approvals and checkpoints.** Tool calls that need consent render as approval cards, and
   thread checkpoints snapshot the worktree.
 - **Settings.** Providers, models, subagent models, custom instructions, appearance, agents and
-  tools, permissions, terminal, brain, updates, diagnostics, capabilities, keybindings.
+  tools, permissions, terminal, brain, updates, diagnostics, capabilities, notifications,
+  keybindings. Notifications has a test trigger that reports whether Windows showed the banner.
 - **Installer.** A per-user NSIS installer for Windows x64. Packaged builds check for updates on
   launch, download in the background, and ask you to restart when it is ready.
 
-v0.1.3 adds nested subagents, the Activity panel, model metadata, MCP, self-configuration, brain
-links and a rewritten prompt set. v0.1.2 added model discovery, subagents, split panes and the
-brain graph. v0.1.1 shipped the provider gallery, settings, persisted turns and the diff and
-timeline rework.
+v0.3.0 adds lossless history, reliable Stop, folded steps, Ctrl+F, fast grep, no iteration cap,
+the edit-tuffcode skill, /reload, MCP OAuth and nested tiles. v0.2.0 added the Claude Desktop
+parity workspace, the plugins hub and image attachments. v0.1.3 added nested subagents, the
+Activity panel, model metadata, MCP, self-configuration, brain links and a rewritten prompt set.
 
 ## Requirements
 

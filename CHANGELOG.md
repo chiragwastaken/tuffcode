@@ -5,6 +5,63 @@ the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
+### Reliability
+- Thread history is lossless: replay loads every page of events, not the first 200, and replays
+  again after a reconnect. Stream deltas coalesce per contiguous segment, and the server batches
+  delta writes, so tool calls, approvals, errors and turn boundaries are never evicted from a
+  long thread.
+- Stop settles the turn exactly once, persists a boundary even when nothing streamed, and an
+  immediate Send starts a clean new turn and session instead of merging or conflicting.
+- The timeline orders user and assistant rows by turn identity instead of the client clock, and
+  the Thinking spinner always clears on finish, error, interrupt or a stacked send.
+- A completed turn folds its reasoning, prose and tool calls into one collapsed
+  `Ran N tools and thought for Xs` row above the answer; expanding restores the exact order.
+
+### Search
+- `Ctrl+F` opens an in-chat find bar with `match X of Y`, Enter and Shift+Enter navigation, and
+  Esc to close. It searches every turn, including text inside collapsed steps and tool groups,
+  auto-expands the containing disclosure, scrolls the virtualized timeline and highlights matches.
+- The `grep` tool prefers ripgrep with Windows-safe spawning and ignore-file respect, and falls
+  back to a bounded parallel Node scan. New modes list files or counts instead of full lines.
+- The base prompt prefers `grep` and `glob` over shell search.
+
+### Agents
+- The Max iterations setting and every loop cap are removed. Long productive runs continue until
+  the model stops, the user stops it, context compaction applies, or the same tool call repeats
+  three times in a row with no new text.
+- Read-only tools in one assistant step run in parallel, while writes, bash, MCP calls and
+  anything needing approval stay serial in call order.
+- A built-in `edit-tuffcode` skill loads automatically when you ask Tuffcode to change itself or
+  its configuration, and routes provider, model, connector and setting changes through the config
+  tool.
+- The config tool accepts user-supplied provider keys and connector tokens, stores them in the OS
+  keychain, and redacts them from emitted tool events. Claude subscription threads get the same
+  `config` and `mcp` tools.
+- `/reload` refreshes settings, providers, models, connectors, skills, commands and plugins and
+  broadcasts the changes, so new configuration appears without a restart.
+
+### Connectors and workspace
+- MCP connectors support three auth modes: none, bearer or API key with a custom header, and
+  browser OAuth 2.1 with PKCE, discovery, dynamic client registration, a loopback callback,
+  automatic refresh, and keychain storage.
+- The workspace splits into up to four nested tiles, horizontally or vertically, by dragging a
+  tab, a pane or a sidebar chat onto an edge drop zone. Dividers resize, double-click resets, each
+  tile keeps its own thread, composer, model and permission controls, and the layout persists.
+- Terminal scrollback, font size and cursor style apply live to open terminals, and the update
+  channel now selects stable or beta.
+- Settings > Notifications has a Send test notification button that reports whether the OS
+  supports and showed the notification, with a Focus Assist note.
+
+### Known issues
+- Remote OAuth is proven against a local mock authorization server; a live third-party connector
+  still needs a manual check.
+- Plugin hooks and agents are listed but never run.
+- Codex threads do not get the todo and subagent tools.
+- web_fetch does not guard against DNS rebinding between its address check and the connection.
+- The installer artifact reports `0.0.0` until the release workflow stamps the tag.
+
 ## [0.2.0] - 2026-11-26
 
 ### Workspace and layout
