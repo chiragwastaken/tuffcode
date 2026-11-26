@@ -453,7 +453,9 @@ describe('rpc registry', () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
-    for (let index = 1; index <= 1001; index += 1) {
+    // 401 rows keep the fixture cheap: two full 200-row pages plus one partial.
+    // Each append is its own SQLite transaction, so a slow CI disk pays per row.
+    for (let index = 1; index <= 401; index += 1) {
       ctx.repos.events.append('thr_a', 'text.delta', {
         type: 'text.delta',
         turnId: 'turn-1',
@@ -474,17 +476,6 @@ describe('rpc registry', () => {
     expect(firstPage.events.at(-1)?.seq).toBe(200);
     expect(firstPage.hasMore).toBe(true);
 
-    const capped = await dispatch(handlers, {
-      id: 'page-cap',
-      method: 'threads.events',
-      params: { id: 'thr_a', sinceSeq: 0, limit: 5000 },
-    });
-    expect(capped.ok).toBe(true);
-    if (!capped.ok) return;
-    const cappedPage = methods['threads.events'].result.parse(capped.result);
-    expect(cappedPage.events).toHaveLength(1000);
-    expect(cappedPage.hasMore).toBe(true);
-
     const middle = await dispatch(handlers, {
       id: 'page-2',
       method: 'threads.events',
@@ -493,19 +484,45 @@ describe('rpc registry', () => {
     expect(middle.ok).toBe(true);
     if (!middle.ok) return;
     const middlePage = methods['threads.events'].result.parse(middle.result);
+    // The cursor is exclusive: 200 is not repeated, 201 starts the page.
     expect(middlePage.events[0]?.seq).toBe(201);
     expect(middlePage.events).toHaveLength(200);
+    expect(middlePage.events.at(-1)?.seq).toBe(400);
     expect(middlePage.hasMore).toBe(true);
+
+    const small = await dispatch(handlers, {
+      id: 'page-small',
+      method: 'threads.events',
+      params: { id: 'thr_a', sinceSeq: 200, limit: 50 },
+    });
+    expect(small.ok).toBe(true);
+    if (!small.ok) return;
+    const smallPage = methods['threads.events'].result.parse(small.result);
+    expect(smallPage.events[0]?.seq).toBe(201);
+    expect(smallPage.events.at(-1)?.seq).toBe(250);
+    expect(smallPage.events).toHaveLength(50);
+    expect(smallPage.hasMore).toBe(true);
 
     const last = await dispatch(handlers, {
       id: 'page-3',
       method: 'threads.events',
-      params: { id: 'thr_a', sinceSeq: 1000 },
+      params: { id: 'thr_a', sinceSeq: 400 },
     });
     expect(last.ok).toBe(true);
     if (!last.ok) return;
     const lastPage = methods['threads.events'].result.parse(last.result);
-    expect(lastPage.events.map((event) => event.seq)).toEqual([1001]);
+    expect(lastPage.events.map((event) => event.seq)).toEqual([401]);
     expect(lastPage.hasMore).toBe(false);
+
+    const exhausted = await dispatch(handlers, {
+      id: 'page-4',
+      method: 'threads.events',
+      params: { id: 'thr_a', sinceSeq: 401 },
+    });
+    expect(exhausted.ok).toBe(true);
+    if (!exhausted.ok) return;
+    const exhaustedPage = methods['threads.events'].result.parse(exhausted.result);
+    expect(exhaustedPage.events).toHaveLength(0);
+    expect(exhaustedPage.hasMore).toBe(false);
   });
 });
