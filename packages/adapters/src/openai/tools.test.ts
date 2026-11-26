@@ -548,6 +548,9 @@ describe('grep through ripgrep', () => {
 });
 
 describe('bash', () => {
+  // These are integration tests against real child processes: the watchdog lives in
+  // the parent but the output that resets it comes from another process, so fake
+  // timers cannot drive them. The windows are kept short (0.8s to 1.6s).
   it('runs a command and captures output', async () => {
     const result = await executeTool(
       'bash',
@@ -558,6 +561,98 @@ describe('bash', () => {
     );
     expect(result.isError).toBe(false);
     expect(result.output).toContain('hello');
+  });
+
+  it('stops a silent command at the idle watchdog and refuses to call it a pass', async () => {
+    await writeFile(
+      join(root, 'silent.mjs'),
+      'process.stdout.write("started" + String.fromCharCode(10));' +
+        LF +
+        'setTimeout(() => {}, 60000);' +
+        LF,
+    );
+    const started = Date.now();
+    const result = await executeTool(
+      'bash',
+      { command: 'node silent.mjs', idle_timeout_ms: 800 },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    const elapsed = Date.now() - started;
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('started');
+    expect(result.output).toContain(
+      '[no output for 800ms; the command was stopped before finishing]',
+    );
+    expect(result.output).toContain('Do not claim this command passed; it did not finish.');
+    expect(result.output).not.toContain('timed out');
+    expect(elapsed).toBeLessThan(5000);
+  });
+
+  it('does not kill a command that keeps printing, however slowly', async () => {
+    await writeFile(
+      join(root, 'chatty.mjs'),
+      [
+        'let ticks = 0;',
+        'const handle = setInterval(() => {',
+        '  ticks += 1;',
+        '  process.stdout.write("tick " + String(ticks) + String.fromCharCode(10));',
+        '  if (ticks >= 8) clearInterval(handle);',
+        '}, 200);',
+        '',
+      ].join(LF),
+    );
+    const started = Date.now();
+    const result = await executeTool(
+      'bash',
+      { command: 'node chatty.mjs', idle_timeout_ms: 800 },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    const elapsed = Date.now() - started;
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain('tick 8');
+    expect(result.output).not.toContain('no output for');
+    expect(elapsed).toBeGreaterThanOrEqual(1400);
+  });
+
+  it('keeps the output of a failing command and does not blame the watchdog', async () => {
+    await writeFile(
+      join(root, 'boom.mjs'),
+      'process.stdout.write("boom" + String.fromCharCode(10));' + LF + 'process.exit(1);' + LF,
+    );
+    const result = await executeTool(
+      'bash',
+      { command: 'node boom.mjs', idle_timeout_ms: 800 },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('boom');
+    expect(result.output).not.toContain('no output for');
+    expect(result.output).not.toContain('timed out');
+  });
+
+  it('stops a command that waits for input instead of hanging to the hard timeout', async () => {
+    await writeFile(join(root, 'stdin.mjs'), 'process.stdin.resume();' + LF);
+    const started = Date.now();
+    const result = await executeTool(
+      'bash',
+      { command: 'node stdin.mjs', idle_timeout_ms: 800 },
+      context(),
+      createToolSessionState(),
+      deps,
+    );
+    const elapsed = Date.now() - started;
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain(
+      '[no output for 800ms; the command was stopped before finishing]',
+    );
+    expect(result.output).toContain('Do not claim this command passed; it did not finish.');
+    expect(elapsed).toBeLessThan(5000);
   });
 
   it('kills a command that exceeds the timeout', async () => {
@@ -573,6 +668,7 @@ describe('bash', () => {
     const elapsed = Date.now() - started;
     expect(result.isError).toBe(true);
     expect(result.output).toContain('timed out');
+    expect(result.output).not.toContain('no output for');
     expect(elapsed).toBeLessThan(4000);
   });
 });

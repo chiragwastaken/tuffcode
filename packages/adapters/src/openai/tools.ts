@@ -23,6 +23,8 @@ const MAX_OUTPUT = 64 * 1024;
 const MAX_READ_LINES = 2000;
 const DEFAULT_BASH_TIMEOUT = 120000;
 const MAX_BASH_TIMEOUT = 600000;
+const DEFAULT_BASH_IDLE_TIMEOUT = 30000;
+const MIN_BASH_IDLE_TIMEOUT = 100;
 const MAX_GLOB_ENTRIES = 200;
 const MAX_DIR_ENTRIES = 200;
 const MAX_GREP_RESULTS = 200;
@@ -75,6 +77,10 @@ function requireString(value: unknown, field: string): string {
     throw new Error(field + ' must be a non-empty string');
   }
   return value;
+}
+
+function formatDuration(ms: number): string {
+  return ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`;
 }
 
 function clampInt(value: unknown, fallback: number, min: number, max: number): number {
@@ -890,6 +896,8 @@ interface ProcessOutcome {
   output: string;
   code: number | null;
   timedOut: boolean;
+  /** 'no-output' when the idle watchdog stopped a command that had gone silent. */
+  failedToRun: 'no-output' | null;
   aborted: boolean;
   truncated: boolean;
   spawnError: string | null;
@@ -898,7 +906,13 @@ interface ProcessOutcome {
 function runProcess(
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal: AbortSignal },
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    signal: AbortSignal;
+    idleTimeoutMs?: number;
+  },
 ): Promise<ProcessOutcome> {
   const { promise, resolve } = deferred<ProcessOutcome>();
   const child = spawn(command, args, { cwd: options.cwd, env: options.env, windowsHide: true });
@@ -906,11 +920,51 @@ function runProcess(
   let outputBytes = 0;
   let dropped = false;
   let timedOut = false;
+  let failedToRun: 'no-output' | null = null;
   let aborted = false;
+  let exited = false;
   let settled = false;
   let timer: NodeJS.Timeout;
+  // The watchdog only runs when it would fire before the hard timeout; the hard
+  // timeout stays the outer bound and keeps its own distinct message.
+  const idleTimeoutMs =
+    options.idleTimeoutMs !== undefined && options.idleTimeoutMs < options.timeoutMs
+      ? options.idleTimeoutMs
+      : 0;
+  let idleTimer: NodeJS.Timeout | null = null;
+
+  const clearIdle = (): void => {
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  const finish = (code: number | null, spawnError: string | null): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    clearIdle();
+    options.signal.removeEventListener('abort', onAbort);
+    resolve({ output, code, timedOut, failedToRun, aborted, truncated: dropped, spawnError });
+  };
+
+  // Any chunk, on either stream, proves the command is still working. A slow
+  // command is not a hung one, so the window restarts on every chunk.
+  const armIdle = (): void => {
+    if (idleTimeoutMs <= 0 || exited) return;
+    clearIdle();
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (settled || timedOut || aborted) return;
+      failedToRun = 'no-output';
+      killTree(child);
+      setTimeout(() => finish(null, null), 250);
+    }, idleTimeoutMs);
+  };
 
   const append = (chunk: Buffer): void => {
+    armIdle();
     if (outputBytes >= MAX_OUTPUT) {
       dropped = true;
       return;
@@ -922,21 +976,15 @@ function runProcess(
     if (slice.byteLength < chunk.byteLength) dropped = true;
   };
 
-  const finish = (code: number | null, spawnError: string | null): void => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    options.signal.removeEventListener('abort', onAbort);
-    resolve({ output, code, timedOut, aborted, truncated: dropped, spawnError });
-  };
-
   const onAbort = (): void => {
+    if (settled || timedOut || failedToRun !== null) return;
     aborted = true;
     killTree(child);
     setTimeout(() => finish(null, null), 250);
   };
 
   timer = setTimeout(() => {
+    if (settled || failedToRun !== null || aborted) return;
     timedOut = true;
     killTree(child);
     setTimeout(() => finish(null, null), 250);
@@ -947,8 +995,14 @@ function runProcess(
 
   child.stdout?.on('data', append);
   child.stderr?.on('data', append);
+  child.on('exit', () => {
+    // The process is gone, so silence is no longer evidence of a hang.
+    exited = true;
+    clearIdle();
+  });
   child.on('close', (code) => finish(code, null));
   child.on('error', (error) => finish(null, error.message));
+  armIdle();
   return promise;
 }
 
@@ -956,12 +1010,19 @@ const bashTool: ToolExecutor = async (args, ctx, _state, deps) => {
   try {
     const command = requireString(args.command, 'command');
     const timeoutMs = clampInt(args.timeout_ms, DEFAULT_BASH_TIMEOUT, 1000, MAX_BASH_TIMEOUT);
+    const idleTimeoutMs = clampInt(
+      args.idle_timeout_ms,
+      DEFAULT_BASH_IDLE_TIMEOUT,
+      MIN_BASH_IDLE_TIMEOUT,
+      MAX_BASH_TIMEOUT,
+    );
     const cwd = args.cwd === undefined ? ctx.cwd : resolvePath(ctx, args.cwd, 'cwd');
     const shell = await resolveShell(deps);
     const outcome = await runProcess(shell.command, shell.args(command), {
       cwd,
       env: { ...process.env, ...deps.env },
       timeoutMs,
+      idleTimeoutMs,
       signal: ctx.signal,
     });
     let output =
@@ -969,11 +1030,19 @@ const bashTool: ToolExecutor = async (args, ctx, _state, deps) => {
         ? `failed to start shell: ${outcome.spawnError}`
         : outcome.output;
     if (outcome.truncated) output += `${LF}[output truncated]`;
+    if (outcome.failedToRun === 'no-output') {
+      output += `${LF}[no output for ${formatDuration(idleTimeoutMs)}; the command was stopped before finishing]`;
+      output += `${LF}Do not claim this command passed; it did not finish.`;
+    }
     if (outcome.timedOut) output += `${LF}[timed out after ${timeoutMs}ms]`;
     if (outcome.aborted) output += `${LF}[aborted]`;
     if (output.length === 0) output = '(no output)';
     const isError =
-      outcome.timedOut || outcome.aborted || outcome.spawnError !== null || outcome.code !== 0;
+      outcome.timedOut ||
+      outcome.failedToRun !== null ||
+      outcome.aborted ||
+      outcome.spawnError !== null ||
+      outcome.code !== 0;
     return { output, isError };
   } catch (error) {
     return fail(errorMessage(error));
