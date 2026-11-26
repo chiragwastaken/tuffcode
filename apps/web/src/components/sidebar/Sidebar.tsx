@@ -1,11 +1,13 @@
 import { Link, useNavigate, useRouter, useRouterState } from '@tanstack/react-router';
 import type { Project, SubagentView, Thread } from '@tuffcode/contracts';
-import { Button, Kbd, cn } from '@tuffcode/ui';
-import { FolderPlus, Plug, Plus, Search, type LucideIcon } from 'lucide-react';
+import { Badge, Button, Kbd, cn } from '@tuffcode/ui';
+import { FolderPlus, Inbox, Plug, Plus, Search, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAddProject } from '../../hooks/use-add-project';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { attentionCount } from '../inbox/inbox-model';
+import { useInbox } from '../inbox/use-inbox';
 import { requestInspectorTab } from '../inspector/panel-requests';
 import { childForThread } from '../subagents/subagent-model';
 import { requestThreadDelete, requestThreadRename } from '../thread/thread-dialogs';
@@ -37,6 +39,9 @@ export function Sidebar() {
   const [searchOpen, setSearchOpen] = useState(false);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const onPlugins = pathname === '/plugins' || pathname.startsWith('/plugins/');
+  const onNeeds = pathname === '/needs' || pathname.startsWith('/needs/');
+  const inbox = useInbox();
+  const needsCount = attentionCount(inbox.threads);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() =>
     readCollapsedProjects(typeof window === 'undefined' ? null : window.localStorage),
   );
@@ -235,6 +240,30 @@ export function Sidebar() {
           testId="sidebar-new-chat"
           onClick={() => openNewThread(newChatProjectId)}
         />
+        <Link
+          to="/needs"
+          data-testid="sidebar-needs"
+          aria-current={onNeeds ? 'page' : undefined}
+          className={cn(
+            'flex h-8 items-center gap-2 rounded-md px-2 text-sm transition-colors duration-150',
+            onNeeds
+              ? 'bg-sidebar-row-selected text-sidebar-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-row-hover',
+          )}
+        >
+          <Inbox aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-sidebar-muted-foreground" />
+          <span className="flex-1">Needs you</span>
+          {needsCount > 0 ? (
+            <Badge
+              data-testid="sidebar-needs-badge"
+              variant="warning"
+              size="sm"
+              className="min-w-4 justify-center px-1"
+            >
+              {needsCount}
+            </Badge>
+          ) : null}
+        </Link>
         <NavButton
           icon={Search}
           label="Search"

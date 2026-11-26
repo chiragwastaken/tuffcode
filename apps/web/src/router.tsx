@@ -9,6 +9,7 @@ import { EmptyState } from '@tuffcode/ui';
 import { useEffect } from 'react';
 import { AppShell } from './components/AppShell';
 import { EmptyWorkspace } from './components/EmptyWorkspace';
+import { InboxPage } from './components/inbox/InboxPage';
 import { PaneWorkspace } from './components/panes/PaneWorkspace';
 import { resolveRootView } from './components/shell-layout';
 import { PluginsPage } from './routes/plugins/plugins-page';
@@ -105,7 +106,19 @@ const pluginsRoute = createRoute({
   component: PluginsPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, threadRoute, settingsRoute, pluginsRoute]);
+const needsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/needs',
+  component: InboxPage,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  threadRoute,
+  settingsRoute,
+  pluginsRoute,
+  needsRoute,
+]);
 
 /**
  * The packaged renderer loads `file:///.../index.html?port=…`, so the browser

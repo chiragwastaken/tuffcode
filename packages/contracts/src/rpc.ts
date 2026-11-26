@@ -10,6 +10,7 @@ import {
   CheckpointSchema,
   CommandSchema,
   ConnectorEntrySchema,
+  DashboardThreadSchema,
   DiffFileSchema,
   ExecutionModeSchema,
   GoalAutonomySchema,
@@ -180,6 +181,11 @@ export const methods = {
   'threads.list': {
     params: z.object({ projectId: IdSchema.optional() }),
     result: ThreadSchema.array(),
+  },
+  /** Every root thread across projects, for the Needs you view and its badge. */
+  'threads.dashboard': {
+    params: EmptyObjectSchema,
+    result: z.object({ threads: DashboardThreadSchema.array() }),
   },
   'threads.create': {
     params: z.object({

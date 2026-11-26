@@ -411,6 +411,26 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     result: thread,
   },
   'threads.get': { params: { id: 't1' }, result: thread },
+  'threads.dashboard': {
+    params: {},
+    result: {
+      threads: [
+        {
+          threadId: 't1',
+          projectId: 'p1',
+          projectName: 'tuffcode',
+          title: 'Contracts',
+          status: 'needs-approval',
+          updatedAt: at,
+          lastEventAt: at,
+          stalled: false,
+          pendingApprovals: [
+            { approvalId: 'ap1', toolName: 'write', inputSummary: 'write: a.txt' },
+          ],
+        },
+      ],
+    },
+  },
   'threads.update': {
     params: { id: 't1', title: 'Renamed', permissionMode: 'accept-edits' },
     result: thread,
@@ -802,6 +822,7 @@ const expectedMethods: RpcMethod[] = [
   'threads.approve',
   'threads.context',
   'threads.create',
+  'threads.dashboard',
   'threads.delete',
   'threads.events',
   'threads.get',
@@ -889,8 +910,8 @@ function parseCommandRunResult(result: unknown) {
 }
 
 describe('rpc methods', () => {
-  it('exposes exactly 87 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(87);
+  it('exposes exactly 88 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(88);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);
