@@ -89,6 +89,12 @@ export const AdapterEventSchema = z.discriminatedUnion('type', [
     retryable: z.boolean(),
   }),
   z.object({
+    /** A user-facing note about the turn, not an adapter failure. */
+    type: z.literal('notice'),
+    message: z.string(),
+    tone: z.enum(['info', 'warning']),
+  }),
+  z.object({
     type: z.literal('session.ended'),
     reason: z.string(),
   }),

@@ -114,12 +114,21 @@ export async function persistAttachments(
     const name =
       attachment.name ?? (attachment.path === undefined ? 'attachment' : attachment.path);
     const mime = attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType };
+    const size =
+      attachment.width === undefined || attachment.height === undefined
+        ? {}
+        : { width: attachment.width, height: attachment.height };
     if (attachment.data !== undefined) {
-      stored.push({ name, id: await storeAttachmentBytes(attachment.data, attachment.mimeType), ...mime });
+      stored.push({
+        name,
+        id: await storeAttachmentBytes(attachment.data, attachment.mimeType),
+        ...mime,
+        ...size,
+      });
       continue;
     }
     if (attachment.path !== undefined) {
-      stored.push({ name, path: attachment.path, ...mime });
+      stored.push({ name, path: attachment.path, ...mime, ...size });
     }
   }
   return stored;

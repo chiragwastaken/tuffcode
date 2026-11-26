@@ -14,7 +14,7 @@ import { newId, worktreesRoot, type Logger } from '@tuffcode/shared';
 import type { Repos, TaskStatePatch } from '../db/repos/index.js';
 import { badRequest, conflict, notFound, RpcError } from '../errors.js';
 import type { EventBus } from '../events.js';
-import { openPullRequest as openPullRequestInRepo, pushThread } from '../git/index.js';
+import { commitThread, openPullRequest as openPullRequestInRepo, pushThread } from '../git/index.js';
 import type { Runner } from '../runner/runner.js';
 import { COUNCIL_CAPS, TERMINAL_GOAL_STATES, TERMINAL_TASK_STATES } from './caps.js';
 import { providerFamily, selectReviewer } from './family.js';
@@ -277,6 +277,19 @@ export function createCouncil(deps: CouncilDeps): Council {
         const result = await openPullRequestInRepo(repos, threadId, { ...request, draft: false });
         repos.threads.setPrUrl(threadId, result.url);
         return result;
+      }),
+    syncPullRequest:
+      overrides.syncPullRequest?.bind(overrides) ??
+      (async (threadId) => {
+        // A worker told to commit may still leave edits in the tree; the reviewer reads
+        // the local diff, so the PR must be brought level before the next round.
+        try {
+          await commitThread(repos, threadId, 'council: revision');
+        } catch (error) {
+          if (!(error instanceof RpcError) || error.code !== 'conflict') throw error;
+          // Nothing to commit: the worker committed its own change.
+        }
+        await pushThread(repos, threadId);
       }),
     changesForThread:
       overrides.changesForThread?.bind(overrides) ??
@@ -712,6 +725,7 @@ export function createCouncil(deps: CouncilDeps): Council {
         if (revision.result.status !== 'complete') {
           throw turnFailure('revision', revision.result, revision.detail);
         }
+        await ports.syncPullRequest?.(child.id);
         advanceTask(run, task.id, 'pr-open');
       }
     } finally {

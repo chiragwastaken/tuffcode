@@ -78,7 +78,7 @@ export interface ApprovalItem {
 export interface NoticeItem {
   kind: 'notice';
   key: string;
-  tone: 'error' | 'info';
+  tone: 'error' | 'info' | 'warning';
   text: string;
 }
 
@@ -533,6 +533,15 @@ export function groupTimeline({
           kind: 'notice',
           key: `notice-${event.seq}`,
           tone: 'error',
+          text: payload.message,
+        });
+        break;
+      }
+      case 'notice': {
+        items.push({
+          kind: 'notice',
+          key: `notice-${event.seq}`,
+          tone: payload.tone,
           text: payload.message,
         });
         break;

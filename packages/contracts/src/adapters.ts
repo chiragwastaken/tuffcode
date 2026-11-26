@@ -53,6 +53,9 @@ export interface TurnAttachment {
   data?: string;
   /** MIME type of `data`, and the hint that marks an attachment as an image. */
   mimeType?: string;
+  /** Pixel size of an inline image, used for the context estimate. */
+  width?: number;
+  height?: number;
   kind: 'file' | 'image';
 }
 

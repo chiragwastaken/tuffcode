@@ -189,65 +189,82 @@ export function recordTurnStart(repos: Repos, input: TurnStartInput): void {
   });
 }
 
+interface ResolvedAttachments {
+  attachments: TurnContext['attachments'];
+  /** Notes for the user about an attachment that was dropped, in order. */
+  warnings: string[];
+}
+
 /**
  * Resolves each attachment into the shape an adapter reads. A path attachment must stay
  * inside the worktree; an inline attachment is already bytes and only needs its kind; a
  * stored id is read back from the attachment store so a retry or replay still works.
+ * One bad attachment is dropped with a warning instead of failing the whole message,
+ * because the user's text and the other files are still worth sending.
  */
 async function resolveAttachments(
   worktreePath: string,
   attachments: readonly Attachment[],
-): Promise<TurnContext['attachments']> {
+): Promise<ResolvedAttachments> {
   const resolved: TurnContext['attachments'] = [];
+  const warnings: string[] = [];
   let inlineChars = 0;
-  const charge = (data: string, name: string): void => {
-    if (data.length > MAX_ATTACHMENT_BASE64_CHARS) {
-      throw badRequest(`attachment is too large: ${name}`);
-    }
-    inlineChars += data.length;
-    if (inlineChars > MAX_SEND_BASE64_CHARS) {
-      throw badRequest('the attachments in this message are too large together');
-    }
-  };
   for (const attachment of attachments) {
     const kind = attachment.mimeType?.startsWith('image/') === true ? 'image' : 'file';
     const name = attachment.name.length > 0 ? { name: attachment.name } : {};
-    if (attachment.data !== undefined) {
-      charge(attachment.data, attachment.name);
+    const size =
+      attachment.width === undefined || attachment.height === undefined
+        ? {}
+        : { width: attachment.width, height: attachment.height };
+    let data: string | undefined = attachment.data;
+    let mimeType = attachment.mimeType;
+    if (data === undefined && attachment.id !== undefined) {
+      const stored = await readStoredAttachment(attachment.id, attachment.mimeType);
+      if (stored === null) {
+        warnings.push(`${attachment.name} could not be found and was not sent.`);
+        continue;
+      }
+      data = stored.data;
+      mimeType = stored.mimeType;
+    }
+    if (data !== undefined) {
+      if (data.length > MAX_ATTACHMENT_BASE64_CHARS) {
+        warnings.push(`${attachment.name} is too large and was not sent.`);
+        continue;
+      }
+      if (inlineChars + data.length > MAX_SEND_BASE64_CHARS) {
+        warnings.push(`${attachment.name} was not sent: this message is over the image budget.`);
+        continue;
+      }
+      inlineChars += data.length;
       resolved.push({
         ...name,
-        data: attachment.data,
-        ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
+        data,
+        ...(mimeType === undefined ? {} : { mimeType }),
+        ...size,
         kind,
       });
       continue;
     }
-    if (attachment.id !== undefined) {
-      const stored = await readStoredAttachment(attachment.id, attachment.mimeType);
-      if (stored === null) {
-        throw badRequest(`stored attachment is missing: ${attachment.name}`);
-      }
-      charge(stored.data, attachment.name);
-      resolved.push({ ...name, data: stored.data, mimeType: stored.mimeType, kind });
-      continue;
-    }
     if (attachment.path === undefined) {
-      throw badRequest(`attachment has neither a path nor inline data: ${attachment.name}`);
+      warnings.push(`${attachment.name} had no file to send.`);
+      continue;
     }
     let target: string;
     try {
       target = resolveWithin(worktreePath, attachment.path);
     } catch {
-      throw badRequest(`attachment escapes the worktree: ${attachment.name}`);
+      warnings.push(`${attachment.name} is outside the worktree and was not sent.`);
+      continue;
     }
     resolved.push({
       ...name,
       path: target,
-      ...(attachment.mimeType === undefined ? {} : { mimeType: attachment.mimeType }),
+      ...(mimeType === undefined ? {} : { mimeType }),
       kind,
     });
   }
-  return resolved;
+  return { attachments: resolved, warnings };
 }
 
 /**
@@ -585,7 +602,11 @@ export function createRunner(deps: RunnerDeps): Runner {
   }): Promise<{ turnId: string }> {
       const { thread, project, provider, worktreePath, text, attachments, turnId, createdAt } =
         input;
-      const turnAttachments = await resolveAttachments(worktreePath, attachments);
+      const resolved = await resolveAttachments(worktreePath, attachments);
+      if (resolved.attachments.length === 0 && text.trim().length === 0) {
+        throw badRequest(resolved.warnings[0] ?? 'the message has no content');
+      }
+      const turnAttachments = resolved.attachments;
       const storedAttachments = await persistAttachments(turnAttachments);
       const now = new Date(createdAt);
       const settings = deps.settings();
@@ -613,6 +634,11 @@ export function createRunner(deps: RunnerDeps): Runner {
         ...(storedAttachments.length === 0 ? {} : { attachments: storedAttachments }),
         createdAt,
       });
+      // A dropped attachment is the user's business: the turn still runs, and the
+      // transcript names the file that did not make it.
+      for (const warning of resolved.warnings) {
+        appendEvent(thread.id, { type: 'notice', message: warning, tone: 'warning' });
+      }
       // The first message names a thread that still carries its placeholder title; a
       // title the user typed is never touched. setThreadStatus below emits the new row.
       if (isPlaceholderTitle(thread.title)) {
@@ -856,9 +882,11 @@ export function createRunner(deps: RunnerDeps): Runner {
         }
         const turnId = newId('turn');
         const createdAt = nowIso();
-        const stored = await persistAttachments(
-          await resolveAttachments(worktreePath, attachments),
-        );
+        const resolved = await resolveAttachments(worktreePath, attachments);
+        if (resolved.attachments.length === 0 && text.trim().length === 0) {
+          throw badRequest(resolved.warnings[0] ?? 'the message has no content');
+        }
+        const stored = await persistAttachments(resolved.attachments);
         repos.messages.addIfAbsent({
           id: userMessageId(turnId),
           threadId: thread.id,

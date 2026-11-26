@@ -88,6 +88,8 @@ export interface CouncilPorts {
   /** Answers an approval a child raised; council decides, the runner applies it. */
   approve(threadId: string, approvalId: string, decision: 'allow' | 'deny'): Promise<void>;
   openPullRequest(threadId: string, request: PullRequestRequest): Promise<PullRequest>;
+  /** Commits any leftover work and pushes it so a rework reaches the PR before review. */
+  syncPullRequest?(threadId: string): Promise<void>;
   changesForThread(threadId: string): Promise<TaskChanges>;
 }
 

@@ -858,7 +858,9 @@ export function NoticeRow({ item }: { item: NoticeItem }) {
         'flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs leading-5',
         item.tone === 'error'
           ? 'border-error/40 bg-error-surface text-error-foreground'
-          : 'border-border bg-muted text-muted-foreground',
+          : item.tone === 'warning'
+            ? 'border-warning/40 bg-warning-surface text-warning-foreground'
+            : 'border-border bg-muted text-muted-foreground',
       )}
     >
       <Icon aria-hidden="true" strokeWidth={1.75} className="mt-0.5 size-3.5 shrink-0" />

@@ -202,7 +202,13 @@ export async function encodeImageFile(file: File): Promise<ImageEncodeResult> {
 
 /** The wire attachment for an image, carrying base64 instead of a path. */
 export function imageAttachment(file: File, image: EncodedImage): Attachment {
-  return { name: file.name, data: image.data, mimeType: image.mimeType };
+  return {
+    name: file.name,
+    data: image.data,
+    mimeType: image.mimeType,
+    width: image.width,
+    height: image.height,
+  };
 }
 
 /**

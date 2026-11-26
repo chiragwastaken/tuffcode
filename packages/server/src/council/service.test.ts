@@ -59,6 +59,7 @@ class FakePorts implements CouncilPorts {
   readonly turns: RunTurnInput[] = [];
   readonly deleted: string[] = [];
   readonly pullRequests: { threadId: string; title: string }[] = [];
+  readonly synced: string[] = [];
   readonly approvals: {
     threadId: string;
     approvalId: string;
@@ -150,6 +151,10 @@ class FakePorts implements CouncilPorts {
     this.pullRequests.push({ threadId, title: request.title });
     const number = this.pullRequests.length;
     return { url: `https://example.test/pull/${number}`, number };
+  }
+
+  async syncPullRequest(threadId: string): Promise<void> {
+    this.synced.push(threadId);
   }
 
   async changesForThread(): Promise<TaskChanges> {
@@ -614,6 +619,8 @@ describe('council review loop', () => {
       expect(workerTurns[1]?.threadId).toBe(workerTurns[0]?.threadId);
       expect(workerTurns[1]?.text).toContain('REWORK ROUND 1');
       expect(workerTurns[1]?.text).toContain('Handle null');
+      // The revision is pushed before the next review, so the PR is not stale.
+      expect(harness.ports.synced).toEqual([workerTurns[0]?.threadId]);
     } finally {
       await harness.dispose();
     }

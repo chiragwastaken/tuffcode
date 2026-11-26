@@ -201,6 +201,9 @@ export const AttachmentSchema = z
     data: z.string().optional(),
     /** Content-addressed id of a stored attachment, the form persisted messages carry. */
     id: z.string().optional(),
+    /** Pixel size after downscaling, for the context estimate and the chip tooltip. */
+    width: z.number().int().positive().optional(),
+    height: z.number().int().positive().optional(),
     mimeType: z.string().optional(),
   })
   .refine(

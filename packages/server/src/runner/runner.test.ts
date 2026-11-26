@@ -799,24 +799,23 @@ describe('thread runner', () => {
     expect(f.turnStatus(turnId)).toBe('failed');
   });
 
-  it('resolves attachments inside the worktree and rejects escaping paths', async () => {
+  it('resolves attachments inside the worktree and skips one that escapes with a notice', async () => {
     const f = setup();
-    const { turnId } = await f.runner.send('thr_a', '', [
+    const { turnId } = await f.runner.send('thr_a', 'look at these', [
       { name: 'shot.png', path: 'shot.png', mimeType: 'image/png' },
-      { name: 'notes.txt', path: 'notes.txt' },
+      { name: 'escape.txt', path: '../escape.txt' },
     ]);
     expect(turnId).toMatch(/^turn_/);
     const ctx = f.adapter.sends[0]?.ctx;
     expect(ctx?.attachments).toEqual([
       { name: 'shot.png', path: join(f.ctx.env.root, 'shot.png'), mimeType: 'image/png', kind: 'image' },
-      { name: 'notes.txt', path: join(f.ctx.env.root, 'notes.txt'), kind: 'file' },
     ]);
+    const notices = f.events.flatMap((event) =>
+      event.type === 'thread.event' && event.payload.type === 'notice' ? [event.payload] : [],
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.message).toContain('outside the worktree');
     f.adapter.end();
-
-    const other = setup();
-    await expect(
-      other.runner.send('thr_a', '', [{ name: 'escape', path: '../escape.txt' }]),
-    ).rejects.toMatchObject({ code: 'bad-request' });
   });
 
   it('passes inline image bytes through without a worktree path', async () => {
