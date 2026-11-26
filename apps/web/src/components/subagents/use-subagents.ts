@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import type { SubagentMessage } from '@tuffcode/contracts';
+import { useEffect, useMemo, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { isTerminalSubagentStatus, useAppStore, type SubagentChild } from '../../store/app-store';
+import { mergeSubagentMessages } from './subagent-model';
 
 /** The list refresh debounce: a spawn and its settle frame arrive close together. */
 const LIST_REFRESH_MS = 250;
@@ -63,4 +65,34 @@ export function useSubagentClock(children: readonly SubagentChild[]): number {
   }, [running]);
 
   return now;
+}
+
+/**
+ * Every mailbox row of one child, in both directions and in full: the persisted rows
+ * loaded once per child, merged with the live frames the store already holds. Reading
+ * here is read-only, so opening or closing the pane never touches the child's run.
+ */
+export function useSubagentMessages(child: SubagentChild): SubagentMessage[] {
+  const rpc = useRpc();
+  const [persisted, setPersisted] = useState<SubagentMessage[]>([]);
+
+  useEffect(() => {
+    let disposed = false;
+    setPersisted([]);
+    void rpc.request('subagents.messages', { childId: child.childId }).then(
+      (rows) => {
+        if (!disposed) setPersisted(rows);
+      },
+      // A failed load leaves the live frames on screen; the pane stays usable.
+      () => undefined,
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [rpc, child.childId]);
+
+  return useMemo(
+    () => mergeSubagentMessages(persisted, child.messages),
+    [persisted, child.messages],
+  );
 }

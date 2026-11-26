@@ -107,8 +107,13 @@ describe('subagent harness tool', () => {
   it('classifies read actions as allowed even in read-only turns', () => {
     expect(classifySubagentTool('read-only', { action: 'status' })).toBe('allow');
     expect(classifySubagentTool('read-only', { action: 'report' })).toBe('allow');
+    expect(classifySubagentTool('read-only', { action: 'ask' })).toBe('allow');
+    expect(classifySubagentTool('read-only', { action: 'read' })).toBe('allow');
     expect(classifySubagentTool('read-only', { action: 'spawn' })).toBe('deny');
+    expect(classifySubagentTool('read-only', { action: 'close' })).toBe('deny');
+    expect(classifySubagentTool('read-only', { action: 'answer' })).toBe('deny');
     expect(classifySubagentTool('ask', { action: 'stop' })).toBe('approve');
+    expect(classifySubagentTool('ask', { action: 'close' })).toBe('approve');
     expect(classifySubagentTool('full-auto', {})).toBe('allow');
     expect(classifySubagentTool('full-auto', { action: 'nope' })).toBe('deny');
   });

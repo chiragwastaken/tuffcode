@@ -5,7 +5,7 @@ import type {
   SubagentType,
   Thread,
 } from '@tuffcode/contracts';
-import { SubagentTypeSchema } from '@tuffcode/contracts';
+import { SubagentTypeSchema, councilAutonomy } from '@tuffcode/contracts';
 import type { Council } from '../council/types.js';
 import type { Repos } from '../db/repos/index.js';
 import { notFound } from '../errors.js';
@@ -198,7 +198,7 @@ export async function runCommand(
       const { goalId } = await deps.council.start({
         threadId: thread.id,
         goal: parsed.args,
-        autonomy: 'manual',
+        autonomy: councilAutonomy(deps.repos.settings.get()),
       });
       return { kind: 'text', text: `Council goal ${goalId} started.` };
     }

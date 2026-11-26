@@ -3,9 +3,11 @@ import type { SubagentChild } from '../../store/app-store';
 import {
   SUBAGENT_CHIP_LIMIT,
   childForThread,
+  mergeSubagentMessages,
   selectActiveSubagent,
   subagentElapsedMs,
   subagentFinishedLabel,
+  subagentMessageDirectionLabel,
   subagentStripChips,
   subagentsOfThread,
   type SubagentChip,
@@ -27,6 +29,7 @@ function child(overrides: Partial<SubagentChild> & { childId: string }): Subagen
     finishedAt: null,
     events: [],
     nextSeq: 0,
+    closedAt: null,
     messages: [],
     awaitingReopen: false,
     ...overrides,
@@ -168,5 +171,35 @@ describe('subagentElapsedMs', () => {
       ),
     ).toBe(4500);
     expect(subagentElapsedMs(child({ childId: 'a', startedAt: null }), 1)).toBeNull();
+  });
+});
+
+describe('mergeSubagentMessages', () => {
+  const row = (id: string, createdAt: string, kind: 'message' | 'report' | 'question' | 'answer') => ({
+    id,
+    childId: 'sub_1',
+    direction: kind === 'answer' || kind === 'message' ? ('to-child' as const) : ('to-parent' as const),
+    kind,
+    text: `text of ${id}`,
+    createdAt,
+  });
+
+  it('merges persisted and live rows, dedupes by id and orders by time', () => {
+    const persisted = [row('sm_2', '2026-01-01T00:00:02.000Z', 'report')];
+    const live = [
+      row('sm_1', '2026-01-01T00:00:01.000Z', 'message'),
+      row('sm_2', '2026-01-01T00:00:02.000Z', 'report'),
+      row('sm_3', '2026-01-01T00:00:03.000Z', 'question'),
+    ];
+    expect(mergeSubagentMessages(persisted, live).map((message) => message.id)).toEqual([
+      'sm_1',
+      'sm_2',
+      'sm_3',
+    ]);
+  });
+
+  it('names both directions in words', () => {
+    expect(subagentMessageDirectionLabel(row('sm_1', T0, 'message'))).toBe('parent to child');
+    expect(subagentMessageDirectionLabel(row('sm_2', T0, 'report'))).toBe('child to parent');
   });
 });
