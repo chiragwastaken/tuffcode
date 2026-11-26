@@ -1,12 +1,12 @@
 import { Terminal, type TerminalHandle } from '@tuffcode/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RpcClient } from '../../rpc/client';
+import { useAppStore } from '../../store/app-store';
 import { TERMINAL_MENU, type ActionContext } from '../actions';
 import { useActionPorts } from '../menu/action-context';
 import { useContextMenuTrigger } from '../menu/Menu';
 import { subscribeTerminalData } from './terminal-data';
 import { TerminalError, terminalErrorMessage } from './TerminalError';
-import { TERMINAL_FONT_SIZE } from './terminal-size';
 
 /** Coalesce the resize storm a window drag produces into one RPC call. */
 const RESIZE_DEBOUNCE_MS = 150;
@@ -24,6 +24,10 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
   const resizeTimerRef = useRef<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const ports = useActionPorts();
+  // Three primitive selectors, so a save elsewhere in Settings does not re-render the pty.
+  const scrollback = useAppStore((state) => state.settings?.terminalScrollback);
+  const fontSize = useAppStore((state) => state.settings?.terminalFontSize);
+  const cursorStyle = useAppStore((state) => state.settings?.cursorStyle);
 
   useEffect(() => {
     return subscribeTerminalData(rpc, terminalId, (data) => handleRef.current?.write(data));
@@ -94,7 +98,9 @@ export function TerminalView({ terminalId, rpc, active, onReopen }: TerminalView
       <Terminal
         ref={handleRef}
         autoFocus={active}
-        fontSize={TERMINAL_FONT_SIZE}
+        fontSize={fontSize}
+        scrollback={scrollback}
+        cursorStyle={cursorStyle}
         onData={sendInput}
         onResize={sendResize}
         className="p-1.5"

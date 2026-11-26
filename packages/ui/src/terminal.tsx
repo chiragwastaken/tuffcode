@@ -4,6 +4,7 @@ import { useEffect, useImperativeHandle, useRef, type Ref } from 'react';
 // oxlint-disable-next-line import/no-unassigned-import -- xterm ships its own stylesheet
 import '@xterm/xterm/css/xterm.css';
 import { cn } from './cn';
+import { terminalOptions, type TerminalCursorStyle } from './terminal-options';
 
 export interface TerminalHandle {
   /** Write raw terminal data (output from the pty). */
@@ -24,6 +25,9 @@ export interface TerminalProps {
   onResize?: (size: { cols: number; rows: number }) => void;
   autoFocus?: boolean;
   fontSize?: number;
+  /** Lines kept in the renderer's scrollback buffer. The pty never sees this. */
+  scrollback?: number;
+  cursorStyle?: TerminalCursorStyle;
   className?: string;
   ref?: Ref<TerminalHandle>;
 }
@@ -53,7 +57,9 @@ export function Terminal({
   onData,
   onResize,
   autoFocus = true,
-  fontSize = 13,
+  fontSize,
+  scrollback,
+  cursorStyle,
   className,
   ref,
 }: TerminalProps) {
@@ -64,6 +70,13 @@ export function Terminal({
   const onResizeRef = useRef(onResize);
   onDataRef.current = onData;
   onResizeRef.current = onResize;
+
+  const appearance = terminalOptions({ scrollback, fontSize, cursorStyle });
+  // The mount effect runs once, so it reads the appearance from a ref instead of
+  // re-creating the terminal whenever a setting changes.
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
+  const appliedFontSizeRef = useRef(appearance.fontSize);
 
   useImperativeHandle(
     ref,
@@ -82,11 +95,13 @@ export function Terminal({
     if (!element) return;
 
     const styles = getComputedStyle(document.documentElement);
+    const initial = appearanceRef.current;
     const term = new XTerm({
-      cursorBlink: true,
-      fontSize,
+      cursorBlink: initial.cursorBlink,
+      cursorStyle: initial.cursorStyle,
+      fontSize: initial.fontSize,
       fontFamily: readVar(styles, '--font-mono') ?? 'monospace',
-      scrollback: 5000,
+      scrollback: initial.scrollback,
       theme: readTheme(),
     });
     const fit = new FitAddon();
@@ -123,16 +138,23 @@ export function Terminal({
     };
   }, []);
 
+  // xterm options are mutable, so a settings change applies to the open terminal in place:
+  // no new pty, no lost scrollback. Only a font size change needs a refit.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.fontSize = fontSize;
+    term.options.scrollback = appearance.scrollback;
+    term.options.cursorStyle = appearance.cursorStyle;
+    term.options.cursorBlink = appearance.cursorBlink;
+    if (appliedFontSizeRef.current === appearance.fontSize) return;
+    appliedFontSizeRef.current = appearance.fontSize;
+    term.options.fontSize = appearance.fontSize;
     try {
       fitRef.current?.fit();
     } catch {
       // Ignore transient zero-size measurements during layout changes.
     }
-  }, [fontSize]);
+  }, [appearance.scrollback, appearance.fontSize, appearance.cursorStyle, appearance.cursorBlink]);
 
   return <div ref={containerRef} className={cn('size-full bg-terminal-background', className)} />;
 }

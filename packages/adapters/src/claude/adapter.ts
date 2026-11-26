@@ -399,7 +399,8 @@ export async function createClaudeAdapter(
   return new ClaudeAdapter(provider, deps, executable, overrides.queryFn ?? defaultQueryFn);
 }
 
-function mapPermissionMode(mode: PermissionMode): ClaudePermissionMode {
+/** The SDK permission mode one Tuffcode mode maps to. Exported for the parity tests. */
+export function mapPermissionMode(mode: PermissionMode): ClaudePermissionMode {
   switch (mode) {
     case 'read-only':
       return 'plan';
