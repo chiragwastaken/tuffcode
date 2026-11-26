@@ -9,7 +9,7 @@ import {
 } from './settings-draft';
 
 const APPEARANCE_KEYS = ['theme', 'fontSize', 'sidebarWidth', 'panelAnimation'] as const;
-const TOOL_KEYS = ['enabledTools', 'maxToolIterations', 'shell'] as const;
+const TOOL_KEYS = ['enabledTools', 'shell'] as const;
 
 function settings(overrides: Partial<Settings> = {}): Settings {
   return { ...DEFAULT_SETTINGS, ...overrides };
@@ -72,10 +72,10 @@ describe('settings draft dirty state', () => {
 describe('buildSettingsPatch', () => {
   it('sends only changed keys', () => {
     const stored = settings({ shell: 'bash' });
-    const draft = { ...pickSettings(stored, TOOL_KEYS), maxToolIterations: 12 };
+    const draft = { ...pickSettings(stored, TOOL_KEYS), enabledTools: ['read'] };
     const patch = buildSettingsPatch(draft, stored, TOOL_KEYS);
 
-    expect(patch).toEqual({ maxToolIterations: 12 });
+    expect(patch).toEqual({ enabledTools: ['read'] });
     expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
   });
 

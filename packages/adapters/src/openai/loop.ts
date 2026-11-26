@@ -18,15 +18,14 @@ import {
   type ToolSessionState,
 } from './tools.js';
 import {
-  effectiveToolIterations,
   isServerToolOffered,
   isToolDisabled,
+  RepeatedToolCallGuard,
   resolveToolOptions,
 } from '../tool-policy.js';
 import { isExtraToolName } from '../extra-tools.js';
 import { redactToolInput } from '../redact.js';
 
-export const MAX_TOOL_ITERATIONS = 40;
 const LF = String.fromCharCode(10);
 
 export interface RunTurnOptions {
@@ -37,7 +36,6 @@ export interface RunTurnOptions {
   deps: AdapterDeps;
   signal: AbortSignal;
   requestApproval: (approvalId: string) => Promise<ApprovalChoice>;
-  maxIterations?: number;
 }
 
 interface ToolCallAccumulator {
@@ -65,6 +63,21 @@ function isAbortError(error: unknown): boolean {
   return (
     error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'))
   );
+}
+
+function parseToolArguments(json: string): {
+  args: Record<string, unknown> | null;
+  parseError: string | null;
+} {
+  try {
+    const parsed: unknown = json.length === 0 ? {} : JSON.parse(json);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return { args: parsed as Record<string, unknown>, parseError: null };
+    }
+    return { args: null, parseError: 'tool arguments must be a JSON object' };
+  } catch (error) {
+    return { args: null, parseError: 'invalid tool arguments: ' + errorMessage(error) };
+  }
 }
 
 function parseToolCallDelta(value: unknown, fallbackIndex: number): ToolCallDelta {
@@ -161,16 +174,11 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
   const { ctx, client, messages, state, deps, signal } = options;
   const turnId = ctx.turnId;
   const toolOptions = resolveToolOptions(ctx, deps);
-  const maxIterations = effectiveToolIterations(
-    ctx.maxToolIterations,
-    options.maxIterations,
-    MAX_TOOL_ITERATIONS,
-  );
+  const repeatGuard = new RepeatedToolCallGuard();
   let reason: 'complete' | 'interrupted' | 'error' = 'complete';
-  let completed = false;
 
   try {
-    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    for (let iteration = 0; ; iteration += 1) {
       if (signal.aborted) {
         reason = 'interrupted';
         break;
@@ -207,6 +215,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
 
       try {
         for await (const raw of streamSse(stream, { signal, logger: deps.logger })) {
+          if (signal.aborted) break;
           const chunk = parseChunk(raw);
           if (chunk === null) continue;
           if (chunk.inputTokens !== undefined) inputTokens = chunk.inputTokens;
@@ -256,7 +265,20 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
 
       if (ordered.length === 0) {
         messages.push({ role: 'assistant', content: textParts.join('') });
-        completed = true;
+        break;
+      }
+
+      const parsedArguments = ordered.map((call) => parseToolArguments(call.arguments));
+      const repeated = repeatGuard.observe(
+        textParts.join(''),
+        ordered.map((call, index) => ({
+          name: call.name,
+          args: parsedArguments[index]?.args ?? call.arguments,
+        })),
+      );
+      if (repeated) {
+        yield { type: 'error', message: 'openai: repeated identical tool call', retryable: false };
+        reason = 'error';
         break;
       }
 
@@ -271,26 +293,14 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
         tool_calls: assistantCalls,
       });
 
-      for (const call of assistantCalls) {
+      for (const [index, call] of assistantCalls.entries()) {
         const toolCallId = call.id;
         if (signal.aborted) {
           messages.push({ role: 'tool', tool_call_id: toolCallId, content: '[interrupted]' });
           continue;
         }
 
-        let args: Record<string, unknown> | null = null;
-        let parseError: string | null = null;
-        try {
-          const parsed: unknown =
-            call.function.arguments.length === 0 ? {} : JSON.parse(call.function.arguments);
-          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-            args = parsed as Record<string, unknown>;
-          } else {
-            parseError = 'tool arguments must be a JSON object';
-          }
-        } catch (error) {
-          parseError = 'invalid tool arguments: ' + errorMessage(error);
-        }
+        const { args, parseError } = parsedArguments[index] ?? { args: null, parseError: null };
         yield {
           type: 'tool.started',
           turnId,
@@ -369,15 +379,6 @@ export async function* runTurn(options: RunTurnOptions): AsyncIterable<AdapterEv
       yield { type: 'error', message: 'openai: ' + errorMessage(error), retryable: false };
       reason = 'error';
     }
-  }
-
-  if (!completed && reason === 'complete') {
-    reason = 'error';
-    yield {
-      type: 'error',
-      message: `openai: stopped after ${maxIterations} tool iterations`,
-      retryable: false,
-    };
   }
 
   yield { type: 'turn.finished', turnId, reason };

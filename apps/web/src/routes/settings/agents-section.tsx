@@ -37,7 +37,6 @@ import { useAppStore } from '../../store/app-store';
 
 const KEYS = [
   'enabledTools',
-  'maxToolIterations',
   'shell',
   'subagentModels',
   'subagentConcurrency',
@@ -185,25 +184,10 @@ export function AgentsSection() {
       <Card>
         <CardHeader>
           <CardTitle>Limits</CardTitle>
-          <CardDescription>How long one turn may run before the harness stops.</CardDescription>
+          <CardDescription>How the harness runs its tools and subagents.</CardDescription>
         </CardHeader>
 
         <div className="divide-y divide-border border-t border-border">
-          <SettingsRow
-            label="Max iterations"
-            htmlFor="agents-max-iterations"
-            description="Tool calls the harness may make in a single turn. When it hits the cap it stops and reports back instead of looping."
-          >
-            <SettingsSlider
-              id="agents-max-iterations"
-              value={draft?.maxToolIterations ?? 40}
-              min={1}
-              max={100}
-              unit="calls"
-              onChange={(maxToolIterations) => update({ maxToolIterations })}
-            />
-          </SettingsRow>
-
           <SettingsRow
             label="Parallel subagents"
             htmlFor="agents-subagent-concurrency"

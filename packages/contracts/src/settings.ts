@@ -115,7 +115,6 @@ const SettingsFields = {
   fontSize: z.number().int().min(12).max(20),
   sidebarWidth: z.number().int().min(208).max(360),
   panelAnimation: z.boolean(),
-  maxToolIterations: z.number().int().min(1).max(100),
   enabledTools: z.string().array(),
   terminalScrollback: z.number().int().nonnegative(),
   terminalFontSize: z.number().int().min(11).max(20),
@@ -154,7 +153,6 @@ export const SettingsSchema = z.object({
   fontSize: SettingsFields.fontSize.default(14),
   sidebarWidth: SettingsFields.sidebarWidth.default(256),
   panelAnimation: SettingsFields.panelAnimation.default(false),
-  maxToolIterations: SettingsFields.maxToolIterations.default(40),
   enabledTools: SettingsFields.enabledTools.default(() => [
     'bash',
     'read',

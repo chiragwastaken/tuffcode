@@ -15,7 +15,7 @@ import {
   type AnthropicMessage,
   type FetchFn,
 } from './client.js';
-import { DEFAULT_MAX_TOOL_ITERATIONS, compactHistory, runTurn } from './loop.js';
+import { compactHistory, runTurn } from './loop.js';
 import { createToolSessionState, type ToolSessionState } from '../openai/tools.js';
 
 const LF = String.fromCharCode(10);
@@ -23,7 +23,6 @@ const LF = String.fromCharCode(10);
 export interface AnthropicAdapterOverrides {
   fetchFn?: FetchFn;
   sleep?: (ms: number) => Promise<void>;
-  maxIterations?: number;
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -32,14 +31,6 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
     resolve = settle;
   });
   return { promise, resolve };
-}
-
-/** The settings default is 40; a provider may narrow it, an override wins. */
-function maxIterationsFor(provider: ProviderConfig, override: number | undefined): number {
-  if (override !== undefined) return override;
-  const raw = provider.config.maxToolIterations;
-  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= 100) return raw;
-  return DEFAULT_MAX_TOOL_ITERATIONS;
 }
 
 function defaultModel(provider: ProviderConfig): string {
@@ -65,7 +56,6 @@ class AnthropicAdapter implements AdapterSession {
     private readonly deps: AdapterDeps,
     private readonly client: AnthropicClient,
     private readonly maxTokens: number,
-    private readonly maxIterations: number,
   ) {
     this.id = newId('sess');
     this.providerId = provider.id;
@@ -100,7 +90,6 @@ class AnthropicAdapter implements AdapterSession {
         signal: controller.signal,
         maxTokens: this.maxTokens,
         requestApproval: (approvalId) => this.requestApproval(approvalId),
-        maxIterations: this.maxIterations,
       });
     } finally {
       ctx.signal.removeEventListener('abort', onAbort);
@@ -205,11 +194,5 @@ export async function createAnthropicAdapter(
     ...(overrides.sleep !== undefined ? { sleep: overrides.sleep } : {}),
   });
   deps.logger.debug('anthropic adapter created', { providerId: provider.id });
-  return new AnthropicAdapter(
-    provider,
-    deps,
-    client,
-    config.maxTokens,
-    maxIterationsFor(provider, overrides.maxIterations),
-  );
+  return new AnthropicAdapter(provider, deps, client, config.maxTokens);
 }

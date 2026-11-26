@@ -18,8 +18,6 @@ export interface TurnContext {
   signal: AbortSignal;
   /** Tool names the user enabled in settings; unset means every harness tool. */
   toolAllowlist?: string[];
-  /** Per-turn cap on tool round-trips; unset leaves the adapter's own cap in force. */
-  maxToolIterations?: number;
   /** Output token cap for this turn; unset leaves the adapter's configured default. */
   maxOutputTokens?: number;
   /** The thread the turn belongs to, so server tools attribute work without guessing. */

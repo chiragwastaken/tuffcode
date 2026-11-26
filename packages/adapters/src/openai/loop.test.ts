@@ -81,6 +81,38 @@ async function collect(iterable: AsyncIterable<AdapterEvent>): Promise<AdapterEv
   return events;
 }
 
+/** One complete `write` tool call in a single delta, distinct per `index`. */
+function toolCallPayload(index: number): unknown[] {
+  const args = JSON.stringify({ path: 'out.txt', content: 'v' + index });
+  return [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call_' + index,
+                function: { name: 'write', arguments: args },
+              },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    },
+  ];
+}
+
+/** A body whose first read rejects, standing in for a dropped provider connection. */
+function failingStream(message: string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error(message));
+    },
+  });
+}
+
 describe('runTurn', () => {
   it('accumulates tool call deltas and executes the tool', async () => {
     const client = new FakeClient([
@@ -201,9 +233,12 @@ describe('runTurn', () => {
     ]);
   });
 
-  it('stops at the iteration cap', async () => {
-    const payload = fixture('tool-call-stream');
-    const client = new FakeClient([streamOf(payload), streamOf(payload)]);
+  it('runs a long productive turn without a call cap', async () => {
+    const streams = Array.from({ length: 50 }, (_, index) => streamOf(toolCallPayload(index)));
+    const client = new FakeClient([
+      ...streams,
+      streamOf([{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }]),
+    ]);
     const events = await collect(
       runTurn({
         ctx: context(),
@@ -213,15 +248,97 @@ describe('runTurn', () => {
         deps,
         signal: new AbortController().signal,
         requestApproval: async () => 'allow',
-        maxIterations: 2,
       }),
     );
+
+    expect(client.requests).toHaveLength(51);
+    expect(events.filter((event) => event.type === 'tool.finished')).toHaveLength(50);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'complete',
+    });
+  });
+
+  it('stops when the same tool call repeats three times with no new text', async () => {
+    const payload = toolCallPayload(0);
+    const client = new FakeClient([streamOf(payload), streamOf(payload), streamOf(payload)]);
+    const events = await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests).toHaveLength(3);
+    expect(events.filter((event) => event.type === 'tool.finished')).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      { type: 'error', message: 'openai: repeated identical tool call', retryable: false },
+    ]);
     expect(events.at(-1)).toEqual({
       type: 'turn.finished',
       turnId: 'turn_1',
       reason: 'error',
     });
-    expect(events.some((event) => event.type === 'error')).toBe(true);
+  });
+
+  it('reports interrupted when the signal aborts mid loop', async () => {
+    const controller = new AbortController();
+    const client = new FakeClient([streamOf(toolCallPayload(0))]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ permissionMode: 'ask', signal: controller.signal }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: controller.signal,
+        requestApproval: async () => {
+          controller.abort();
+          return 'allow';
+        },
+      }),
+    );
+
+    expect(events.find((event) => event.type === 'tool.finished')).toMatchObject({
+      type: 'tool.finished',
+      output: '[interrupted]',
+      isError: true,
+    });
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'interrupted',
+    });
+  });
+
+  it('reports a stream failure as one error and one finish', async () => {
+    const client = new FakeClient([failingStream('socket closed')]);
+    const events = await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    expect(client.requests).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      { type: 'error', message: 'openai: socket closed', retryable: true },
+    ]);
+    expect(events.filter((event) => event.type === 'turn.finished')).toEqual([
+      { type: 'turn.finished', turnId: 'turn_1', reason: 'error' },
+    ]);
   });
 
   it('offers only the allowlisted tools and rejects a disabled call', async () => {
@@ -254,35 +371,6 @@ describe('runTurn', () => {
       type: 'turn.finished',
       turnId: 'turn_1',
       reason: 'complete',
-    });
-  });
-
-  it('honours the per-turn iteration cap over the adapter cap', async () => {
-    const payload = fixture('tool-call-stream');
-    const client = new FakeClient([streamOf(payload), streamOf(payload)]);
-    const events = await collect(
-      runTurn({
-        ctx: context({ maxToolIterations: 1, toolAllowlist: ['write'] }),
-        client,
-        messages: [{ role: 'user', content: 'go' }],
-        state: createToolSessionState(),
-        deps,
-        signal: new AbortController().signal,
-        requestApproval: async () => 'allow',
-        maxIterations: 5,
-      }),
-    );
-
-    expect(client.requests).toHaveLength(1);
-    expect(
-      events.some(
-        (event) => event.type === 'error' && event.message.includes('stopped after 1 tool'),
-      ),
-    ).toBe(true);
-    expect(events.at(-1)).toEqual({
-      type: 'turn.finished',
-      turnId: 'turn_1',
-      reason: 'error',
     });
   });
 

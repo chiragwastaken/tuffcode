@@ -544,7 +544,6 @@ export function createRunner(deps: RunnerDeps): Runner {
         ...(policy.toolAllowlist === undefined ? {} : { toolAllowlist: policy.toolAllowlist }),
         toolOptions: policy.toolOptions,
         ...(effort === undefined ? {} : { reasoningEffort: effort }),
-        maxToolIterations: settings.maxToolIterations,
         maxOutputTokens: limits.maxOutputTokens,
       };
       active.set(thread.id, { session, turnId, controller, adapterKey });

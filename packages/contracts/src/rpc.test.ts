@@ -1523,7 +1523,6 @@ describe('settings', () => {
       fontSize: 14,
       sidebarWidth: 256,
       panelAnimation: false,
-      maxToolIterations: 40,
       enabledTools: ['bash', 'read', 'edit', 'write', 'glob', 'grep'],
       terminalScrollback: 5000,
       terminalFontSize: 13,
@@ -1591,9 +1590,6 @@ describe('settings', () => {
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, sidebarWidth: 400 }).success).toBe(
       false,
     );
-    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, maxToolIterations: 0 }).success).toBe(
-      false,
-    );
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, terminalFontSize: 10 }).success).toBe(
       false,
     );
@@ -1627,6 +1623,13 @@ describe('settings', () => {
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, showContextMeter: 1 }).success).toBe(
       false,
     );
+  });
+
+  it('ignores the legacy maxToolIterations key in a stored settings row', () => {
+    const stored = { ...DEFAULT_SETTINGS, maxToolIterations: 40 };
+    const parsed = SettingsSchema.parse(stored);
+    expect(parsed).not.toHaveProperty('maxToolIterations');
+    expect(parsed).toEqual(DEFAULT_SETTINGS);
   });
 
   it('parses context limit settings and patches', () => {
