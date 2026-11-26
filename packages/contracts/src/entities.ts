@@ -243,6 +243,13 @@ export type Model = z.infer<typeof ModelSchema>;
 export const McpTransportSchema = z.enum(['stdio', 'http']);
 export type McpTransport = z.infer<typeof McpTransportSchema>;
 
+/**
+ * How a connector proves who it is: nothing, a stored header value (bearer token or
+ * API key), or an OAuth 2.1 authorization code flow with PKCE.
+ */
+export const McpAuthModeSchema = z.enum(['none', 'bearer', 'oauth']);
+export type McpAuthMode = z.infer<typeof McpAuthModeSchema>;
+
 export const McpServerSchema = z.object({
   id: IdSchema,
   label: z.string().min(1),
@@ -254,7 +261,14 @@ export const McpServerSchema = z.object({
   cwd: z.string().nullable(),
   /** Streamable HTTP endpoint for an http server. */
   url: z.string().nullable().default(null),
-  /** True when a bearer token is stored in the secret bridge. The value never leaves it. */
+  /** How the connector authenticates. Stdio servers default to `none`. */
+  authMode: McpAuthModeSchema.default('none'),
+  /** Request header that carries the credential. OAuth always uses Authorization. */
+  authHeader: z.string().min(1).max(120).default('Authorization'),
+  /**
+   * True when a credential is stored in the secret bridge: the header value for
+   * `bearer`, the token bundle for `oauth`. The value never leaves the bridge.
+   */
   hasSecret: z.boolean().default(false),
   /** The installed plugin that owns this server, or null for one the user added. */
   pluginId: IdSchema.nullable().default(null),

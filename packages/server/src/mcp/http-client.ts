@@ -18,13 +18,37 @@ export const HTTP_MCP_PROTOCOL_VERSION = '2025-06-18';
 export const HTTP_MCP_BODY_LIMIT = 4 * 1024 * 1024;
 
 export const OAUTH_REQUIRED_MESSAGE =
-  'This connector needs OAuth sign-in, which Tuffcode does not support yet. Add a bearer token instead.';
+  'This connector needs OAuth sign-in. Choose Browser OAuth in the connector settings and sign in again.';
+
+/**
+ * Thrown when the connector cannot authenticate without the user signing in again. The
+ * service turns it into `needsAuth: true` on `mcp.test` instead of a raw HTTP error.
+ */
+export class McpAuthRequiredError extends Error {
+  readonly code = 'mcp_auth_required';
+
+  constructor(message: string = OAUTH_REQUIRED_MESSAGE) {
+    super(message);
+    this.name = 'McpAuthRequiredError';
+  }
+}
 
 export type McpFetch = (input: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * Supplies credentials per request. `headers` runs before every call, so an expired
+ * OAuth token is refreshed before the request rather than after a 401. `refresh` runs
+ * after a 401; true means new credentials exist and the call may be retried once.
+ */
+export interface HttpMcpAuthProvider {
+  headers(): Promise<Record<string, string>>;
+  refresh?(): Promise<boolean>;
+}
 
 export interface HttpMcpClientOptions {
   url: string;
   headers?: Record<string, string>;
+  auth?: HttpMcpAuthProvider;
   timeoutMs?: number;
   fetchFn?: McpFetch;
 }
@@ -110,9 +134,11 @@ export function createHttpMcpClient(options: HttpMcpClientOptions): McpClient {
   let nextId = 1;
   let initPromise: Promise<void> | null = null;
 
-  function headers(): Record<string, string> {
+  async function headers(): Promise<Record<string, string>> {
+    const supplied = options.auth === undefined ? {} : await options.auth.headers();
     return {
       ...baseHeaders,
+      ...supplied,
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
       ...(sessionId === null ? {} : { 'mcp-session-id': sessionId }),
@@ -124,20 +150,24 @@ export function createHttpMcpClient(options: HttpMcpClientOptions): McpClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
-    try {
-      const response = await fetchFn(url, {
+    const send = (headerSet: Record<string, string>): Promise<Response> =>
+      fetchFn(url, {
         method: 'POST',
-        headers: headers(),
+        headers: headerSet,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+    try {
+      let response = await send(await headers());
       if (response.status === 401 || response.status === 403) {
         const challenge = response.headers.get('www-authenticate') ?? '';
-        throw new Error(
-          /bearer|oauth|resource_metadata/i.test(challenge) && !('authorization' in lowerKeys(baseHeaders))
-            ? OAUTH_REQUIRED_MESSAGE
-            : `the MCP server refused the credentials (status ${response.status})`,
-        );
+        await response.body?.cancel().catch(() => undefined);
+        const refreshed = options.auth?.refresh === undefined ? false : await options.auth.refresh();
+        if (refreshed) response = await send(await headers());
+        if (response.status === 401 || response.status === 403) {
+          await response.body?.cancel().catch(() => undefined);
+          throw refusal(challenge, response.status, options.auth);
+        }
       }
       if (!response.ok && response.status !== 202) {
         throw new Error(`the MCP server answered with status ${response.status}`);
@@ -193,7 +223,11 @@ export function createHttpMcpClient(options: HttpMcpClientOptions): McpClient {
       const id = sessionId;
       sessionId = null;
       try {
-        await fetchFn(url, { method: 'DELETE', headers: { ...baseHeaders, 'mcp-session-id': id } });
+        const supplied = options.auth === undefined ? {} : await options.auth.headers();
+        await fetchFn(url, {
+          method: 'DELETE',
+          headers: { ...baseHeaders, ...supplied, 'mcp-session-id': id },
+        });
       } catch {
         // Ending the session is a courtesy; the server expires it on its own.
       }
@@ -201,8 +235,16 @@ export function createHttpMcpClient(options: HttpMcpClientOptions): McpClient {
   };
 }
 
-function lowerKeys(record: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key.toLowerCase(), value]));
+function refusal(
+  challenge: string,
+  status: number,
+  auth: HttpMcpAuthProvider | undefined,
+): Error {
+  if (auth?.refresh !== undefined) {
+    return new McpAuthRequiredError('The connector needs you to sign in again.');
+  }
+  if (/bearer|oauth|resource_metadata/i.test(challenge)) return new McpAuthRequiredError();
+  return new Error(`the MCP server refused the credentials (status ${status})`);
 }
 
 function parseJsonBody(body: string): unknown[] {

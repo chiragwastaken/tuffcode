@@ -1,4 +1,4 @@
-import type { McpServer } from '@tuffcode/contracts';
+import type { McpAuthMode, McpServer, McpTransport } from '@tuffcode/contracts';
 import {
   Badge,
   Button,
@@ -20,6 +20,7 @@ import { useRpc } from '../../rpc/rpc-context';
 import {
   buildMcpUpsertParams,
   emptyMcpDraft,
+  mcpAuthSummary,
   mcpDraftFromServer,
   validateMcpDraft,
   type McpDraft,
@@ -33,8 +34,15 @@ type ServersState =
 
 type TestState =
   | { status: 'running' }
-  | { status: 'done'; ok: boolean; detail: string; toolCount: number }
+  | { status: 'done'; ok: boolean; detail: string; toolCount: number; needsAuth: boolean }
   | { status: 'error'; message: string };
+
+interface OauthStatus {
+  connected: boolean;
+  needsAuth: boolean;
+  expiresAt: string | null;
+  authorizationServer: string | null;
+}
 
 interface RemoveTarget {
   server: McpServer;
@@ -42,8 +50,31 @@ interface RemoveTarget {
   error: string | null;
 }
 
+const AUTH_MODES: readonly { value: McpAuthMode; label: string; hint: string }[] = [
+  { value: 'none', label: 'None', hint: 'No credential is sent.' },
+  {
+    value: 'bearer',
+    label: 'Bearer token / API key',
+    hint: 'One header on every request. The value stays in your OS keychain.',
+  },
+  {
+    value: 'oauth',
+    label: 'Browser OAuth',
+    hint: 'Sign in with the provider in your system browser; Tuffcode stores the token it returns.',
+  },
+];
+
+const TRANSPORTS: readonly { value: McpTransport; label: string }[] = [
+  { value: 'stdio', label: 'Local process (stdio)' },
+  { value: 'http', label: 'Remote (http)' },
+];
+
 function commandLine(server: McpServer): string {
   return [server.command, ...server.args].join(' ');
+}
+
+function endpointLine(server: McpServer): string {
+  return server.transport === 'http' ? (server.url ?? '') : commandLine(server);
 }
 
 export function McpSection() {
@@ -57,15 +88,33 @@ export function McpSection() {
   const [tests, setTests] = useState<Record<string, TestState>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState<Record<string, boolean>>({});
+  const [oauthStatus, setOauthStatus] = useState<Record<string, OauthStatus>>({});
   const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     rpc
       .request('mcp.list', {})
-      .then((entries) => {
+      .then(async (entries) => {
         if (cancelled) return;
         setServers({ status: 'ready', servers: entries });
+        const statuses = await Promise.all(
+          entries
+            .filter((server) => server.authMode === 'oauth')
+            .map(async (server) => {
+              const status = await rpc
+                .request('mcp.oauth.status', { id: server.id })
+                .catch(() => null);
+              return [server.id, status] as const;
+            }),
+        );
+        if (cancelled) return;
+        setOauthStatus(
+          Object.fromEntries(
+            statuses.filter((entry): entry is readonly [string, OauthStatus] => entry[1] !== null),
+          ),
+        );
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
@@ -78,6 +127,15 @@ export function McpSection() {
       cancelled = true;
     };
   }, [rpc, reloadToken]);
+
+  // Settings and the plugin dialog share one server; a save anywhere refreshes both.
+  useEffect(
+    () =>
+      rpc.onEvent((event) => {
+        if (event.type === 'mcp.updated') setReloadToken((previous) => previous + 1);
+      }),
+    [rpc],
+  );
 
   function reload(): void {
     setReloadToken((previous) => previous + 1);
@@ -153,8 +211,10 @@ export function McpSection() {
           ok: result.ok,
           detail: result.detail,
           toolCount: result.tools.length,
+          needsAuth: result.needsAuth === true,
         },
       }));
+      if (result.needsAuth === true) reload();
     } catch (error) {
       setTests((previous) => ({
         ...previous,
@@ -173,10 +233,12 @@ export function McpSection() {
       await rpc.request('mcp.upsert', {
         id: server.id,
         label: server.label,
+        transport: server.transport,
         command: server.command,
         args: server.args,
         env: server.env,
         cwd: server.cwd,
+        url: server.url,
         enabled: !server.enabled,
       });
       reload();
@@ -187,6 +249,51 @@ export function McpSection() {
       );
     } finally {
       setTogglingId(null);
+    }
+  }
+
+  async function handleSignIn(server: McpServer): Promise<void> {
+    setRowError(server.id, null);
+    setAuthBusy((previous) => ({ ...previous, [server.id]: true }));
+    try {
+      const flow = await rpc.request('mcp.oauth.start', { id: server.id });
+      const open = window.tuffcode?.openExternal;
+      if (open === undefined) {
+        setRowError(
+          server.id,
+          `Open this URL in a browser to finish signing in: ${flow.authorizeUrl}`,
+        );
+        return;
+      }
+      open(flow.authorizeUrl);
+    } catch (error) {
+      setRowError(
+        server.id,
+        error instanceof Error ? error.message : 'Could not start the sign-in.',
+      );
+    } finally {
+      setAuthBusy((previous) => ({ ...previous, [server.id]: false }));
+    }
+  }
+
+  async function handleDisconnect(server: McpServer): Promise<void> {
+    setRowError(server.id, null);
+    setAuthBusy((previous) => ({ ...previous, [server.id]: true }));
+    try {
+      await rpc.request('mcp.oauth.disconnect', { id: server.id });
+      setTests((previous) => {
+        const next = { ...previous };
+        delete next[server.id];
+        return next;
+      });
+      reload();
+    } catch (error) {
+      setRowError(
+        server.id,
+        error instanceof Error ? error.message : 'Could not disconnect the connector.',
+      );
+    } finally {
+      setAuthBusy((previous) => ({ ...previous, [server.id]: false }));
     }
   }
 
@@ -211,12 +318,15 @@ export function McpSection() {
   }
 
   const list = servers.status === 'ready' ? servers.servers : [];
+  const draftServer =
+    draft?.id === undefined ? undefined : list.find((server) => server.id === draft.id);
+  const draftStatus = draft?.id === undefined ? undefined : oauthStatus[draft.id];
 
   return (
     <div className="flex flex-col gap-4">
       <SettingsSectionHeader
         title="MCP"
-        description="MCP servers are local stdio processes Tuffcode starts for extra tools. They run on this machine, see only the environment and working directory you give them, and reach the agent through the mcp tool."
+        description="MCP servers give the agent extra tools. A local server runs as a stdio process on this machine; a remote one is reached over http. Credentials are stored in your OS keychain, never in the database."
         actions={
           <Button
             size="sm"
@@ -235,7 +345,9 @@ export function McpSection() {
           <CardHeader>
             <CardTitle>{draft.id ? 'Edit server' : 'Add server'}</CardTitle>
             <CardDescription>
-              The command runs as a local stdio process with these arguments.
+              {draft.transport === 'stdio'
+                ? 'The command runs as a local stdio process with these arguments.'
+                : 'Tuffcode posts MCP requests to this endpoint.'}
             </CardDescription>
           </CardHeader>
           <form
@@ -244,6 +356,29 @@ export function McpSection() {
             noValidate
           >
             <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto p-3">
+              <fieldset className="flex flex-col gap-1">
+                <legend className="mb-1 text-xs font-medium text-foreground">Transport</legend>
+                <div className="flex flex-wrap gap-3">
+                  {TRANSPORTS.map((transport) => (
+                    <label
+                      key={transport.value}
+                      className="flex items-center gap-2 text-sm text-foreground"
+                    >
+                      <input
+                        type="radio"
+                        name="mcp-transport"
+                        className="size-4 accent-primary"
+                        value={transport.value}
+                        checked={draft.transport === transport.value}
+                        data-testid={`mcp-transport-${transport.value}`}
+                        onChange={() => updateDraft('transport', transport.value)}
+                      />
+                      {transport.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField label="Label" htmlFor="mcp-label" error={errors.label}>
                   <Input
@@ -256,60 +391,221 @@ export function McpSection() {
                     aria-describedby={errors.label ? 'mcp-label-error' : undefined}
                   />
                 </FormField>
-                <FormField
-                  label="Command"
-                  htmlFor="mcp-command"
-                  hint="For example npx or node."
-                  error={errors.command}
-                >
-                  <Input
-                    id="mcp-command"
-                    data-testid="mcp-command-input"
-                    value={draft.command}
-                    onChange={(event) => updateDraft('command', event.target.value)}
-                    placeholder="npx"
-                    spellCheck={false}
-                    className="font-mono text-xs"
-                    aria-invalid={Boolean(errors.command)}
-                    aria-describedby={errors.command ? 'mcp-command-error' : undefined}
-                  />
-                </FormField>
+                {draft.transport === 'stdio' ? (
+                  <FormField
+                    label="Command"
+                    htmlFor="mcp-command"
+                    hint="For example npx or node."
+                    error={errors.command}
+                  >
+                    <Input
+                      id="mcp-command"
+                      data-testid="mcp-command-input"
+                      value={draft.command}
+                      onChange={(event) => updateDraft('command', event.target.value)}
+                      placeholder="npx"
+                      spellCheck={false}
+                      className="font-mono text-xs"
+                      aria-invalid={Boolean(errors.command)}
+                      aria-describedby={errors.command ? 'mcp-command-error' : undefined}
+                    />
+                  </FormField>
+                ) : (
+                  <FormField
+                    label="Server URL"
+                    htmlFor="mcp-url"
+                    hint="https, or plain http on localhost."
+                    error={errors.url}
+                  >
+                    <Input
+                      id="mcp-url"
+                      data-testid="mcp-url-input"
+                      value={draft.url}
+                      onChange={(event) => updateDraft('url', event.target.value)}
+                      placeholder="https://mcp.example.com/mcp"
+                      spellCheck={false}
+                      className="font-mono text-xs"
+                      aria-invalid={Boolean(errors.url)}
+                      aria-describedby={errors.url ? 'mcp-url-error' : undefined}
+                    />
+                  </FormField>
+                )}
               </div>
 
-              <FormField
-                label="Arguments"
-                htmlFor="mcp-args"
-                hint="Space separated; one argument per line also works."
-              >
-                <Textarea
-                  id="mcp-args"
-                  value={draft.args}
-                  onChange={(event) => updateDraft('args', event.target.value)}
-                  placeholder="-y @modelcontextprotocol/server-filesystem C:/work"
-                  spellCheck={false}
-                  rows={2}
-                  className="min-h-0 font-mono text-xs"
-                />
-              </FormField>
+              {draft.transport === 'stdio' ? (
+                <FormField
+                  label="Arguments"
+                  htmlFor="mcp-args"
+                  hint="Space separated; one argument per line also works."
+                >
+                  <Textarea
+                    id="mcp-args"
+                    value={draft.args}
+                    onChange={(event) => updateDraft('args', event.target.value)}
+                    placeholder="-y @modelcontextprotocol/server-filesystem C:/work"
+                    spellCheck={false}
+                    rows={2}
+                    className="min-h-0 font-mono text-xs"
+                  />
+                </FormField>
+              ) : (
+                <>
+                  <fieldset className="flex flex-col gap-1">
+                    <legend className="mb-1 text-xs font-medium text-foreground">
+                      Authentication
+                    </legend>
+                    <div className="flex flex-wrap gap-3">
+                      {AUTH_MODES.map((mode) => (
+                        <label
+                          key={mode.value}
+                          className="flex items-center gap-2 text-sm text-foreground"
+                        >
+                          <input
+                            type="radio"
+                            name="mcp-auth-mode"
+                            className="size-4 accent-primary"
+                            value={mode.value}
+                            checked={draft.authMode === mode.value}
+                            data-testid={`mcp-auth-${mode.value}`}
+                            onChange={() => updateDraft('authMode', mode.value)}
+                          />
+                          {mode.label}
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-2xs text-muted-foreground">
+                      {AUTH_MODES.find((mode) => mode.value === draft.authMode)?.hint}
+                    </p>
+                  </fieldset>
 
-              <FormField
-                label="Environment"
-                htmlFor="mcp-env"
-                hint='Optional JSON object of string values, for example {"LOG_LEVEL": "info"}. Credential-like keys are rejected; set those in the server config.'
-                error={errors.env}
-              >
-                <Textarea
-                  id="mcp-env"
-                  value={draft.env}
-                  onChange={(event) => updateDraft('env', event.target.value)}
-                  placeholder={'{\n  "LOG_LEVEL": "info"\n}'}
-                  spellCheck={false}
-                  rows={3}
-                  className="min-h-0 font-mono text-xs"
-                  aria-invalid={Boolean(errors.env)}
-                  aria-describedby={errors.env ? 'mcp-env-error' : undefined}
-                />
-              </FormField>
+                  {draft.authMode === 'bearer' ? (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <FormField label="Header name" htmlFor="mcp-auth-header" error={errors.authHeader}>
+                        <Input
+                          id="mcp-auth-header"
+                          data-testid="mcp-auth-header-input"
+                          value={draft.authHeader}
+                          onChange={(event) => updateDraft('authHeader', event.target.value)}
+                          placeholder="Authorization"
+                          spellCheck={false}
+                          className="font-mono text-xs"
+                          aria-invalid={Boolean(errors.authHeader)}
+                        />
+                      </FormField>
+                      <FormField
+                        label="Value prefix"
+                        htmlFor="mcp-auth-prefix"
+                        hint="For example Bearer followed by a space."
+                      >
+                        <Input
+                          id="mcp-auth-prefix"
+                          data-testid="mcp-auth-prefix-input"
+                          value={draft.secretPrefix}
+                          onChange={(event) => updateDraft('secretPrefix', event.target.value)}
+                          placeholder="Bearer "
+                          spellCheck={false}
+                          className="font-mono text-xs"
+                        />
+                      </FormField>
+                      <FormField
+                        label={draft.hasSecret ? 'Replace token' : 'Token or API key'}
+                        htmlFor="mcp-auth-secret"
+                        hint={draft.hasSecret ? 'A value is already stored.' : 'Stored in your OS keychain.'}
+                        error={errors.secret}
+                      >
+                        <Input
+                          id="mcp-auth-secret"
+                          data-testid="mcp-auth-secret-input"
+                          type="password"
+                          value={draft.secret}
+                          onChange={(event) => updateDraft('secret', event.target.value)}
+                          placeholder={draft.hasSecret ? 'Stored' : ''}
+                          autoComplete="off"
+                          aria-invalid={Boolean(errors.secret)}
+                        />
+                      </FormField>
+                    </div>
+                  ) : null}
+
+                  {draft.authMode === 'oauth' ? (
+                    <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm text-foreground">Browser OAuth</span>
+                        {draftStatus?.connected === true ? (
+                          <Badge variant="success">Connected</Badge>
+                        ) : draftStatus?.needsAuth === true ? (
+                          <Badge variant="outline">Needs sign-in</Badge>
+                        ) : (
+                          <Badge variant="outline">Not signed in</Badge>
+                        )}
+                      </div>
+                      <p className="text-2xs text-muted-foreground">
+                        {draftServer === undefined
+                          ? 'Save this connector first, then sign in from the servers list.'
+                          : draftStatus?.connected === true
+                            ? 'Tuffcode refreshes the token automatically. Sign in again if the provider revokes it.'
+                            : 'Sign in with the provider in your system browser to authorize this connector.'}
+                      </p>
+                      {draftServer === undefined ? null : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="primary"
+                            data-testid="mcp-oauth-signin"
+                            disabled={authBusy[draftServer.id] === true}
+                            onClick={() => void handleSignIn(draftServer)}
+                          >
+                            {authBusy[draftServer.id] === true ? <Spinner size="sm" /> : null}
+                            {draftStatus?.connected === true ? 'Re-authenticate' : 'Sign in'}
+                          </Button>
+                          {draftStatus?.connected === true ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              data-testid="mcp-oauth-disconnect"
+                              disabled={authBusy[draftServer.id] === true}
+                              onClick={() => void handleDisconnect(draftServer)}
+                            >
+                              Disconnect
+                            </Button>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleTest(draftServer)}
+                          >
+                            Test connection
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </>
+              )}
+
+              {draft.transport === 'stdio' ? (
+                <FormField
+                  label="Environment"
+                  htmlFor="mcp-env"
+                  hint='Optional JSON object of string values, for example {"LOG_LEVEL": "info"}. Credential-like keys are rejected; set those in the server config.'
+                  error={errors.env}
+                >
+                  <Textarea
+                    id="mcp-env"
+                    value={draft.env}
+                    onChange={(event) => updateDraft('env', event.target.value)}
+                    placeholder={'{\n  "LOG_LEVEL": "info"\n}'}
+                    spellCheck={false}
+                    rows={3}
+                    className="min-h-0 font-mono text-xs"
+                    aria-invalid={Boolean(errors.env)}
+                    aria-describedby={errors.env ? 'mcp-env-error' : undefined}
+                  />
+                </FormField>
+              ) : null}
 
               <div className="grid items-center gap-3 sm:grid-cols-2">
                 <FormField
@@ -388,7 +684,7 @@ export function McpSection() {
           <div className="border-t border-border px-4 py-3">
             <EmptyState
               title="No MCP servers yet"
-              description="MCP servers are local stdio processes. Add one with a command such as npx and the server package as its arguments."
+              description="Add a local server with a command such as npx, or a remote connector by URL."
             />
           </div>
         ) : null}
@@ -398,6 +694,8 @@ export function McpSection() {
             {list.map((server) => {
               const test = tests[server.id];
               const rowError = rowErrors[server.id];
+              const status = oauthStatus[server.id];
+              const busy = authBusy[server.id] === true;
               return (
                 <li key={server.id} className="flex flex-col gap-2 px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -405,19 +703,34 @@ export function McpSection() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-foreground">{server.label}</span>
                         {server.enabled ? null : <Badge variant="outline">Disabled</Badge>}
+                        <Badge variant="outline">{mcpAuthSummary(server)}</Badge>
+                        {server.authMode === 'oauth' ? (
+                          status?.connected === true ? (
+                            <Badge variant="success">Connected</Badge>
+                          ) : status?.needsAuth === true ? (
+                            <Badge variant="outline">Needs sign-in</Badge>
+                          ) : (
+                            <Badge variant="outline">Not signed in</Badge>
+                          )
+                        ) : null}
                       </div>
                       <span
                         className="min-w-0 truncate font-mono text-2xs text-muted-foreground"
-                        title={commandLine(server)}
+                        title={endpointLine(server)}
                       >
-                        {commandLine(server)}
+                        {endpointLine(server)}
                       </span>
-                      {server.cwd ? (
+                      {server.transport === 'stdio' && server.cwd ? (
                         <span
                           className="min-w-0 truncate font-mono text-2xs text-muted-foreground"
                           title={server.cwd}
                         >
                           cwd {server.cwd}
+                        </span>
+                      ) : null}
+                      {server.authMode === 'oauth' && status?.connected !== true ? (
+                        <span className="text-2xs text-muted-foreground">
+                          Sign in with the provider to let Tuffcode call this connector.
                         </span>
                       ) : null}
                     </div>
@@ -433,6 +746,31 @@ export function McpSection() {
                         />
                         Enabled
                       </label>
+                      {server.authMode === 'oauth' ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            data-testid={`mcp-signin-${server.id}`}
+                            disabled={busy}
+                            onClick={() => void handleSignIn(server)}
+                          >
+                            {busy ? <Spinner size="sm" /> : null}
+                            {status?.connected === true ? 'Re-authenticate' : 'Sign in'}
+                          </Button>
+                          {status?.connected === true ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              data-testid={`mcp-disconnect-${server.id}`}
+                              disabled={busy}
+                              onClick={() => void handleDisconnect(server)}
+                            >
+                              Disconnect
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
                       <Button
                         size="sm"
                         variant="outline"

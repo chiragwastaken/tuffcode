@@ -143,7 +143,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     resolveCommand,
     cacheDir: cacheRoot(),
   });
-  const mcp = createMcpService(repos, { secrets });
+  const mcp = createMcpService(repos, { secrets, bus });
   // Connector tokens load once so Claude's synchronous launch map can attach them.
   void mcp.warmSecrets().catch(() => undefined);
   const todos = createTodoService({ repos, bus });
@@ -288,6 +288,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     await council.dispose();
     await subagents.dispose();
     await runner.disposeAll();
+    mcp.dispose();
     secrets.dispose();
     await terminals.disposeAll();
     await ws.close();

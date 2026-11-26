@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { McpServer, McpTransport } from '@tuffcode/contracts';
+import type { McpAuthMode, McpServer, McpTransport } from '@tuffcode/contracts';
 import { newId } from '@tuffcode/shared';
 import { asRow, boolean, json, nullableText, text, type SqlRow } from '../rows.js';
 
@@ -12,7 +12,11 @@ export interface UpsertMcpServerInput {
   env?: Record<string, string>;
   cwd?: string | null;
   url?: string | null;
-  /** Secret-bridge reference for the bearer token; `null` clears it. */
+  /** How the connector authenticates; defaults to bearer when a secretRef is set. */
+  authMode?: McpAuthMode;
+  /** Header that carries the credential; null falls back to Authorization. */
+  authHeader?: string | null;
+  /** Secret-bridge reference for the credential; `null` clears it. */
   secretRef?: string | null;
   pluginId?: string | null;
   enabled?: boolean;
@@ -30,7 +34,14 @@ export interface McpRepo {
 }
 
 const MCP_COLUMNS =
-  'id, label, transport, command, args, env, cwd, url, secret_ref, plugin_id, enabled, created_at, updated_at';
+  'id, label, transport, command, args, env, cwd, url, auth_mode, auth_header, secret_ref, plugin_id, enabled, created_at, updated_at';
+
+const AUTH_MODES: readonly McpAuthMode[] = ['none', 'bearer', 'oauth'];
+
+function authModeOf(row: SqlRow): McpAuthMode {
+  const value = nullableText(row, 'auth_mode');
+  return AUTH_MODES.find((mode) => mode === value) ?? 'none';
+}
 
 function stringArray(row: SqlRow, column: string): string[] {
   const decoded = json(row, column);
@@ -63,6 +74,8 @@ function mapMcpServer(row: SqlRow): McpServer {
     env: stringRecord(row, 'env'),
     cwd: nullableText(row, 'cwd'),
     url: nullableText(row, 'url'),
+    authMode: authModeOf(row),
+    authHeader: nullableText(row, 'auth_header') ?? 'Authorization',
     hasSecret: nullableText(row, 'secret_ref') !== null,
     pluginId: nullableText(row, 'plugin_id'),
     enabled: boolean(row, 'enabled'),
@@ -77,10 +90,10 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
   );
   const selectOne = db.prepare(`SELECT ${MCP_COLUMNS} FROM mcp_servers WHERE id = ?`);
   const insert = db.prepare(
-    'INSERT INTO mcp_servers (id, label, transport, command, args, env, cwd, url, secret_ref, plugin_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO mcp_servers (id, label, transport, command, args, env, cwd, url, auth_mode, auth_header, secret_ref, plugin_id, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const update = db.prepare(
-    'UPDATE mcp_servers SET label = ?, transport = ?, command = ?, args = ?, env = ?, cwd = ?, url = ?, secret_ref = ?, enabled = ?, updated_at = ? WHERE id = ?',
+    'UPDATE mcp_servers SET label = ?, transport = ?, command = ?, args = ?, env = ?, cwd = ?, url = ?, auth_mode = ?, auth_header = ?, secret_ref = ?, enabled = ?, updated_at = ? WHERE id = ?',
   );
   const removeRow = db.prepare('DELETE FROM mcp_servers WHERE id = ?');
   const selectByPlugin = db.prepare(
@@ -113,6 +126,11 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
       const env = JSON.stringify(input.env ?? existing?.env ?? {});
       const transport = input.transport ?? existing?.transport ?? 'stdio';
       const command = input.command ?? existing?.command ?? '';
+      const authMode =
+        input.authMode ??
+        existing?.authMode ??
+        ((input.secretRef ?? null) !== null ? 'bearer' : 'none');
+      const authHeader = input.authHeader ?? existing?.authHeader ?? 'Authorization';
       if (existing === undefined) {
         const id = input.id ?? newId('mcp');
         insert.run(
@@ -124,6 +142,8 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
           env,
           input.cwd ?? null,
           input.url ?? null,
+          authMode,
+          authHeader,
           input.secretRef ?? null,
           input.pluginId ?? null,
           input.enabled === false ? 0 : 1,
@@ -143,6 +163,8 @@ export function createMcpRepo(db: DatabaseSync): McpRepo {
         env,
         input.cwd === undefined ? existing.cwd : input.cwd,
         input.url === undefined ? existing.url : input.url,
+        authMode,
+        authHeader,
         input.secretRef === undefined ? currentSecret : input.secretRef,
         input.enabled === undefined ? (existing.enabled ? 1 : 0) : input.enabled ? 1 : 0,
         now,

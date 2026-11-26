@@ -101,6 +101,8 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     env: {},
     cwd: null,
     url: null,
+    authMode: 'none',
+    authHeader: 'Authorization',
     hasSecret: false,
     pluginId: null,
     enabled: true,

@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { McpServer, McpTool } from '@tuffcode/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createEventBus } from '../events.js';
+import type { Secrets } from '../secrets/bridge.js';
 import { createTestContext, type TestContext } from '../test-support.js';
 import { MCP_PROTOCOL_VERSION, type McpChild } from './client.js';
 import { MCP_TOOL_CACHE_TTL_MS, createMcpService, type McpService } from './service.js';
@@ -168,5 +172,236 @@ describe('MCP service', () => {
     const service = createMcpService(ctx.repos, { spawnFn: () => child });
 
     await expect(service.callTool(server.id, 'read_file', { path: 'src' })).resolves.toBe('called');
+  });
+});
+
+function fakeSecrets(): Pick<Secrets, 'get' | 'set'> & { values: Map<string, string> } {
+  const values = new Map<string, string>();
+  return {
+    values,
+    get: (key) => Promise.resolve(values.get(key) ?? null),
+    set: (key, value) => {
+      values.set(key, value);
+      return Promise.resolve();
+    },
+  };
+}
+
+interface SeenRequest {
+  method: string;
+  authorization: string | undefined;
+  apiKey: string | undefined;
+}
+
+/** A minimal streamable http MCP endpoint that records the credential headers. */
+function startHttpMcp(
+  tools: McpTool[] = TOOLS,
+): Promise<{ url: string; server: Server; seen: SeenRequest[] }> {
+  const seen: SeenRequest[] = [];
+  const httpServer = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      const message = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as {
+        id?: number;
+        method?: string;
+      };
+      seen.push({
+        method: request.method ?? '',
+        authorization: request.headers.authorization,
+        apiKey: request.headers['x-api-key'] as string | undefined,
+      });
+      if (request.method === 'DELETE' || message.id === undefined) {
+        response.writeHead(202);
+        response.end();
+        return;
+      }
+      const result =
+        message.method === 'initialize'
+          ? { protocolVersion: '2025-06-18', capabilities: {} }
+          : { tools };
+      const text = JSON.stringify({ jsonrpc: '2.0', id: message.id, result });
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(text);
+    })();
+  });
+  return new Promise((resolve) => {
+    httpServer.listen(0, '127.0.0.1', () => {
+      const port = (httpServer.address() as AddressInfo).port;
+      resolve({ url: `http://127.0.0.1:${port}/mcp`, server: httpServer, seen });
+    });
+  });
+}
+
+describe('MCP connector auth', () => {
+  let ctx: TestContext;
+  const httpServers: Server[] = [];
+
+  beforeEach(() => {
+    ctx = createTestContext();
+  });
+
+  afterEach(async () => {
+    for (const httpServer of httpServers.splice(0)) {
+      httpServer.closeAllConnections();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+    ctx.dispose();
+  });
+
+  it('sends a custom header for a bearer connector and never puts the value in the row', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const secrets = fakeSecrets();
+    const service = createMcpService(ctx.repos, { secrets });
+
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'bearer',
+      authHeader: 'X-Api-Key',
+      secret: 'key-1',
+      secretPrefix: '',
+    });
+
+    expect(saved.authMode).toBe('bearer');
+    expect(saved.authHeader).toBe('X-Api-Key');
+    expect(saved.hasSecret).toBe(true);
+    expect(JSON.stringify(saved)).not.toContain('key-1');
+    expect(secrets.values.get(`mcp:${saved.id}`)).toBe('key-1');
+
+    await expect(service.test(saved.id)).resolves.toMatchObject({ ok: true });
+    expect(remote.seen.every((entry) => entry.apiKey === 'key-1')).toBe(true);
+    expect(remote.seen.every((entry) => entry.authorization === undefined)).toBe(true);
+  });
+
+  it('composes the prefix into the stored header value', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const service = createMcpService(ctx.repos, { secrets: fakeSecrets() });
+
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'bearer',
+      secret: 'token-1',
+      secretPrefix: 'Bearer ',
+    });
+
+    await expect(service.test(saved.id)).resolves.toMatchObject({ ok: true });
+    expect(remote.seen[0]?.authorization).toBe('Bearer token-1');
+  });
+
+  it('keeps the launch map header for an enabled bearer connector', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const service = createMcpService(ctx.repos, { secrets: fakeSecrets() });
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'bearer',
+      secret: 'token-1',
+      secretPrefix: 'Bearer ',
+    });
+
+    expect(service.launchMap()[saved.label]).toEqual({
+      type: 'http',
+      url: remote.url,
+      headers: { Authorization: 'Bearer token-1' },
+    });
+  });
+
+  it('clears the stored credential when the auth mode changes', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const secrets = fakeSecrets();
+    const service = createMcpService(ctx.repos, { secrets });
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'bearer',
+      secret: 'token-1',
+      secretPrefix: 'Bearer ',
+    });
+
+    const switched = await service.save({
+      id: saved.id,
+      label: saved.label,
+      transport: 'http',
+      url: remote.url,
+      authMode: 'none',
+    });
+    expect(switched.authMode).toBe('none');
+    expect(switched.hasSecret).toBe(false);
+    expect(secrets.values.get(`mcp:${saved.id}`)).toBe('');
+  });
+
+  it('emits mcp.updated on save and remove', async () => {
+    const bus = createEventBus();
+    const events: { type: string; payload: unknown }[] = [];
+    bus.subscribe((event) => events.push({ type: event.type, payload: event.payload }));
+    const service = createMcpService(ctx.repos, { bus });
+
+    const saved = await service.save({ label: 'files', command: 'fake-mcp' });
+    service.remove(saved.id);
+
+    expect(events.map((event) => event.type)).toEqual(['mcp.updated', 'mcp.updated']);
+    expect(events[0]?.payload).toMatchObject({ id: saved.id, label: 'files' });
+    expect(events[1]?.payload).toMatchObject({ id: saved.id, label: 'files' });
+    expect(service.list()).toEqual([]);
+  });
+
+  it('reports a connector that needs sign-in instead of throwing', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const service = createMcpService(ctx.repos, { secrets: fakeSecrets() });
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'oauth',
+    });
+
+    await expect(service.oauthStatus(saved.id)).resolves.toEqual({
+      connected: false,
+      needsAuth: false,
+      expiresAt: null,
+      authorizationServer: null,
+    });
+  });
+
+  it('disconnects an oauth connector and clears its row reference', async () => {
+    const remote = await startHttpMcp();
+    httpServers.push(remote.server);
+    const secrets = fakeSecrets();
+    const bus = createEventBus();
+    const events: string[] = [];
+    bus.subscribe((event) => events.push(event.type));
+    const service = createMcpService(ctx.repos, { secrets, bus });
+    const saved = await service.save({
+      label: 'remote',
+      transport: 'http',
+      url: remote.url,
+      authMode: 'oauth',
+    });
+    // The flow, not the form, writes the bundle; seed the same keychain entry it uses.
+    secrets.values.set(`mcp:${saved.id}`, '{"accessToken":"access-1"}');
+    const withSecret = ctx.repos.mcp.upsert({
+      id: saved.id,
+      label: saved.label,
+      secretRef: `mcp:${saved.id}`,
+    });
+    expect(withSecret.hasSecret).toBe(true);
+
+    await service.oauthDisconnect(saved.id);
+
+    const row = ctx.repos.mcp.get(saved.id);
+    expect(row?.hasSecret).toBe(false);
+    expect(secrets.values.get(`mcp:${saved.id}`)).toBe('');
+    expect(events).toContain('mcp.updated');
   });
 });

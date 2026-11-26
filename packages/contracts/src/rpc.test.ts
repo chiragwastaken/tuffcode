@@ -137,6 +137,8 @@ const mcpServer: McpServer = {
   env: { DEBUG: '1' },
   cwd: null,
   url: null,
+  authMode: 'none',
+  authHeader: 'Authorization',
   hasSecret: false,
   pluginId: null,
   enabled: true,
@@ -550,6 +552,23 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     params: { id: 'mcp-1' },
     result: { ok: true, detail: 'listed 1 tool', tools: [mcpTool] },
   },
+  'mcp.oauth.start': {
+    params: { id: 'mcp-1' },
+    result: {
+      flowId: 'flow-1',
+      authorizeUrl: 'https://auth.example.com/authorize?response_type=code',
+    },
+  },
+  'mcp.oauth.status': {
+    params: { id: 'mcp-1' },
+    result: {
+      connected: true,
+      needsAuth: false,
+      expiresAt: at,
+      authorizationServer: 'https://auth.example.com',
+    },
+  },
+  'mcp.oauth.disconnect': { params: { id: 'mcp-1' }, result: {} },
   'providers.models': {
     params: { providerId: 'prov-claude', refresh: true },
     result: { models: [model], source: 'sdk' },
@@ -735,6 +754,9 @@ const expectedMethods: RpcMethod[] = [
   'git.pr',
   'git.push',
   'mcp.list',
+  'mcp.oauth.disconnect',
+  'mcp.oauth.start',
+  'mcp.oauth.status',
   'mcp.remove',
   'mcp.test',
   'mcp.upsert',
@@ -867,8 +889,8 @@ function parseCommandRunResult(result: unknown) {
 }
 
 describe('rpc methods', () => {
-  it('exposes exactly 84 methods with the documented names', () => {
-    expect(RPC_METHODS).toHaveLength(84);
+  it('exposes exactly 87 methods with the documented names', () => {
+    expect(RPC_METHODS).toHaveLength(87);
     expect(RPC_METHODS.toSorted()).toEqual(expectedMethods);
     expect(Object.keys(fixtures).toSorted()).toEqual(expectedMethods);
     expect(Object.keys(methods).toSorted()).toEqual(expectedMethods);

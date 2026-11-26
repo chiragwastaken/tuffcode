@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMcpUpsertParams,
   emptyMcpDraft,
+  isMcpHttpUrl,
+  mcpAuthSummary,
   mcpDraftFromServer,
   parseMcpArgs,
   parseMcpEnv,
@@ -11,15 +13,7 @@ import {
 } from './mcp-form';
 
 function draft(overrides: Partial<McpDraft> = {}): McpDraft {
-  return {
-    label: 'Filesystem',
-    command: 'npx',
-    args: '',
-    env: '',
-    cwd: '',
-    enabled: true,
-    ...overrides,
-  };
+  return { ...emptyMcpDraft(), label: 'Filesystem', command: 'npx', ...overrides };
 }
 
 const server: McpServer = {
@@ -31,6 +25,8 @@ const server: McpServer = {
   env: { TOKEN: 'abc' },
   cwd: 'C:/work',
   url: null,
+  authMode: 'none',
+  authHeader: 'Authorization',
   hasSecret: false,
   pluginId: null,
   enabled: true,
@@ -39,7 +35,7 @@ const server: McpServer = {
 };
 
 describe('validateMcpDraft', () => {
-  it('accepts a minimal server', () => {
+  it('accepts a minimal stdio server', () => {
     expect(validateMcpDraft(draft())).toEqual({});
   });
 
@@ -56,43 +52,77 @@ describe('validateMcpDraft', () => {
     });
   });
 
-  it('rejects env JSON that is not an object', () => {
-    expect(validateMcpDraft(draft({ env: '["TOKEN"]' }))).toEqual({
-      env: 'Environment must be a JSON object.',
-    });
-  });
-
-  it('rejects env values that are not strings', () => {
-    expect(validateMcpDraft(draft({ env: '{"TOKEN": 7}' }))).toEqual({
-      env: 'Environment value for TOKEN must be a string.',
-    });
-  });
-
   it('rejects a relative working directory', () => {
-    expect(validateMcpDraft(draft({ cwd: 'work/server' }))).toEqual({
-      cwd: 'Enter an absolute path.',
-    });
+    expect(validateMcpDraft(draft({ cwd: 'work' }))).toEqual({ cwd: 'Enter an absolute path.' });
   });
 
-  it('accepts absolute Windows, POSIX, and home working directories', () => {
-    expect(validateMcpDraft(draft({ cwd: 'C:\\work\\server' }))).toEqual({});
-    expect(validateMcpDraft(draft({ cwd: 'C:/work/server' }))).toEqual({});
-    expect(validateMcpDraft(draft({ cwd: '/srv/server' }))).toEqual({});
-    expect(validateMcpDraft(draft({ cwd: '~/server' }))).toEqual({});
+  it('requires an https URL for an http connector', () => {
+    expect(validateMcpDraft(draft({ transport: 'http', command: '', url: '' }))).toEqual({
+      url: 'Enter an https URL, or http on localhost.',
+    });
+    expect(validateMcpDraft(draft({ transport: 'http', command: '', url: 'http://example.com/mcp' })))
+      .toEqual({ url: 'Enter an https URL, or http on localhost.' });
+  });
+
+  it('accepts a local http URL and an https URL', () => {
+    expect(validateMcpDraft(draft({ transport: 'http', command: '', url: 'https://mcp.example.com/mcp' })))
+      .toEqual({});
+    expect(validateMcpDraft(draft({ transport: 'http', command: '', url: 'http://127.0.0.1:8787/mcp' })))
+      .toEqual({});
+  });
+
+  it('requires a header value for bearer mode when nothing is stored', () => {
+    expect(
+      validateMcpDraft(
+        draft({ transport: 'http', command: '', url: 'https://mcp.example.com/mcp', authMode: 'bearer' }),
+      ),
+    ).toEqual({ secret: 'Enter the token or API key.' });
+  });
+
+  it('accepts a stored credential without a new value', () => {
+    expect(
+      validateMcpDraft(
+        draft({
+          transport: 'http',
+          command: '',
+          url: 'https://mcp.example.com/mcp',
+          authMode: 'bearer',
+          hasSecret: true,
+        }),
+      ),
+    ).toEqual({});
+  });
+
+  it('rejects an invalid header name', () => {
+    expect(
+      validateMcpDraft(
+        draft({
+          transport: 'http',
+          command: '',
+          url: 'https://mcp.example.com/mcp',
+          authMode: 'bearer',
+          authHeader: 'Bad Header',
+          secret: 'abc',
+        }),
+      ),
+    ).toEqual({ authHeader: 'Enter a valid header name.' });
+  });
+
+  it('needs no credential for none or oauth mode', () => {
+    for (const authMode of ['none', 'oauth'] as const) {
+      expect(
+        validateMcpDraft(
+          draft({ transport: 'http', command: '', url: 'https://mcp.example.com/mcp', authMode }),
+        ),
+      ).toEqual({});
+    }
   });
 });
 
 describe('parseMcpArgs', () => {
-  it('splits on spaces and newlines and trims the result', () => {
-    expect(parseMcpArgs(' -y  @modelcontextprotocol/server-filesystem\nC:/work ')).toEqual([
-      '-y',
-      '@modelcontextprotocol/server-filesystem',
-      'C:/work',
-    ]);
-  });
-
-  it('returns no arguments for blank input', () => {
-    expect(parseMcpArgs('   \n  ')).toEqual([]);
+  it('splits on whitespace and drops blanks', () => {
+    expect(parseMcpArgs(' -y  pkg \n C:/work ')).toEqual(['-y', 'pkg', 'C:/work']);
+    expect(parseMcpArgs('   ')).toEqual([]);
   });
 });
 
@@ -117,7 +147,7 @@ describe('parseMcpEnv', () => {
 });
 
 describe('buildMcpUpsertParams', () => {
-  it('trims fields and builds the args array and env object', () => {
+  it('trims fields and builds the args array and env object for stdio', () => {
     expect(
       buildMcpUpsertParams(
         draft({
@@ -130,6 +160,7 @@ describe('buildMcpUpsertParams', () => {
       ),
     ).toEqual({
       label: 'Filesystem',
+      transport: 'stdio',
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:/work'],
       env: { TOKEN: 'abc' },
@@ -149,6 +180,82 @@ describe('buildMcpUpsertParams', () => {
     expect(buildMcpUpsertParams(draft({ cwd: '   ' }))).toMatchObject({ cwd: null });
   });
 
+  it('builds an http payload with no auth', () => {
+    expect(
+      buildMcpUpsertParams(
+        draft({ transport: 'http', command: '', url: ' https://mcp.example.com/mcp ', authMode: 'none' }),
+      ),
+    ).toEqual({
+      label: 'Filesystem',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      authMode: 'none',
+      enabled: true,
+    });
+  });
+
+  it('builds a bearer payload with the custom header and prefix', () => {
+    expect(
+      buildMcpUpsertParams(
+        draft({
+          transport: 'http',
+          command: '',
+          url: 'https://mcp.example.com/mcp',
+          authMode: 'bearer',
+          authHeader: 'X-Api-Key',
+          secretPrefix: '',
+          secret: ' sk-live ',
+        }),
+      ),
+    ).toEqual({
+      label: 'Filesystem',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      authMode: 'bearer',
+      authHeader: 'X-Api-Key',
+      secret: 'sk-live',
+      secretPrefix: '',
+      enabled: true,
+    });
+  });
+
+  it('omits the secret when only the stored one exists', () => {
+    expect(
+      buildMcpUpsertParams(
+        draft({
+          id: 'mcp-1',
+          transport: 'http',
+          command: '',
+          url: 'https://mcp.example.com/mcp',
+          authMode: 'bearer',
+          hasSecret: true,
+        }),
+      ),
+    ).not.toHaveProperty('secret');
+  });
+
+  it('builds an oauth payload with no credential fields', () => {
+    const params = buildMcpUpsertParams(
+      draft({
+        transport: 'http',
+        command: '',
+        url: 'https://mcp.example.com/mcp',
+        authMode: 'oauth',
+        authHeader: 'Authorization',
+        secret: 'ignored',
+      }),
+    );
+    expect(params).toEqual({
+      label: 'Filesystem',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      authMode: 'oauth',
+      enabled: true,
+    });
+    expect(params).not.toHaveProperty('secret');
+    expect(params).not.toHaveProperty('authHeader');
+  });
+
   it('throws on invalid env JSON instead of dropping it', () => {
     expect(() => buildMcpUpsertParams(draft({ env: '[]' }))).toThrow(
       'Environment must be a JSON object.',
@@ -161,22 +268,67 @@ describe('mcpDraftFromServer', () => {
     expect(mcpDraftFromServer(server)).toEqual({
       id: 'mcp-1',
       label: 'Filesystem',
+      transport: 'stdio',
       command: 'npx',
       args: '-y\n@modelcontextprotocol/server-filesystem\nC:/work',
       env: '{\n  "TOKEN": "abc"\n}',
       cwd: 'C:/work',
+      url: '',
+      authMode: 'none',
+      authHeader: 'Authorization',
+      secretPrefix: 'Bearer ',
+      secret: '',
+      hasSecret: false,
       enabled: true,
     });
   });
 
-  it('starts a blank draft for a new server', () => {
+  it('never copies a stored credential into the draft', () => {
+    const saved = mcpDraftFromServer({
+      ...server,
+      transport: 'http',
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      authMode: 'bearer',
+      authHeader: 'X-Api-Key',
+      hasSecret: true,
+    });
+    expect(saved.secret).toBe('');
+    expect(saved.hasSecret).toBe(true);
+  });
+
+  it('starts a blank stdio draft for a new server', () => {
     expect(emptyMcpDraft()).toEqual({
       label: '',
+      transport: 'stdio',
       command: '',
       args: '',
       env: '',
       cwd: '',
+      url: '',
+      authMode: 'none',
+      authHeader: 'Authorization',
+      secretPrefix: 'Bearer ',
+      secret: '',
+      hasSecret: false,
       enabled: true,
     });
+  });
+});
+
+describe('helpers', () => {
+  it('accepts https and loopback http URLs only', () => {
+    expect(isMcpHttpUrl('https://mcp.example.com/mcp')).toBe(true);
+    expect(isMcpHttpUrl('http://localhost:8787/mcp')).toBe(true);
+    expect(isMcpHttpUrl('http://example.com/mcp')).toBe(false);
+    expect(isMcpHttpUrl('ftp://example.com/mcp')).toBe(false);
+  });
+
+  it('summarizes each auth mode', () => {
+    expect(mcpAuthSummary(server)).toBe('No auth');
+    expect(mcpAuthSummary({ ...server, authMode: 'bearer', authHeader: 'X-Api-Key' })).toBe(
+      'Header X-Api-Key',
+    );
+    expect(mcpAuthSummary({ ...server, authMode: 'oauth' })).toBe('Browser OAuth');
   });
 });

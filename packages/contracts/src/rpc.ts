@@ -18,6 +18,7 @@ import {
   InstalledPluginSchema,
   IsoDateTimeSchema,
   MarketplaceSchema,
+  McpAuthModeSchema,
   McpServerSchema,
   McpTransportSchema,
   McpToolSchema,
@@ -443,8 +444,16 @@ export const methods = {
         env: z.record(z.string(), z.string()).optional(),
         cwd: z.string().nullable().optional(),
         url: z.string().nullable().optional(),
-        /** Bearer token for an http server; sent once, stored in the secret bridge. */
+        /** How the connector authenticates; defaults to bearer when a secret is sent. */
+        authMode: McpAuthModeSchema.optional(),
+        /** Request header that carries the credential; defaults to Authorization. */
+        authHeader: z.string().min(1).max(120).optional(),
+        /**
+         * Bearer token or API key for an http server; sent once, stored in the secret
+         * bridge. `secretPrefix` (for example "Bearer ") is prepended before storage.
+         */
         secret: z.string().optional(),
+        secretPrefix: z.string().max(40).optional(),
         enabled: z.boolean().optional(),
       })
       .refine(
@@ -466,7 +475,38 @@ export const methods = {
       ok: z.boolean(),
       detail: z.string(),
       tools: McpToolSchema.array(),
+      /** True when the connector needs an interactive OAuth sign-in. */
+      needsAuth: z.boolean().optional(),
     }),
+  },
+  /**
+   * Starts an OAuth 2.1 authorization code flow with PKCE. The server binds a loopback
+   * listener and returns the authorize URL; the renderer opens it in the system browser.
+   */
+  'mcp.oauth.start': {
+    params: z.object({
+      id: IdSchema,
+      /** Manual client id; omitted means dynamic client registration. */
+      clientId: z.string().min(1).optional(),
+      clientSecret: z.string().optional(),
+    }),
+    result: z.object({
+      flowId: IdSchema,
+      authorizeUrl: z.url(),
+    }),
+  },
+  'mcp.oauth.status': {
+    params: idParam,
+    result: z.object({
+      connected: z.boolean(),
+      needsAuth: z.boolean(),
+      expiresAt: IsoDateTimeSchema.nullable(),
+      authorizationServer: z.string().nullable(),
+    }),
+  },
+  'mcp.oauth.disconnect': {
+    params: idParam,
+    result: EmptyObjectSchema,
   },
   'settings.get': {
     params: EmptyObjectSchema,

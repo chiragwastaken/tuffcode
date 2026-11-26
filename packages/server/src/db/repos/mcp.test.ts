@@ -25,6 +25,8 @@ describe('mcp repo', () => {
       env: {},
       cwd: null,
       url: null,
+      authMode: 'none',
+      authHeader: 'Authorization',
       hasSecret: false,
       pluginId: null,
       enabled: true,
@@ -55,6 +57,27 @@ describe('mcp repo', () => {
     const cleared = ctx.repos.mcp.upsert({ id: server.id, label: 'remote', secretRef: null });
     expect(cleared.hasSecret).toBe(false);
     expect(cleared.url).toBe('https://mcp.example.com/mcp');
+  });
+
+  it('maps a stored secret to bearer mode and keeps an explicit mode', () => {
+    const implicit = ctx.repos.mcp.upsert({
+      label: 'remote',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      secretRef: 'mcp-secret-1',
+    });
+    expect(implicit.authMode).toBe('bearer');
+    expect(implicit.authHeader).toBe('Authorization');
+
+    const oauth = ctx.repos.mcp.upsert({
+      id: implicit.id,
+      label: 'remote',
+      authMode: 'oauth',
+      authHeader: 'X-Custom',
+    });
+    expect(oauth.authMode).toBe('oauth');
+    expect(oauth.authHeader).toBe('X-Custom');
+    expect(ctx.repos.mcp.list()[0]?.authMode).toBe('oauth');
   });
 
   it('updates by id and keeps the fields the caller omits', () => {
