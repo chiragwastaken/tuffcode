@@ -170,7 +170,7 @@ describe('AnthropicClient', () => {
     expect(sleeps).toEqual([1000]);
   });
 
-  it('retries 529 once and then surfaces the error', async () => {
+  it('retries 529 twice and then surfaces the error', async () => {
     let calls = 0;
     const client = new AnthropicClient(
       { baseUrl: 'https://api.anthropic.com', headers: {}, secret: 'key', maxTokens: 64 },
@@ -189,7 +189,32 @@ describe('AnthropicClient', () => {
       status: 529,
       retryable: true,
     });
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
+  });
+
+  it('doubles the backoff between attempts and recovers', async () => {
+    let calls = 0;
+    const sleeps: number[] = [];
+    const client = new AnthropicClient(
+      { baseUrl: 'https://api.anthropic.com', headers: {}, secret: 'key', maxTokens: 64 },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          return calls <= 2
+            ? new Response('overloaded', { status: 529 })
+            : new Response(streamOf(''));
+        },
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        logger,
+      },
+    );
+
+    await client.stream(request, new AbortController().signal);
+
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([500, 1000]);
   });
 
   it('maps 401 to a non-retryable error without retrying', async () => {

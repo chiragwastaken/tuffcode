@@ -295,6 +295,75 @@ describe('OpenAIClient', () => {
     expect(bodies).toHaveLength(2);
   });
 
+  it('retries a 502 twice with doubling backoff and then streams', async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          return calls <= 2 ? response(502) : response(200);
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        logger,
+      },
+    );
+
+    const stream = await client.stream(request, new AbortController().signal);
+
+    expect(stream).toBeDefined();
+    expect(calls).toBe(3);
+    expect(delays).toEqual([500, 1000]);
+  });
+
+  it('gives up after three retryable failures', async () => {
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          return response(502);
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    await expect(client.stream(request, new AbortController().signal)).rejects.toMatchObject({
+      status: 502,
+      retryable: true,
+    });
+    expect(calls).toBe(3);
+  });
+
+  it('honors Retry-After over the default backoff', async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          return calls === 1
+            ? response(429, '', { 'retry-after': '2' })
+            : response(200);
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        logger,
+      },
+    );
+
+    await client.stream(request, new AbortController().signal);
+
+    expect(delays).toEqual([2000]);
+  });
+
   it('does not retry a 400 that is not about the output token field', async () => {
     let calls = 0;
     const client = new OpenAIClient(
