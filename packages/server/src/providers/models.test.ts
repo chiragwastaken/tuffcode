@@ -628,6 +628,29 @@ describe('provider model discovery', () => {
     expect(result.models[0]?.capabilities).toBeNull();
   });
 
+  it('records which discovery path wrote the refreshed rows', async () => {
+    const provider = seedProvider(ctx, 'openai-compatible', { baseUrl: 'https://gateway.test' });
+    await providerModels(
+      ctx.repos,
+      provider,
+      {
+        secret: null,
+        fetchFn: fakeFetch(
+          async () => new Response(JSON.stringify({ data: [{ id: 'plain' }] }), { status: 200 }),
+        ),
+      },
+      true,
+    );
+
+    // Unknown capabilities stay absent, and the row remembers where it came from, so the
+    // startup repair can tell a stale default apart from a row discovery actually wrote.
+    expect(
+      ctx.db
+        .prepare('SELECT capabilities, source FROM provider_models WHERE provider_id = ?')
+        .get(provider.id),
+    ).toEqual({ capabilities: null, source: 'api' });
+  });
+
   it('records an entry that only declares limits as unknown, not as blind', async () => {
     const provider = seedProvider(ctx, 'openai-compatible', {
       baseUrl: 'https://gateway.test',

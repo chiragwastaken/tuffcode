@@ -123,6 +123,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const db = openDb(file);
   migrate(db);
   const repos = createRepos(db);
+  // Discovery used to write its fallback shape as if the endpoint had declared it, which
+  // made the provider Vision toggle unreachable for those rows. Null them once per boot.
+  repos.providers.repairDefaultCapabilities();
   const bus = createEventBus();
   const token = ensureToken();
   const startedAt = Date.now();

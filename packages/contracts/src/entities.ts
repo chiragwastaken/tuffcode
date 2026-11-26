@@ -225,6 +225,18 @@ export const ModelCapabilitiesSchema = z.object({
 });
 export type ModelCapabilities = z.infer<typeof ModelCapabilitiesSchema>;
 
+/**
+ * What a payload that declares nothing about capabilities is assumed to do. Discovery
+ * leaves the stored object `NULL` instead of writing this, so a row carrying exactly
+ * this shape came from a path that did not know whether it was a declaration.
+ */
+export const DEFAULT_MODEL_CAPABILITIES: ModelCapabilities = {
+  tools: true,
+  vision: false,
+  reasoning: false,
+  reasoningEfforts: [],
+};
+
 /** The built-in ladder. The UI labels `none` as "off"; `xhigh` reaches the providers that have it. */
 export const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;

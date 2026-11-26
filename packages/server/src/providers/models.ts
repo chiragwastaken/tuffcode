@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { listClaudeModels, type ClaudeModelQueryFn } from '@tuffcode/adapters';
 import {
+  DEFAULT_MODEL_CAPABILITIES,
   ReasoningEffortSchema,
   type Model,
   type ModelCapabilities,
@@ -103,14 +104,6 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-/** What a payload that declares nothing about capabilities is assumed to do. */
-const DEFAULT_CAPABILITIES: ModelCapabilities = {
-  tools: true,
-  vision: false,
-  reasoning: false,
-  reasoningEfforts: [],
-};
-
 const DEFAULT_REASONING_EFFORTS = ['low', 'medium', 'high'];
 
 function capabilityFlag(
@@ -127,9 +120,9 @@ function explicitCapabilities(record: Record<string, unknown>): ModelCapabilitie
   const parsed = recordOf(record['capabilities']);
   if (parsed === null) return null;
   return {
-    tools: capabilityFlag(parsed, 'tools', DEFAULT_CAPABILITIES.tools),
-    vision: capabilityFlag(parsed, 'vision', DEFAULT_CAPABILITIES.vision),
-    reasoning: capabilityFlag(parsed, 'reasoning', DEFAULT_CAPABILITIES.reasoning),
+    tools: capabilityFlag(parsed, 'tools', DEFAULT_MODEL_CAPABILITIES.tools),
+    vision: capabilityFlag(parsed, 'vision', DEFAULT_MODEL_CAPABILITIES.vision),
+    reasoning: capabilityFlag(parsed, 'reasoning', DEFAULT_MODEL_CAPABILITIES.reasoning),
     reasoningEfforts: stringArray(parsed['reasoningEfforts']),
   };
 }
@@ -151,7 +144,7 @@ function inferredCapabilities(record: Record<string, unknown>): ModelCapabilitie
     (typeof architectureModality === 'string' && architectureModality.length > 0);
   if (!hasHints) return null;
 
-  const capabilities: ModelCapabilities = { ...DEFAULT_CAPABILITIES, reasoningEfforts: [] };
+  const capabilities: ModelCapabilities = { ...DEFAULT_MODEL_CAPABILITIES, reasoningEfforts: [] };
   if (Array.isArray(supported)) {
     const names = stringArray(supported);
     capabilities.tools = names.includes('tools') || names.includes('tool_choice');
@@ -294,6 +287,8 @@ function configModelRows(config: Record<string, unknown>): ReplaceModelInput[] {
       maxOutputTokens: firstNumber(record, ['maxOutputTokens']),
       capabilities: explicitCapabilities(record),
       reasoningEffort: reasoningEffortOf(record),
+      // A capabilities object the user wrote in the config is a declaration, not a guess.
+      source: 'manual',
       isDefault: record['isDefault'] === true,
     });
   }
@@ -592,11 +587,14 @@ export async function discoverModels(
 /**
  * Replaces the stored set while keeping the provider default and every model an existing
  * thread already points at, so a refresh never rewrites a thread's model underneath it.
+ * `source` records which discovery path wrote the fresh rows; it stays `null` for a row
+ * that was carried over, whose provenance the stored columns no longer carry.
  */
 export function mergeModels(
   existing: readonly Model[],
   discovered: readonly DiscoveredModel[],
   referenced: ReadonlySet<string>,
+  source: ModelSource | null = null,
 ): ReplaceModelInput[] {
   const rows = new Map<string, ReplaceModelInput>();
   for (const model of discovered) {
@@ -607,6 +605,7 @@ export function mergeModels(
       maxOutputTokens: model.maxOutputTokens,
       capabilities: model.capabilities,
       reasoningEffort: model.reasoningEffort,
+      ...(source === null ? {} : { source }),
       isDefault: false,
     });
   }
@@ -682,7 +681,12 @@ export async function providerModels(
     };
   }
 
-  const merged = mergeModels(cached, result.models, referencedModels(repos, provider.id));
+  const merged = mergeModels(
+    cached,
+    result.models,
+    referencedModels(repos, provider.id),
+    result.source,
+  );
   const models = repos.providers.replaceModels(provider.id, merged, new Date(now()).toISOString());
   return {
     models,
