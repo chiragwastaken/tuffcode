@@ -628,6 +628,26 @@ describe('thread runner', () => {
     await ended;
   });
 
+  it('uses the provider toggle when the discovered model row knows nothing', async () => {
+    const f = setup();
+    f.ctx.repos.providers.upsert({
+      id: 'prv_test',
+      kind: 'claude',
+      label: 'Test',
+      config: { capabilities: { tools: true, vision: true, reasoning: false, reasoningEfforts: [] } },
+    });
+    // Discovery stored the row with no capabilities, which is what an endpoint that
+    // publishes only model names produces. The turn must fall back to the toggle.
+    f.ctx.repos.providers.replaceModels('prv_test', [
+      { modelId: 'model-x', label: 'Model X', contextWindow: null, capabilities: null, isDefault: true },
+    ]);
+    const ended = waitForTurnEnd(f.bus);
+    await f.runner.send('thr_a', 'hello');
+    expect(f.adapter.sends[0]?.ctx.vision).toBe(true);
+    f.adapter.end();
+    await ended;
+  });
+
   it('denies an approval whose run died and fails the thread', async () => {
     const f = setup();
     f.ctx.repos.approvals.create({

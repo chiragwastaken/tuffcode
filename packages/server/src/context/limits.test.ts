@@ -1,6 +1,16 @@
 import { DEFAULT_SETTINGS, type Model } from '@tuffcode/contracts';
-import { describe, expect, it } from 'vitest';
-import { modelLimits, type ModelLimits, type ModelLimitsInput } from './limits.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createTestContext, type TestContext } from '../test-support.js';
+import { modelLimits, threadVision, type ModelLimits, type ModelLimitsInput } from './limits.js';
+
+const ISO = '2026-01-01T00:00:00.000Z';
+
+/** The one thread the vision cases seed. */
+function threadOf(ctx: TestContext) {
+  const thread = ctx.repos.threads.get('thr_vision');
+  if (thread === undefined) throw new Error('the seeded thread is missing');
+  return thread;
+}
 
 function modelRow(overrides: Partial<Model>): Model {
   return {
@@ -82,5 +92,103 @@ describe('modelLimits', () => {
     });
 
     expect(result.maxOutputTokens).toBe(1_234);
+  });
+});
+
+describe('threadVision', () => {
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = createTestContext();
+  });
+
+  afterEach(() => {
+    ctx.dispose();
+  });
+
+  function seed(vision: boolean): void {
+    ctx.repos.providers.upsert({
+      id: 'prv_vision',
+      kind: 'openai-compatible',
+      label: 'Vision',
+      config: {
+        baseUrl: 'https://gateway.test',
+        capabilities: { tools: true, vision, reasoning: false, reasoningEfforts: [] },
+      },
+    });
+    ctx.repos.projects.add({
+      id: 'prj_vision',
+      name: 'vision',
+      path: ctx.env.root,
+      defaultBranch: 'main',
+      createdAt: ISO,
+    });
+    ctx.repos.threads.create({
+      id: 'thr_vision',
+      projectId: 'prj_vision',
+      parentThreadId: null,
+      title: 'vision',
+      providerId: 'prv_vision',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      status: 'idle',
+      worktreePath: ctx.env.root,
+      branch: null,
+      baseBranch: null,
+      createdAt: ISO,
+      updatedAt: ISO,
+    });
+  }
+
+  it('falls back to the provider toggle when the model row knows nothing', () => {
+    seed(true);
+    ctx.repos.providers.replaceModels('prv_vision', [
+      { modelId: 'model-x', label: 'Model X', contextWindow: null, capabilities: null, isDefault: true },
+    ]);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
+  });
+
+  it('falls back to the provider toggle when the model row was never written', () => {
+    seed(true);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
+  });
+
+  it('honours a provider toggle that is off', () => {
+    seed(false);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(false);
+  });
+
+  it('lets a model row that declares vision:false win over an on toggle', () => {
+    seed(true);
+    ctx.repos.providers.replaceModels('prv_vision', [
+      {
+        modelId: 'model-x',
+        label: 'Model X',
+        contextWindow: null,
+        capabilities: { tools: true, vision: false, reasoning: false, reasoningEfforts: [] },
+        isDefault: true,
+      },
+    ]);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(false);
+  });
+
+  it('lets a model row that declares vision:true win over an off toggle', () => {
+    seed(false);
+    ctx.repos.providers.replaceModels('prv_vision', [
+      {
+        modelId: 'model-x',
+        label: 'Model X',
+        contextWindow: null,
+        capabilities: { tools: true, vision: true, reasoning: false, reasoningEfforts: [] },
+        isDefault: true,
+      },
+    ]);
+
+    expect(threadVision(ctx.repos, threadOf(ctx))).toBe(true);
   });
 });
