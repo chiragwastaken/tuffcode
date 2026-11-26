@@ -69,7 +69,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists; reusing it."
+            draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')
+            echo "Release $GITHUB_REF_NAME already exists (draft: $draft); reusing it."
           else
             echo "Release $GITHUB_REF_NAME is missing; creating it."
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md."
@@ -83,6 +84,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" apps/desktop/dist/Tuffcode-Setup-*.exe apps/desktop/dist/latest.yml apps/desktop/dist/*.blockmap --clobber
 
+      # Deleting and recreating a tag (v0.3.1) makes GitHub turn the existing
+      # release into a draft: the release object survives, the published flag
+      # does not. Assets then upload and verify fine while the release stays
+      # invisible to users and to electron-updater, so publishing gets its own
+      # step after the upload. An already published release is left untouched:
+      # no tag, asset, note or title change.
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')
+          if [ "$draft" = "true" ]; then
+            echo "Release $GITHUB_REF_NAME is a draft; publishing it."
+            gh release edit "$GITHUB_REF_NAME" --draft=false --title "$GITHUB_REF_NAME"
+          else
+            echo "Release $GITHUB_REF_NAME is already published; nothing to do."
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -93,21 +113,27 @@ jobs:
             apps/desktop/dist/*.blockmap
           if-no-files-found: error
 
-      # Fail the release if any required asset is absent, and always print the
-      # assets that are present so a partial upload is visible in the log.
+      # Fail the release if it is still a draft or any required asset is
+      # absent, and always print the state and assets that are present so a
+      # partial upload or an unpublished release is visible in the log.
       - name: Verify release assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')
           assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
-          echo "Release assets for $GITHUB_REF_NAME:"
+          echo "Release $GITHUB_REF_NAME (draft: $draft) assets:"
           printf '%s\n' "$assets"
           missing=0
+          if [ "$draft" != "false" ]; then
+            echo "::error::release $GITHUB_REF_NAME is still a draft (isDraft: $draft)"
+            missing=1
+          fi
           grep -Eq '^Tuffcode-Setup-.*\.exe$' <<<"$assets" || { echo "::error::missing Tuffcode-Setup-*.exe"; missing=1; }
           grep -Eq '^latest\.yml$' <<<"$assets" || { echo "::error::missing latest.yml"; missing=1; }
           grep -Eq '\.blockmap$' <<<"$assets" || { echo "::error::missing blockmap"; missing=1; }
           if [ "$missing" -ne 0 ]; then
-            echo "One or more required release assets are missing."
+            echo "Release verification failed: the release is not published or assets are missing."
             exit 1
           fi
