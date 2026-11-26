@@ -265,7 +265,7 @@ const FORBIDDEN_WORDS: Record<string, true> = {
 
 /** A hyphenated PowerShell cmdlet name that mutates something, e.g. `Remove-ItemProperty`. */
 const POWERSHELL_MUTATION_VERB =
-  /^(?:add|clear|copy|disable|enable|export|import|install|move|new|out|pop|push|register|remove|rename|restart|resume|save|set|start|stop|suspend|uninstall|unregister|update|write)-[a-z]+$/;
+  /^(?:add|clear|copy|disable|enable|export|import|install|invoke|move|new|out|pop|push|register|remove|rename|restart|resume|save|set|start|stop|suspend|uninstall|unregister|update|write)-[a-z]+$/;
 
 const GIT_READ_SUBCOMMANDS: Record<string, true> = {
   status: true,
