@@ -69,10 +69,15 @@ keeps projects, threads, diffs, memory, and terminals in one Electron window.
 - **Installer.** A per-user NSIS installer for Windows x64. Packaged builds check for updates on
   launch, download in the background, and ask you to restart when it is ready.
 
-v0.3.0 adds lossless history, reliable Stop, folded steps, Ctrl+F, fast grep, no iteration cap,
-the edit-tuffcode skill, /reload, MCP OAuth and nested tiles. v0.2.0 added the Claude Desktop
-parity workspace, the plugins hub and image attachments. v0.1.3 added nested subagents, the
-Activity panel, model metadata, MCP, self-configuration, brain links and a rewritten prompt set.
+v0.3.1 fixes explorer tools, provider token compatibility, council models and failure text,
+terminal truth, and makes new chats open in the project folder with an optional worktree; it adds
+the Needs you inbox and project rules discovery. v0.3.0 added lossless history, reliable Stop,
+folded steps, Ctrl+F, fast grep, no iteration cap, the edit-tuffcode skill, /reload, MCP OAuth and
+nested tiles. v0.2.0 added the Claude Desktop parity workspace, the plugins hub and image
+attachments. v0.1.3 added nested subagents, the Activity panel, model metadata, MCP,
+self-configuration, brain links and a rewritten prompt set.
+
+The full shipped, next and deferred feature list is in [docs/features.md](./docs/features.md).
 
 ## Requirements
 

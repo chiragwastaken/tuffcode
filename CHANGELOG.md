@@ -5,6 +5,46 @@ the project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-26
+
+### Reliability
+- Read-only and plan mode can run read-only commands (`ls`, `git log`, `git status`, `rg`, and
+  similar) through a hardened allowlist; writes, redirects, command substitution and known
+  executing flags are denied. Explorer subagents can now investigate with the shell, and reading
+  a directory lists its entries instead of failing.
+- A command that produces no output for 30 seconds is stopped and reported as not run, with its
+  partial output and an explicit warning not to claim it passed.
+- OpenAI-compatible providers that require `max_completion_tokens` now work; the client picks the
+  field per model and retries once when a provider names the other one. The provider Vision toggle
+  is honored when discovery reported no hints.
+
+### Council
+- The planner, worker and reviewer use the models configured in Settings, with fallbacks, and the
+  board and report show the provider error text instead of a bare Failed.
+- Council has a Playwright spec covering the planner, task nodes, worker child and failure text.
+
+### Workspace
+- New chat opens a workspace dialog and defaults to the project folder, with no implicit project
+  or worktree creation. An isolated worktree is an explicit option.
+- Deleting a folder-backed thread or its project never removes the checkout; worktree removal
+  refuses the repository path and any path outside the worktrees root.
+- Worktree provisioning is serialized so two new chats cannot race `git worktree add`.
+
+### Inbox and rules
+- A Needs you view lists pending approvals, stalled runs, failures and ready-to-review threads
+  across every project, with Allow and Deny inline and a sidebar count badge.
+- The prompt loads the project AGENTS.md, CLAUDE.md and .tuffcode/rules/*.md with optional glob
+  scoping under a token budget; prompt preview lists the files.
+- The dock terminal has a permanent Playwright spec proving a real shell, the thread cwd, and a
+  clean reopen.
+
+### Known issues
+- Read-only bash can read any file the OS user can read; writes, exec and network are blocked.
+- Remote OAuth is proven against a local mock authorization server.
+- Plugin hooks and agents are listed but never run.
+- Codex threads do not get the todo and subagent tools.
+- web_fetch does not guard against DNS rebinding.
+
 ## [0.3.0] - 2026-11-26
 
 ### Reliability
