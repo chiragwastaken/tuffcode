@@ -46,6 +46,23 @@ export function reasoningParams(baseUrl: string, effort: string | undefined): Re
   return { reasoning_effort: effort };
 }
 
+/** The output-token field a request carries; newer OpenAI models reject `max_tokens`. */
+export type MaxTokensField = 'max_tokens' | 'max_completion_tokens';
+
+const NEWER_TOKEN_MODELS = /^(gpt-5|gpt-6|o1|o3|o4)/;
+
+/**
+ * Which output-token field the request must carry. Newer OpenAI models take
+ * `max_completion_tokens`; every other compatible server still reads `max_tokens`.
+ * An explicit `maxTokensField` in the provider config wins in either direction.
+ */
+export function maxTokensField(model: string, configured?: unknown): MaxTokensField {
+  if (configured === 'max_completion_tokens' || configured === 'max_tokens') return configured;
+  return NEWER_TOKEN_MODELS.test(model.trim().toLowerCase())
+    ? 'max_completion_tokens'
+    : 'max_tokens';
+}
+
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
 
 export interface OpenAIClientConfig {
@@ -54,6 +71,7 @@ export interface OpenAIClientConfig {
   secret: string | null;
   maxTokens?: number;
   temperature?: number;
+  maxTokensField?: MaxTokensField;
 }
 
 export interface OpenAIClientOptions {
@@ -110,12 +128,18 @@ export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
     typeof rawTemperature === 'number' && Number.isFinite(rawTemperature)
       ? rawTemperature
       : undefined;
+  const rawTokensField = provider.config.maxTokensField;
+  const tokensField =
+    rawTokensField === 'max_tokens' || rawTokensField === 'max_completion_tokens'
+      ? rawTokensField
+      : undefined;
   return {
     baseUrl,
     headers,
     secret,
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(temperature !== undefined ? { temperature } : {}),
+    ...(tokensField !== undefined ? { maxTokensField: tokensField } : {}),
   };
 }
 
@@ -133,7 +157,11 @@ export function toOpenAITools(
   }));
 }
 
-function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record<string, unknown> {
+function buildBody(
+  config: OpenAIClientConfig,
+  request: ChatRequestBody,
+  field: MaxTokensField,
+): Record<string, unknown> {
   const tools = toOpenAITools(request.toolAllowlist, request.toolOptions ?? {});
   const maxTokens = request.maxTokens ?? config.maxTokens;
   return {
@@ -142,7 +170,7 @@ function buildBody(config: OpenAIClientConfig, request: ChatRequestBody): Record
     ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
     stream: true,
     stream_options: { include_usage: true },
-    ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+    ...(maxTokens !== undefined ? { [field]: maxTokens } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     ...reasoningParams(config.baseUrl, request.reasoningEffort),
   };
@@ -157,9 +185,12 @@ async function readExcerpt(response: Response): Promise<string> {
   }
 }
 
-async function mapResponseError(response: Response): Promise<OpenAIRequestError> {
-  const status = response.status;
-  const excerpt = await readExcerpt(response);
+/** A 400 that names both fields is the provider asking for the other output-token field. */
+function rejectsTokenField(excerpt: string): boolean {
+  return excerpt.includes('max_tokens') && excerpt.includes('max_completion_tokens');
+}
+
+function errorFor(status: number, excerpt: string): OpenAIRequestError {
   if (status === 401 || status === 403) {
     return new OpenAIRequestError('unauthorized (check the provider key)', status, false);
   }
@@ -197,11 +228,13 @@ export class OpenAIClient implements ChatStreamer {
 
   async stream(request: ChatRequestBody, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
     let attempt = 0;
+    let fieldRetried = false;
+    let field = maxTokensField(request.model, this.config.maxTokensField);
     while (true) {
       const response = await this.fetchFn(this.config.baseUrl + '/chat/completions', {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify(buildBody(this.config, request)),
+        body: JSON.stringify(buildBody(this.config, request, field)),
         signal,
       });
       if (response.ok) {
@@ -210,7 +243,18 @@ export class OpenAIClient implements ChatStreamer {
         }
         return response.body;
       }
-      const error = await mapResponseError(response);
+      const excerpt = await readExcerpt(response);
+      if (response.status === 400 && !fieldRetried && rejectsTokenField(excerpt)) {
+        fieldRetried = true;
+        const from = field;
+        field = field === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens';
+        this.logger.warn('openai rejected the output token field, retrying with the alternate', {
+          from,
+          to: field,
+        });
+        continue;
+      }
+      const error = errorFor(response.status, excerpt);
       this.logger.warn('openai request failed', {
         status: response.status,
         retryable: error.retryable,
