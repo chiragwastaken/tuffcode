@@ -166,11 +166,20 @@ describe('tool schemas', () => {
     }
   });
 
+  it('documents the bash idle window', () => {
+    const bash = TOOL_SCHEMAS.find((tool) => tool.name === 'bash');
+    const idle = bash?.parameters.properties.idle_timeout_ms;
+    expect(idle?.type).toBe('integer');
+    expect(idle?.default).toBe(60000);
+    expect(idle?.description).toContain('cannot exceed timeout_ms');
+  });
+
   it('declares the documented parameters', () => {
     const byName = new Map(TOOL_SCHEMAS.map((tool) => [tool.name, tool]));
     expect(Object.keys(byName.get('bash')?.parameters.properties ?? {})).toEqual([
       'command',
       'timeout_ms',
+      'idle_timeout_ms',
       'cwd',
     ]);
     expect(Object.keys(byName.get('read')?.parameters.properties ?? {})).toEqual([
@@ -230,7 +239,8 @@ describe('extra tool schemas', () => {
       expect(tool.description.trim().length).toBeGreaterThan(20);
       expect(tool.parameters.type).toBe('object');
       expect(tool.parameters.additionalProperties).toBe(false);
-      const required = { todo: 'op', skill: 'name', web_fetch: 'url' }[tool.name as string] ?? 'action';
+      const required =
+        { todo: 'op', skill: 'name', web_fetch: 'url' }[tool.name as string] ?? 'action';
       expect(tool.parameters.required).toContain(required);
       for (const key of tool.parameters.required) {
         expect(tool.parameters.properties).toHaveProperty(key);
@@ -529,9 +539,7 @@ describe('assemblePrompt', () => {
       system.indexOf('never force push'),
     );
     expect(system.indexOf('## Brain notes')).toBeLessThan(system.indexOf('never force push'));
-    expect(system.indexOf('never force push')).toBeLessThan(
-      system.indexOf('## Retrieved memory'),
-    );
+    expect(system.indexOf('never force push')).toBeLessThan(system.indexOf('## Retrieved memory'));
     expect(system.indexOf('tests live in packages')).toBeLessThan(system.indexOf('<context>'));
     expect(system).not.toContain('run the tests');
     expect(assembly.total).toBe(assembly.sections.reduce((sum, entry) => sum + entry.tokens, 0));

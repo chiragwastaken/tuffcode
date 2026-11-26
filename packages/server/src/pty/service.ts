@@ -4,7 +4,6 @@ import { newId, normalizePath, toLongPath } from '@tuffcode/shared';
 import { spawn, type IPty } from 'node-pty';
 import type { Repos } from '../db/repos/index.js';
 import { conflict, notFound } from '../errors.js';
-import { requireWorktree } from '../git/context.js';
 import { scrubbedEnv } from '../git/runGit.js';
 import { resolveShell, type ShellExists } from './shell.js';
 
@@ -56,16 +55,33 @@ export function terminalEnv(source: NodeJS.ProcessEnv = process.env): Record<str
   return env;
 }
 
-function worktreeCwd(worktreePath: string): string {
+function worktreeCwd(worktreePath: string): string | null {
   const cwd = toLongPath(normalizePath(worktreePath));
-  let isDirectory = false;
   try {
-    isDirectory = statSync(cwd).isDirectory();
+    return statSync(cwd).isDirectory() ? cwd : null;
   } catch {
-    isDirectory = false;
+    return null;
   }
-  if (!isDirectory) throw conflict('thread worktree is not a directory');
-  return cwd;
+}
+
+/**
+ * The directory the shell starts in. A worktree thread must have its own checkout on
+ * disk. A folder thread stores the project checkout itself as its worktree path, so a
+ * stored path that is temporarily unavailable falls back to the project's current
+ * path; a worktree thread never silently drops into the project checkout.
+ */
+function terminalCwd(repos: Repos, threadId: string): string {
+  const thread = repos.threads.get(threadId);
+  if (thread === undefined) throw notFound('thread not found');
+  if (thread.worktreePath === null) throw conflict('thread has no worktree');
+  const stored = worktreeCwd(thread.worktreePath);
+  if (stored !== null) return stored;
+  if (thread.branch === null) {
+    const project = repos.projects.get(thread.projectId);
+    const projectPath = project === undefined ? null : worktreeCwd(project.path);
+    if (projectPath !== null) return projectPath;
+  }
+  throw conflict('thread worktree is not a directory');
 }
 
 function runTaskkill(pid: number): Promise<void> {
@@ -144,10 +160,9 @@ export class TerminalService {
     };
   }
 
-  /** Spawns a shell in the thread's worktree and returns the new terminal id. */
+  /** Spawns a shell in the thread's checkout (or the project folder for folder threads). */
   open(threadId: string, cols: number, rows: number): { terminalId: string } {
-    const { worktreePath } = requireWorktree(this.#repos, threadId);
-    const cwd = worktreeCwd(worktreePath);
+    const cwd = terminalCwd(this.#repos, threadId);
     const shell = resolveShell(this.#repos.settings.get().shell, this.#shellExists);
     const terminalId = newId('term');
     const pty = spawn(shell, [], {

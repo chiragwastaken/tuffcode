@@ -23,7 +23,7 @@ const MAX_OUTPUT = 64 * 1024;
 const MAX_READ_LINES = 2000;
 const DEFAULT_BASH_TIMEOUT = 120000;
 const MAX_BASH_TIMEOUT = 600000;
-const DEFAULT_BASH_IDLE_TIMEOUT = 30000;
+const DEFAULT_BASH_IDLE_TIMEOUT = 60000;
 const MIN_BASH_IDLE_TIMEOUT = 100;
 const MAX_GLOB_ENTRIES = 200;
 const MAX_DIR_ENTRIES = 200;
@@ -158,7 +158,10 @@ const EXTRA_TOOL_ACTIONS: Record<ExtraToolName, readonly string[]> = {
 };
 
 /** Tools without an `action` argument; their key argument names what they do. */
-const ACTIONLESS_EXTRA_TOOLS: Partial<Record<ExtraToolName, true>> = { skill: true, web_fetch: true };
+const ACTIONLESS_EXTRA_TOOLS: Partial<Record<ExtraToolName, true>> = {
+  skill: true,
+  web_fetch: true,
+};
 
 /**
  * Server tools are classified by what they do, not only by mode: a memory search changes
@@ -371,7 +374,10 @@ function isReadOnlySegment(segment: string): boolean {
   // FOO=bar cmd runs cmd with a changed environment, which the allowlist cannot see.
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return false;
   for (const token of tokens) {
-    const bare = token.replace(/^[(&]+/, '').replace(/[)]+$/, '').toLowerCase();
+    const bare = token
+      .replace(/^[(&]+/, '')
+      .replace(/[)]+$/, '')
+      .toLowerCase();
     if (FORBIDDEN_WORDS[bare] === true) return false;
     if (POWERSHELL_MUTATION_VERB.test(bare)) return false;
   }
@@ -1010,11 +1016,13 @@ const bashTool: ToolExecutor = async (args, ctx, _state, deps) => {
   try {
     const command = requireString(args.command, 'command');
     const timeoutMs = clampInt(args.timeout_ms, DEFAULT_BASH_TIMEOUT, 1000, MAX_BASH_TIMEOUT);
+    // The idle window can never outlive the hard timeout; when it is clamped to the
+    // same value the watchdog stays disarmed and the hard timeout reports instead.
     const idleTimeoutMs = clampInt(
       args.idle_timeout_ms,
       DEFAULT_BASH_IDLE_TIMEOUT,
       MIN_BASH_IDLE_TIMEOUT,
-      MAX_BASH_TIMEOUT,
+      timeoutMs,
     );
     const cwd = args.cwd === undefined ? ctx.cwd : resolvePath(ctx, args.cwd, 'cwd');
     const shell = await resolveShell(deps);
@@ -1026,9 +1034,7 @@ const bashTool: ToolExecutor = async (args, ctx, _state, deps) => {
       signal: ctx.signal,
     });
     let output =
-      outcome.spawnError !== null
-        ? `failed to start shell: ${outcome.spawnError}`
-        : outcome.output;
+      outcome.spawnError !== null ? `failed to start shell: ${outcome.spawnError}` : outcome.output;
     if (outcome.truncated) output += `${LF}[output truncated]`;
     if (outcome.failedToRun === 'no-output') {
       output += `${LF}[no output for ${formatDuration(idleTimeoutMs)}; the command was stopped before finishing]`;
@@ -1085,10 +1091,13 @@ async function subagentTool(
     if (deps.subagentControl === undefined) {
       return fail('subagent ' + action + ' is unavailable in this session');
     }
-    const id = typeof args.id === 'string' && args.id.trim().length > 0 ? args.id.trim() : undefined;
+    const id =
+      typeof args.id === 'string' && args.id.trim().length > 0 ? args.id.trim() : undefined;
     const text = typeof args.text === 'string' ? args.text : undefined;
     const timeout =
-      typeof args.timeout_s === 'number' && Number.isFinite(args.timeout_s) ? args.timeout_s : undefined;
+      typeof args.timeout_s === 'number' && Number.isFinite(args.timeout_s)
+        ? args.timeout_s
+        : undefined;
     try {
       const output = await deps.subagentControl({
         action,

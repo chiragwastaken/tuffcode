@@ -10,11 +10,22 @@ import { TerminalService, terminalEnv, type TerminalDataEvent } from './service.
 const NOW = '2026-11-24T00:00:00.000Z';
 const ROUND_TRIP_TIMEOUT_MS = 20_000;
 
-function addThread(ctx: TestContext, id: string, worktreePath: string | null): Thread {
+interface ThreadOptions {
+  /** Folder threads have no branch; a worktree thread defaults to a tuffcode branch. */
+  branch?: string | null;
+  projectPath?: string;
+}
+
+function addThread(
+  ctx: TestContext,
+  id: string,
+  worktreePath: string | null,
+  options: ThreadOptions = {},
+): Thread {
   ctx.repos.projects.add({
     id: `prj_${id}`,
     name: id,
-    path: join(ctx.env.root, `project-${id}`),
+    path: options.projectPath ?? join(ctx.env.root, `project-${id}`),
     defaultBranch: 'main',
     createdAt: NOW,
   });
@@ -29,7 +40,7 @@ function addThread(ctx: TestContext, id: string, worktreePath: string | null): T
     permissionMode: 'ask',
     status: 'idle',
     worktreePath,
-    branch: 'tuffcode/test',
+    branch: options.branch === undefined ? 'tuffcode/test' : options.branch,
     baseBranch: 'main',
     createdAt: NOW,
     updatedAt: NOW,
@@ -109,6 +120,31 @@ describe('TerminalService', () => {
     writeFileSync(file, 'x');
     addThread(ctx, 'thr_file', file);
     expect(errorCode(() => service.open('thr_file', 80, 24))).toBe('conflict');
+  });
+
+  it('opens a folder thread at the project path when the stored path is gone', async () => {
+    const projectPath = join(ctx.env.root, 'project-folder-gone');
+    mkdirSync(projectPath, { recursive: true });
+    addThread(ctx, 'thr_folder_gone', join(ctx.env.root, 'gone'), {
+      branch: null,
+      projectPath,
+    });
+
+    const { terminalId } = service.open('thr_folder_gone', 80, 24);
+    expect(service.get(terminalId)?.cwd.toLowerCase()).toBe(projectPath.toLowerCase());
+    await service.close(terminalId);
+  });
+
+  it('rejects a folder thread when the project path is missing too', () => {
+    addThread(ctx, 'thr_folder_lost', join(ctx.env.root, 'gone'), { branch: null });
+    expect(errorCode(() => service.open('thr_folder_lost', 80, 24))).toBe('conflict');
+  });
+
+  it('never drops a worktree thread into the project checkout', () => {
+    const projectPath = join(ctx.env.root, 'project-wt-gone');
+    mkdirSync(projectPath, { recursive: true });
+    addThread(ctx, 'thr_wt_gone', join(ctx.env.root, 'gone-wt'), { projectPath });
+    expect(errorCode(() => service.open('thr_wt_gone', 80, 24))).toBe('conflict');
   });
 
   it('pins TERM and strips the bearer token from the child environment', () => {
