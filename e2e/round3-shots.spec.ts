@@ -83,6 +83,9 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
 
   // Two roots with readable titles; threads.create broadcasts thread.updated, so the
   // sidebar shows them without a reload. Root one later spawns the nested child.
+  // Root one asks for the isolated worktree, the same `workspace` field the New chat
+  // dialog's "New worktree" radio sends, because the header scenario below measures a
+  // thread that owns a branch: a folder-backed thread has none, so no branch chip.
   const projects = (await rpc.request('projects.list', {})) as { id: string }[];
   const projectId = projects[0]?.id;
   if (projectId === undefined) throw new Error('the project was not added');
@@ -93,6 +96,7 @@ test('round 3 surfaces render at their measured sizes', async ({ session, worksp
     modelId: MOCK_MODEL_ID,
     executionMode: 'work',
     permissionMode: 'full-auto',
+    workspace: 'worktree',
   })) as { id: string };
   const secondRoot = (await rpc.request('threads.create', {
     projectId,
