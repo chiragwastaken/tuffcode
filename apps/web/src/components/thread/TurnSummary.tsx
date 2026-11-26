@@ -32,6 +32,7 @@ export function TurnSummary({ thread }: { thread: Thread }) {
   const rpc = useRpc();
   const [totals, setTotals] = useState<DiffTotals | null>(null);
   const [creating, setCreating] = useState(false);
+  const [prError, setPrError] = useState<string | null>(null);
   const settled = thread.status !== 'running' && thread.status !== 'needs-approval';
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export function TurnSummary({ thread }: { thread: Thread }) {
 
   async function createPr(): Promise<void> {
     setCreating(true);
+    setPrError(null);
     try {
       const result = await rpc.request('git.pr', {
         threadId: thread.id,
@@ -62,7 +64,7 @@ export function TurnSummary({ thread }: { thread: Thread }) {
       toast.success(`Draft pull request #${result.number} opened.`);
       window.tuffcode?.openExternal?.(result.url);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not open the pull request.');
+      setPrError(error instanceof Error ? error.message : 'Could not open the pull request.');
     } finally {
       setCreating(false);
     }
@@ -71,34 +73,41 @@ export function TurnSummary({ thread }: { thread: Thread }) {
   return (
     <div
       data-testid="turn-summary"
-      className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-3 rounded-lg border border-border bg-card/60 px-3 py-2"
+      className="mx-auto mb-2 flex w-full max-w-3xl flex-col gap-1 rounded-lg border border-border bg-card/60 px-3 py-2"
     >
-      <FileDiff aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-      <span className="min-w-0 flex-1 text-xs text-foreground">
-        {totals.files} {totals.files === 1 ? 'file' : 'files'} changed{' '}
-        <span className="tabular-nums text-success-foreground">+{totals.additions}</span>{' '}
-        <span className="tabular-nums text-error-foreground">-{totals.deletions}</span>
-      </span>
-      <Button size="sm" variant="ghost" onClick={() => requestInspectorTab('diff')} data-testid="turn-summary-review">
-        Review changes
-      </Button>
-      {thread.prUrl === null ? (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={creating || thread.branch === null}
-          title={thread.branch === null ? 'Pull requests need a worktree branch.' : undefined}
-          onClick={() => void createPr()}
-          data-testid="turn-summary-pr"
-        >
-          <GitPullRequest className="size-3.5" strokeWidth={1.75} />
-          Create PR
+      <div className="flex min-w-0 items-center gap-3">
+        <FileDiff aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+        <span className="min-w-0 flex-1 text-xs text-foreground">
+          {totals.files} {totals.files === 1 ? 'file' : 'files'} changed{' '}
+          <span className="tabular-nums text-success-foreground">+{totals.additions}</span>{' '}
+          <span className="tabular-nums text-error-foreground">-{totals.deletions}</span>
+        </span>
+        <Button size="sm" variant="ghost" onClick={() => requestInspectorTab('diff')} data-testid="turn-summary-review">
+          Review changes
         </Button>
-      ) : (
-        <Button size="sm" variant="outline" onClick={() => window.tuffcode?.openExternal?.(thread.prUrl ?? '')}>
-          <GitPullRequest className="size-3.5" strokeWidth={1.75} />
-          View PR
-        </Button>
+        {thread.prUrl === null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={creating || thread.branch === null}
+            title={thread.branch === null ? 'Pull requests need a worktree branch.' : undefined}
+            onClick={() => void createPr()}
+            data-testid="turn-summary-pr"
+          >
+            <GitPullRequest className="size-3.5" strokeWidth={1.75} />
+            Create PR
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => window.tuffcode?.openExternal?.(thread.prUrl ?? '')}>
+            <GitPullRequest className="size-3.5" strokeWidth={1.75} />
+            View PR
+          </Button>
+        )}
+      </div>
+      {prError === null ? null : (
+        <p role="alert" data-testid="turn-summary-error" className="px-7 text-2xs text-error">
+          {prError}
+        </p>
       )}
     </div>
   );
