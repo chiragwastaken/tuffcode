@@ -328,6 +328,8 @@ describe('thread runner', () => {
     f.adapter.push(
       { type: 'turn.started', turnId },
       { type: 'text.delta', turnId, text: 'hello ' },
+      // A structural event forces the buffered text out, so this step writes two rows.
+      { type: 'usage', turnId, inputTokens: 5 },
       { type: 'text.delta', turnId, text: 'world' },
       { type: 'turn.finished', turnId, reason: 'complete' },
     );
@@ -337,16 +339,17 @@ describe('thread runner', () => {
     expect(rows.map((row) => row.type)).toEqual([
       'turn.started',
       'text.delta',
+      'usage',
       'text.delta',
       'turn.finished',
     ]);
-    expect(rows.map((row) => row.seq)).toEqual([1, 2, 3, 4]);
+    expect(rows.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5]);
 
     const broadcasts = f.events.filter(
       (event): event is Extract<ServerEvent, { type: 'thread.event' }> =>
         event.type === 'thread.event',
     );
-    expect(broadcasts.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+    expect(broadcasts.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
     for (const broadcast of broadcasts) {
       const stored = f.ctx.repos.events.since('thr_a', broadcast.seq - 1, 1)[0];
       expect(stored?.payload).toEqual(broadcast.payload);
@@ -381,6 +384,92 @@ describe('thread runner', () => {
     const stored = f.ctx.repos.messages.list('thr_a');
     expect(stored.map((message) => message.role)).toEqual(['user', 'assistant']);
     expect(stored[1]).toMatchObject({ id: `msg_${turnId}_assistant`, content: 'ab' });
+  });
+
+  it('writes a 300-delta stream as a few rows and reconstructs the exact text', async () => {
+    const f = setup();
+    const ended = waitForTurnEnd(f.bus);
+    const { turnId } = await f.runner.send('thr_a', 'stream');
+
+    const pieces = Array.from({ length: 300 }, (_, index) => `piece ${index} `);
+    const expected = pieces.join('');
+    f.adapter.push({ type: 'turn.started', turnId });
+    for (const piece of pieces) f.adapter.push({ type: 'text.delta', turnId, text: piece });
+    f.adapter.push({ type: 'turn.finished', turnId, reason: 'complete' });
+    await ended;
+    await vi.waitFor(() => expect(f.runner.listActive()).toHaveLength(0));
+
+    const rows = storedEvents(f);
+    const deltas = rows.filter((row) => row.type === 'text.delta');
+    // 302 pushed events (start, 300 deltas, boundary) become 3 rows.
+    expect(rows).toHaveLength(3);
+    expect(deltas).toHaveLength(1);
+    const deltaText = (row: (typeof deltas)[number]): string => {
+      const payload = row.payload as AdapterEvent;
+      return payload.type === 'text.delta' ? payload.text : '';
+    };
+    expect(deltas.map(deltaText).join('')).toBe(expected);
+    expect(f.ctx.repos.messages.list('thr_a')[1]?.content).toBe(expected);
+    // Structural events keep their positions: the start leads and the boundary trails.
+    expect(rows[0]?.type).toBe('turn.started');
+    expect(rows.at(-1)?.type).toBe('turn.finished');
+    const seqs = rows.map((row) => row.seq);
+    expect(seqs).toEqual([...seqs].toSorted((left, right) => left - right));
+  });
+
+  it('flushes buffered text on the timer while the stream is idle', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = setup();
+      const { turnId } = await f.runner.send('thr_a', 'slow');
+      f.adapter.push({ type: 'text.delta', turnId, text: 'slow ' });
+      // Drain the microtasks so the delta sits in the buffer, with the 50ms timer pending.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(storedEvents(f)).toHaveLength(0);
+
+      // No structural event arrives, so only the timer can surface this row.
+      await vi.advanceTimersByTimeAsync(50);
+      expect(storedEvents(f).map((row) => row.type)).toEqual(['text.delta']);
+
+      const ended = waitForTurnEnd(f.bus);
+      f.adapter.push(
+        { type: 'text.delta', turnId, text: 'answer' },
+        { type: 'turn.finished', turnId, reason: 'complete' },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await ended;
+
+      const deltas = storedEvents(f).filter((row) => row.type === 'text.delta');
+      expect(deltas).toHaveLength(2);
+      expect(f.ctx.repos.messages.list('thr_a')[1]?.content).toBe('slow answer');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes a pending delta before the interrupt boundary and leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = setup();
+      const { turnId } = await f.runner.send('thr_a', 'long job');
+      f.adapter.push({ type: 'text.delta', turnId, text: 'partial' });
+      // The delta is buffered and the 50ms timer has not fired yet.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(storedEvents(f)).toHaveLength(0);
+
+      await f.runner.interrupt('thr_a');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(storedEvents(f).map((row) => row.type)).toEqual(['text.delta', 'turn.finished']);
+      expect(f.ctx.repos.messages.list('thr_a')[1]?.content).toBe(
+        `partial${INTERRUPTED_MARKER}`,
+      );
+      // A timer that outlived the turn would append a second, empty delta row here.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(storedEvents(f).map((row) => row.type)).toEqual(['text.delta', 'turn.finished']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('passes the enabled tools from settings into the turn', async () => {

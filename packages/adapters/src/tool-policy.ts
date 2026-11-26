@@ -1,11 +1,19 @@
-import type { AdapterDeps, TurnContext, TurnToolOptions } from '@tuffcode/contracts';
+import type {
+  AdapterDeps,
+  ExtraToolName,
+  PermissionMode,
+  TurnContext,
+  TurnToolOptions,
+} from '@tuffcode/contracts';
 import {
   EXTRA_TOOL_SCHEMAS,
   SUBAGENT_TOOL,
   SUBAGENT_TOOL_NAME,
   TOOL_SCHEMAS,
+  type ToolName,
   type ToolSchema,
 } from '@tuffcode/prompt';
+import { classifyTool } from './openai/tools.js';
 
 /** A file tool, the delegation tool, or a server-owned extra tool. */
 export type HarnessToolSchema =
@@ -104,6 +112,50 @@ export function allowedToolSchemas(
 /** True when settings disabled this tool, so a call must be answered with an error. */
 export function isToolDisabled(name: string, allowlist: readonly string[] | undefined): boolean {
   return allowlist !== undefined && !allowlist.includes(name);
+}
+
+const ALL_PERMISSION_MODES: readonly PermissionMode[] = [
+  'read-only',
+  'ask',
+  'accept-edits',
+  'full-auto',
+];
+
+/** Tools that only read the worktree. Everything else can write, spawn, or reach the network. */
+const READ_ONLY_TOOLS: Record<string, true> = {
+  read: true,
+  glob: true,
+  grep: true,
+  memory: true,
+  todo: true,
+};
+
+/** How many read-only calls of one assistant step may be in flight at the same time. */
+export const PARALLEL_TOOL_LIMIT = 4;
+
+/**
+ * Whether a call may run concurrently with its siblings from the same assistant step.
+ *
+ * Two conditions, both required: the shared permission ladder allows the call in every
+ * mode, so no mode can ever gate it after it started, and the tool is on the read-only
+ * list, so it cannot write, spawn, or reach the network. `mcp list` is deliberately
+ * absent even though it looks like a read: it spawns the configured binaries, and a
+ * read-only turn denies it. `memory` and `todo` allow their mutating actions in every
+ * mode, so their action decides.
+ */
+export function isParallelSafeTool(
+  name: string,
+  args: Record<string, unknown> | null | undefined,
+): boolean {
+  if (READ_ONLY_TOOLS[name] !== true) return false;
+  const input = args ?? {};
+  const allowed = ALL_PERMISSION_MODES.every(
+    (mode) => classifyTool(name as ToolName | ExtraToolName, input, mode) === 'allow',
+  );
+  if (!allowed) return false;
+  if (name === 'memory') return input.action === 'search';
+  if (name === 'todo') return input.op === 'view';
+  return true;
 }
 
 /** How many identical repeats in a row, with no new assistant text, mean the model is stuck. */

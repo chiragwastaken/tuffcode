@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allowedToolSchemas, RepeatedToolCallGuard } from './tool-policy.js';
+import { allowedToolSchemas, isParallelSafeTool, RepeatedToolCallGuard } from './tool-policy.js';
 
 describe('allowedToolSchemas', () => {
   it('offers the six core tools when the allowlist is unset', () => {
@@ -41,6 +41,45 @@ describe('allowedToolSchemas', () => {
     expect(
       allowedToolSchemas(['read'], { subagent: true, extra: true }).map((tool) => tool.name),
     ).toEqual(['read', 'subagent', 'mcp', 'memory', 'config']);
+  });
+});
+
+describe('isParallelSafeTool', () => {
+  it('accepts the file tools that only read', () => {
+    expect(isParallelSafeTool('read', { path: 'a.ts' })).toBe(true);
+    expect(isParallelSafeTool('glob', { pattern: '**/*.ts' })).toBe(true);
+    expect(isParallelSafeTool('grep', { pattern: 'needle' })).toBe(true);
+  });
+
+  it('accepts the extra tools only for their read actions', () => {
+    expect(isParallelSafeTool('memory', { action: 'search', query: 'x' })).toBe(true);
+    expect(isParallelSafeTool('memory', { action: 'add', text: 'x' })).toBe(false);
+    expect(isParallelSafeTool('todo', { op: 'view' })).toBe(true);
+    expect(isParallelSafeTool('todo', { op: 'append', text: 'x' })).toBe(false);
+    expect(isParallelSafeTool('todo', { op: 'start', id: 't1' })).toBe(false);
+  });
+
+  it('refuses every tool that can write, spawn, or reach the network', () => {
+    expect(isParallelSafeTool('write', { path: 'a', content: 'x' })).toBe(false);
+    expect(isParallelSafeTool('edit', { path: 'a', old: 'x', new: 'y' })).toBe(false);
+    expect(isParallelSafeTool('bash', { command: 'ls' })).toBe(false);
+    expect(isParallelSafeTool('mcp', { action: 'call', tool: 'x' })).toBe(false);
+    // mcp list looks like a read but spawns the configured binaries.
+    expect(isParallelSafeTool('mcp', { action: 'list' })).toBe(false);
+    expect(isParallelSafeTool('subagent', { action: 'status' })).toBe(false);
+    expect(isParallelSafeTool('config', { action: 'settings.set', key: 'a', value: 1 })).toBe(false);
+    expect(isParallelSafeTool('web_fetch', { url: 'https://example.com' })).toBe(false);
+    expect(isParallelSafeTool('skill', { name: 'debug' })).toBe(false);
+  });
+
+  it('refuses a name it does not know, even one the ladder would allow', () => {
+    expect(isParallelSafeTool('read_all', { path: 'a.ts' })).toBe(false);
+    expect(isParallelSafeTool('', {})).toBe(false);
+  });
+
+  it('treats missing arguments as an empty object', () => {
+    expect(isParallelSafeTool('read', null)).toBe(true);
+    expect(isParallelSafeTool('memory', undefined)).toBe(false);
   });
 });
 

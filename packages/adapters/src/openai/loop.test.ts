@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdapterDeps, AdapterEvent, AdapterLogger, TurnContext } from '@tuffcode/contracts';
 import type { ChatMessage, ChatRequestBody, ChatStreamer } from './client.js';
 import { createOpenAIChatAdapter } from './index.js';
@@ -104,6 +104,39 @@ function toolCallPayload(index: number): unknown[] {
   ];
 }
 
+/** Several complete tool calls in one delta, in the model's order. */
+function multiToolCallPayload(
+  calls: readonly { id: string; name: string; args: unknown }[],
+): unknown[] {
+  return [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: calls.map((call, index) => ({
+              index,
+              id: call.id,
+              function: { name: call.name, arguments: JSON.stringify(call.args) },
+            })),
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    },
+  ];
+}
+
+/** A promise plus its resolver, so a test can hold a tool call open mid-flight. */
+function gate<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  // The package targets ES2023, which has no Promise.withResolvers, so this is the
+  // only way to capture the resolver.
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /** A body whose first read rejects, standing in for a dropped provider connection. */
 function failingStream(message: string): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -144,6 +177,182 @@ describe('runTurn', () => {
     });
     expect(client.requests).toHaveLength(2);
     expect(messages.some((message) => message.role === 'tool')).toBe(true);
+  });
+
+  it('runs two read-only calls of one step concurrently and keeps results in call order', async () => {
+    const gates = [gate<string>(), gate<string>()];
+    const started: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (_name, args) => {
+        const index = args.query === 'first' ? 0 : 1;
+        started.push(String(args.query));
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        const output = await gates[index]?.promise;
+        inFlight -= 1;
+        return output ?? '';
+      },
+    };
+    const client = new FakeClient([
+      streamOf(
+        multiToolCallPayload([
+          { id: 'call_a', name: 'memory', args: { action: 'search', query: 'first' } },
+          { id: 'call_b', name: 'memory', args: { action: 'search', query: 'second' } },
+        ]),
+      ),
+      streamOf([{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }]),
+    ]);
+    const messages: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    const events: AdapterEvent[] = [];
+    const collecting = (async () => {
+      for await (const event of runTurn({
+        ctx: context(),
+        client,
+        messages,
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      })) {
+        events.push(event);
+      }
+    })();
+
+    // Both calls must be running before either one is allowed to finish.
+    await vi.waitFor(() => expect(started).toEqual(['first', 'second']));
+    expect(maxInFlight).toBe(2);
+    // The second call finishes first, and its finished event is the first one emitted.
+    gates[1]?.resolve('second result');
+    await vi.waitFor(() =>
+      expect(events.filter((event) => event.type === 'tool.finished')).toHaveLength(1),
+    );
+    expect(events.filter((event) => event.type === 'tool.finished')[0]).toMatchObject({
+      toolCallId: 'call_b',
+      output: 'second result',
+    });
+    gates[0]?.resolve('first result');
+    await collecting;
+
+    const finished = events.filter((event) => event.type === 'tool.finished');
+    expect(finished.map((event) => event.toolCallId)).toEqual(['call_b', 'call_a']);
+    const startedEvents = events.filter((event) => event.type === 'tool.started');
+    expect(startedEvents.map((event) => event.toolCallId)).toEqual(['call_a', 'call_b']);
+    // The model reads the results in the order it asked, not the order they finished.
+    expect(
+      messages.filter((message) => message.role === 'tool').map((message) => message.content),
+    ).toEqual(['first result', 'second result']);
+    expect(events.at(-1)).toEqual({
+      type: 'turn.finished',
+      turnId: 'turn_1',
+      reason: 'complete',
+    });
+  });
+
+  it('serializes the step when one call needs approval', async () => {
+    const order: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (_name, args) => {
+        order.push(String(args.query ?? args.action));
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        return 'ran ' + String(args.query ?? args.action);
+      },
+    };
+    const client = new FakeClient([
+      streamOf(
+        multiToolCallPayload([
+          { id: 'call_read', name: 'memory', args: { action: 'search', query: 'first' } },
+          {
+            id: 'call_cfg',
+            name: 'config',
+            args: { action: 'settings.set', key: 'a', value: 1 },
+          },
+        ]),
+      ),
+      streamOf([{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }]),
+    ]);
+    const events = await collect(
+      runTurn({
+        ctx: context({ permissionMode: 'ask' }),
+        client,
+        messages: [{ role: 'user', content: 'go' }],
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        requestApproval: async () => {
+          order.push('approval');
+          return 'allow';
+        },
+      }),
+    );
+
+    expect(maxInFlight).toBe(1);
+    expect(order).toEqual(['first', 'approval', 'settings.set']);
+    const types = events
+      .filter((event) => event.type === 'tool.started' || event.type === 'tool.finished' || event.type === 'approval.requested')
+      .map((event) => event.type);
+    expect(types).toEqual([
+      'tool.started',
+      'tool.finished',
+      'tool.started',
+      'approval.requested',
+      'tool.finished',
+    ]);
+  });
+
+  it('does not cancel a sibling when one parallel call fails', async () => {
+    const withRunner: AdapterDeps = {
+      ...deps,
+      extraTool: async (_name, args) => {
+        if (args.query === 'boom') throw new Error('memory offline');
+        return 'ok';
+      },
+    };
+    const client = new FakeClient([
+      streamOf(
+        multiToolCallPayload([
+          { id: 'call_boom', name: 'memory', args: { action: 'search', query: 'boom' } },
+          { id: 'call_ok', name: 'memory', args: { action: 'search', query: 'fine' } },
+        ]),
+      ),
+      streamOf([{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }]),
+    ]);
+    const messages: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    const events = await collect(
+      runTurn({
+        ctx: context(),
+        client,
+        messages,
+        state: createToolSessionState(),
+        deps: withRunner,
+        signal: new AbortController().signal,
+        requestApproval: async () => 'allow',
+      }),
+    );
+
+    const finished = events.filter((event) => event.type === 'tool.finished');
+    expect(finished).toHaveLength(2);
+    expect(finished.find((event) => event.toolCallId === 'call_boom')).toMatchObject({
+      output: 'memory offline',
+      isError: true,
+    });
+    expect(finished.find((event) => event.toolCallId === 'call_ok')).toMatchObject({
+      output: 'ok',
+      isError: false,
+    });
+    expect(
+      messages.filter((message) => message.role === 'tool').map((message) => message.content),
+    ).toEqual(['memory offline', 'ok']);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: 'turn.finished', reason: 'complete' });
   });
 
   it('denies a tool when approval is denied', async () => {
