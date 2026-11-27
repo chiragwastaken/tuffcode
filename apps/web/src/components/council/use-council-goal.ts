@@ -1,5 +1,5 @@
 import type { RpcResult } from '@tuffcode/contracts';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
 import {
@@ -44,6 +44,9 @@ export function useCouncilGoal(threadId: string | undefined): UseCouncilGoalResu
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollingStopped, setPollingStopped] = useState(false);
+  /** The goal the composer currently follows; a late cancel load must not write another. */
+  const trackedGoalId = useRef<string | null>(null);
+  trackedGoalId.current = goalId;
 
   // Reattach to the thread's newest goal after a reload instead of trusting
   // module memory that dies with the window.
@@ -128,10 +131,13 @@ export function useCouncilGoal(threadId: string | undefined): UseCouncilGoalResu
 
   const cancel = useCallback(async (): Promise<void> => {
     if (goalId === null || cancelling) return;
+    const target = goalId;
     setCancelling(true);
     try {
-      await rpc.request('council.cancel', { goalId });
-      await load();
+      await rpc.request('council.cancel', { goalId: target });
+      // The server can take seconds to tear a goal down; the user may have started
+      // another goal meanwhile, and this load would overwrite its status.
+      if (trackedGoalId.current === target) await load();
     } catch (cause) {
       setError(councilErrorMessage(cause));
     } finally {
