@@ -26,6 +26,8 @@ export async function preparePullRequest(
   threadId: string,
   title: string,
 ): Promise<void> {
+  // Validate before touching the tree: a bad title must not commit and push work.
+  if (title.trim().length === 0) throw badRequest('pull request title is required');
   try {
     await commitThread(repos, threadId, `Changes from ${title}`);
   } catch (error) {
