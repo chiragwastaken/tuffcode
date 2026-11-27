@@ -348,7 +348,7 @@ describe('OpenAIClient', () => {
     const delays: number[] = [];
     let calls = 0;
     const client = new OpenAIClient(
-      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      { baseUrl: 'http://rate-limit/v1', headers: {}, secret: null },
       {
         fetchFn: async (_url, init) => {
           bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
@@ -360,6 +360,7 @@ describe('OpenAIClient', () => {
         sleep: async (ms) => {
           delays.push(ms);
         },
+        random: () => 0,
         logger,
       },
     );
@@ -369,6 +370,47 @@ describe('OpenAIClient', () => {
     expect(stream).toBeDefined();
     expect(delays).toEqual([5000]);
     expect(bodies[1]?.['stream_options']).toEqual({ include_usage: true });
+  });
+
+  it('makes a second session wait for the shared 429 cooldown', async () => {
+    const baseUrl = 'http://shared-cooldown/v1';
+    const firstDelays: number[] = [];
+    const first = new OpenAIClient(
+      { baseUrl, headers: {}, secret: null },
+      {
+        fetchFn: async () => response(502, '{"error":{"message":"Upstream HTTP 429"}}'),
+        sleep: async (ms) => {
+          firstDelays.push(ms);
+        },
+        random: () => 0,
+        logger,
+      },
+    );
+    await expect(first.stream(request, new AbortController().signal)).rejects.toThrow(
+      'upstream rate limited',
+    );
+
+    const secondDelays: number[] = [];
+    let secondCalls = 0;
+    const second = new OpenAIClient(
+      { baseUrl, headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          secondCalls += 1;
+          return response(200);
+        },
+        sleep: async (ms) => {
+          secondDelays.push(ms);
+        },
+        random: () => 0,
+        logger,
+      },
+    );
+    const stream = await second.stream(request, new AbortController().signal);
+
+    expect(stream).toBeDefined();
+    expect(secondCalls).toBe(1);
+    expect(secondDelays[0]).toBeGreaterThan(30000);
   });
 
   it('recovers on the fifth attempt after four 502s', async () => {

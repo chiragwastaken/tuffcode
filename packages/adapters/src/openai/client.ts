@@ -80,6 +80,7 @@ export interface OpenAIClientConfig {
 export interface OpenAIClientOptions {
   fetchFn?: FetchFn;
   sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
   logger: AdapterLogger;
 }
 
@@ -203,6 +204,13 @@ function rejectsTokenField(excerpt: string): boolean {
   return excerpt.includes('max_tokens') && excerpt.includes('max_completion_tokens');
 }
 
+/** Shared across sessions: a 429 empties the provider bucket for every caller. */
+const rateLimitCooldowns = new Map<string, number>();
+
+function cooldownKey(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '');
+}
+
 function rateLimitedBody(excerpt: string): boolean {
   return /HTTP\s*429|"code"\s*:\s*"?429"?|rate.?limit/i.test(excerpt);
 }
@@ -239,6 +247,7 @@ function retryDelay(response: Response, attempt: number, rateLimited = false): n
 export class OpenAIClient implements ChatStreamer {
   private readonly fetchFn: FetchFn;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly logger: AdapterLogger;
 
   constructor(
@@ -247,6 +256,7 @@ export class OpenAIClient implements ChatStreamer {
   ) {
     this.fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
     this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.random = options.random ?? Math.random;
     this.logger = options.logger;
   }
 
@@ -254,8 +264,10 @@ export class OpenAIClient implements ChatStreamer {
     let attempt = 0;
     let fieldRetried = false;
     let includeUsage = true;
+    let cooldownUntil = 0;
     let field = maxTokensField(request.model, this.config.maxTokensField);
     while (true) {
+      await this.waitForCooldown(cooldownUntil);
       const response = await this.fetchFn(this.config.baseUrl + '/chat/completions', {
         method: 'POST',
         headers: this.headers(),
@@ -308,8 +320,28 @@ export class OpenAIClient implements ChatStreamer {
         throw new OpenAIRequestError(message, error.status, error.retryable);
       }
       attempt += 1;
-      await this.sleep(retryDelay(response, attempt, rateLimited));
+      const delay = retryDelay(response, attempt, rateLimited);
+      if (rateLimited) {
+        const key = cooldownKey(this.config.baseUrl);
+        const until = Date.now() + delay;
+        cooldownUntil = until;
+        rateLimitCooldowns.set(key, Math.max(rateLimitCooldowns.get(key) ?? 0, until));
+      }
+      await this.sleep(delay);
     }
+  }
+
+  /** Waits out a rate-limit window another session observed for the same base URL. */
+  private async waitForCooldown(alreadyWaitedUntil: number): Promise<void> {
+    const key = cooldownKey(this.config.baseUrl);
+    const until = rateLimitCooldowns.get(key);
+    if (until === undefined || until <= alreadyWaitedUntil) return;
+    const wait = until - Date.now();
+    if (wait <= 0) {
+      if (rateLimitCooldowns.get(key) === until) rateLimitCooldowns.delete(key);
+      return;
+    }
+    await this.sleep(wait + Math.floor(this.random() * 250));
   }
 
   private headers(): Record<string, string> {
