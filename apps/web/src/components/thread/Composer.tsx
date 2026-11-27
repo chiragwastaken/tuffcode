@@ -670,6 +670,17 @@ export function Composer({ thread }: ComposerProps) {
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
+          {connection === 'open' ? null : (
+            <p
+              data-testid="composer-disconnected"
+              className="px-1 pb-1 text-2xs text-warning-foreground"
+            >
+              {connection === 'protocol-error'
+                ? 'Connection error. Reload to reconnect.'
+                : 'Disconnected, reconnecting...'}
+            </p>
+          )}
+
           {councilMode ? (
             <div className="flex items-end gap-2">
               <div className="min-w-0 flex-1">
@@ -761,15 +772,6 @@ export function Composer({ thread }: ComposerProps) {
                   className="truncate px-1 pb-1 text-2xs text-muted-foreground"
                 >
                   {queuedNotice.text}
-                </p>
-              ) : null}
-
-              {connection !== 'open' ? (
-                <p
-                  data-testid="composer-disconnected"
-                  className="truncate px-1 pb-1 text-2xs text-warning-foreground"
-                >
-                  Disconnected, reconnecting...
                 </p>
               ) : null}
 
