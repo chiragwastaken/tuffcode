@@ -20,8 +20,12 @@ export interface UseCouncilGoalResult {
   status: CouncilStatus | null;
   starting: boolean;
   error: string | null;
+  /** True while a goal is still moving, so the composer can offer Stop. */
+  running: boolean;
+  cancelling: boolean;
   /** Resolves true when the server accepted the goal. */
   start: (goal: string) => Promise<boolean>;
+  cancel: () => Promise<void>;
 }
 
 /**
@@ -37,6 +41,7 @@ export function useCouncilGoal(threadId: string | undefined): UseCouncilGoalResu
   const [goalId, setGoalId] = useState<string | null>(null);
   const [status, setStatus] = useState<CouncilStatus | null>(null);
   const [starting, setStarting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollingStopped, setPollingStopped] = useState(false);
 
@@ -121,5 +126,19 @@ export function useCouncilGoal(threadId: string | undefined): UseCouncilGoalResu
     [autonomy, rpc, starting, threadId],
   );
 
-  return { goalId, status, starting, error, start };
+  const cancel = useCallback(async (): Promise<void> => {
+    if (goalId === null || cancelling) return;
+    setCancelling(true);
+    try {
+      await rpc.request('council.cancel', { goalId });
+      await load();
+    } catch (cause) {
+      setError(councilErrorMessage(cause));
+    } finally {
+      setCancelling(false);
+    }
+  }, [cancelling, goalId, load, rpc]);
+
+  const running = goalState !== undefined && !isGoalTerminal(goalState);
+  return { goalId, status, starting, error, running, cancelling, start, cancel };
 }

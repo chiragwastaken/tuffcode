@@ -56,6 +56,10 @@ test('runs a council goal with the configured models and reports the failure', a
   await goalInput.fill('Document the answer constant and re-export it');
   await page.getByTestId('council-send').click();
 
+  // The composer keeps a Stop control while the goal is moving, so a collapsed board
+  // cannot strand the user with no way to cancel.
+  await expect(page.getByTestId('council-stop')).toBeVisible({ timeout: 30_000 });
+
   const board = page.getByTestId('council-board');
   await expect(board).toHaveAttribute('data-empty', 'false', { timeout: 60_000 });
 
