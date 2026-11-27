@@ -89,3 +89,4 @@ export {
   type TerminalCursorStyle,
   type TerminalOptions,
 } from './terminal-options';
+export { PERMISSION_LABEL } from './labels';
