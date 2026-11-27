@@ -238,14 +238,16 @@ function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
     setSavingComment(true);
     setDraftError(null);
     try {
-      const created = await rpc.request('comments.add', {
+      await rpc.request('comments.add', {
         threadId,
         filePath: draft.path,
         line: draft.line,
         side: draft.side,
         body: draftBody.trim(),
       });
-      setComments((previous) => [...previous, created]);
+      // Refetch instead of appending: an in-flight list request would otherwise wipe
+      // the new row, or a late response would duplicate it.
+      reload();
       setDraft(null);
       setDraftBody('');
     } catch (caught) {
