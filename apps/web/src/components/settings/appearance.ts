@@ -1,6 +1,6 @@
 import type { InterfaceSize, Theme } from '@tuffcode/contracts';
 import { themeBase } from '@tuffcode/contracts';
-import { applyThemePalette, paletteFor, type ThemePalette } from '@tuffcode/ui';
+import { applyThemePalette } from '@tuffcode/ui';
 
 /** The window can follow the OS, so the preference is wider than the stored theme. */
 export type ThemePreference = Theme | 'system';
@@ -44,11 +44,6 @@ export function applyTheme(
   // The preload resolves the base scheme for the main process, which repaints the
   // native title bar overlay and window background.
   window.tuffcode.setTheme(palette.id, palette.base);
-}
-
-/** The Shiki theme for a stored theme id, for code blocks and diffs. */
-export function syntaxThemeFor(theme: Theme | undefined): ThemePalette['syntax'] {
-  return paletteFor(theme).syntax;
 }
 
 export interface AppearanceValues {
