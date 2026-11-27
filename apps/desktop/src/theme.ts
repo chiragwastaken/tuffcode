@@ -68,6 +68,17 @@ export function applyThemeChrome(target: ThemeChromeTarget, theme: ResolvedTheme
 }
 
 /**
+ * Light palettes, mirrored from `@tuffcode/contracts` because the desktop package does
+ * not depend on the contract package. Keep this list in step with THEME_BASE.
+ */
+const LIGHT_THEME_IDS: Readonly<Record<string, true>> = {
+  light: true,
+  'solarized-light': true,
+  'github-light': true,
+  'catppuccin-latte': true,
+};
+
+/**
  * Reads the persisted theme straight from the settings table so the first paint already
  * has the right chrome. Anything missing or unreadable falls back to dark.
  */
@@ -80,7 +91,8 @@ export function readPersistedTheme(file: string): ResolvedTheme {
       | undefined;
     const raw = row?.value;
     if (typeof raw !== 'string') return 'dark';
-    return JSON.parse(raw) === 'light' ? 'light' : 'dark';
+    const stored: unknown = JSON.parse(raw);
+    return typeof stored === 'string' && LIGHT_THEME_IDS[stored] === true ? 'light' : 'dark';
   } catch {
     return 'dark';
   } finally {
