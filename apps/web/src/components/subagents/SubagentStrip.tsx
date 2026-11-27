@@ -86,6 +86,8 @@ export function SubagentStrip({ threadId, onOpen }: SubagentStripProps) {
           const Icon = SUBAGENT_TYPE_ICON[child.type];
           const live = isRunningSubagent(child);
           const elapsed = live ? formatDuration(subagentElapsedMs(child, now)) : '';
+          const task = child.task.replace(/\s+/g, ' ').trim();
+          const snippet = task.length <= 28 ? task : `${task.slice(0, 27)}...`;
 
           return (
             <button
@@ -95,7 +97,7 @@ export function SubagentStrip({ threadId, onOpen }: SubagentStripProps) {
               data-child-id={child.childId}
               data-subagent-type={child.type}
               data-status={child.status}
-              aria-label={`Open the ${SUBAGENT_TYPE_LABEL[child.type]} subagent`}
+              aria-label={`Open the ${SUBAGENT_TYPE_LABEL[child.type]} subagent: ${task}`}
               onClick={() => onOpen(child.childId)}
               className={cn(
                 'flex h-6 shrink-0 items-center gap-1 rounded-md border px-1.5 text-2xs transition-colors duration-150 ease-out',
@@ -105,7 +107,10 @@ export function SubagentStrip({ threadId, onOpen }: SubagentStripProps) {
               )}
             >
               <Icon aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0" />
-              <span className="max-w-24 truncate">{SUBAGENT_TYPE_LABEL[child.type]}</span>
+              <span className="max-w-40 truncate">
+                {SUBAGENT_TYPE_LABEL[child.type]}
+                {snippet.length > 0 ? `: ${snippet}` : ''}
+              </span>
               {elapsed.length > 0 ? (
                 <span className="shrink-0 tabular-nums text-muted-foreground/70">{elapsed}</span>
               ) : null}
