@@ -95,4 +95,6 @@ test('runs a council goal with the configured models and reports the failure', a
   await expect(failure).toBeVisible({ timeout: 120_000 });
   await expect(failure).toContainText('worker produced no changes');
   await expect(page.getByTestId('council-thread-board')).toContainText('Failed');
+  // A terminal goal removes the Stop control.
+  await expect(page.getByTestId('council-stop')).toHaveCount(0);
 });
