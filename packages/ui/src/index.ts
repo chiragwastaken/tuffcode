@@ -100,3 +100,4 @@ export {
   type ThemeTokenName,
 } from './themes/palettes';
 export { applyThemePalette } from './themes/apply';
+export { PERMISSION_LABEL } from './labels';

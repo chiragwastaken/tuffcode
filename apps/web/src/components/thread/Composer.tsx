@@ -11,6 +11,7 @@ import {
   Button,
   IconButton,
   Kbd,
+  PERMISSION_LABEL,
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
@@ -80,16 +81,9 @@ import { useProjectPalette } from './use-project-palette';
 type ComposerMode = Extract<ExecutionMode, 'work' | 'plan'>;
 
 const MODE_OPTIONS: readonly SegmentedOption<ComposerMode>[] = [
-  { value: 'work', label: 'Build' },
+  { value: 'work', label: 'Work' },
   { value: 'plan', label: 'Plan' },
 ];
-
-const PERMISSION_LABEL: Record<PermissionMode, string> = {
-  'read-only': 'Read only',
-  ask: 'Ask',
-  'accept-edits': 'Auto edits',
-  'full-auto': 'Full auto',
-};
 
 /** The three everyday permission modes; read-only joins them only when it is set. */
 const PERMISSION_SEGMENTS: readonly PermissionMode[] = ['ask', 'accept-edits', 'full-auto'];
@@ -767,6 +761,15 @@ export function Composer({ thread }: ComposerProps) {
                   className="truncate px-1 pb-1 text-2xs text-muted-foreground"
                 >
                   {queuedNotice.text}
+                </p>
+              ) : null}
+
+              {connection !== 'open' ? (
+                <p
+                  data-testid="composer-disconnected"
+                  className="truncate px-1 pb-1 text-2xs text-warning-foreground"
+                >
+                  Disconnected, reconnecting...
                 </p>
               ) : null}
 
