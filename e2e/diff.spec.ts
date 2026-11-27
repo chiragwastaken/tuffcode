@@ -36,4 +36,8 @@ test('diff panel shows the file the mock provider wrote', async ({
   await expect(added).toBeVisible();
   await added.click();
   await expect(panel).toContainText(MOCK_FILE_PATH);
+
+  // A checkpoint snapshots the worktree and becomes a base option.
+  await panel.getByTestId('diff-save-checkpoint').click();
+  await expect(page.getByText('Checkpoint saved.')).toBeVisible();
 });
