@@ -103,11 +103,11 @@ const MAX_ERROR_BYTES = 4096;
 const MAX_RETRY_DELAY = 10000;
 const DEFAULT_RETRY_DELAY = 500;
 /**
- * One request plus two retries. A shared provider key under concurrent load answers
- * 429 or 502 for a few seconds; a single retry gives up inside that window and the
- * whole turn fails. Backoff doubles per attempt, and Retry-After still wins.
+ * One request plus four retries. A shared provider key under concurrent load answers
+ * 429 or 502 for several seconds; three attempts gave up inside that window and the
+ * whole turn failed. Backoff doubles per attempt (500ms to 4s), and Retry-After wins.
  */
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 5;
 
 export function readClientConfig(provider: ProviderConfig): OpenAIClientConfig {
   const rawBase = provider.config.baseUrl;

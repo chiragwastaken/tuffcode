@@ -199,8 +199,9 @@ describe('AnthropicClient', () => {
     expect(sleeps).toEqual([1000]);
   });
 
-  it('retries 529 twice and then surfaces the error', async () => {
+  it('retries 529 four times and then surfaces the error', async () => {
     let calls = 0;
+    const sleeps: number[] = [];
     const client = new AnthropicClient(
       { baseUrl: 'https://api.anthropic.com', headers: {}, secret: 'key', maxTokens: 64 },
       {
@@ -208,7 +209,9 @@ describe('AnthropicClient', () => {
           calls += 1;
           return new Response('overloaded', { status: 529 });
         },
-        sleep: async () => {},
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
         logger,
       },
     );
@@ -218,7 +221,8 @@ describe('AnthropicClient', () => {
       status: 529,
       retryable: true,
     });
-    expect(calls).toBe(3);
+    expect(calls).toBe(5);
+    expect(sleeps).toEqual([500, 1000, 2000, 4000]);
   });
 
   it('doubles the backoff between attempts and recovers', async () => {

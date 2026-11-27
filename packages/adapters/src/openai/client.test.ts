@@ -319,8 +319,9 @@ describe('OpenAIClient', () => {
     expect(delays).toEqual([500, 1000]);
   });
 
-  it('gives up after three retryable failures', async () => {
+  it('gives up after five retryable failures with the full backoff', async () => {
     let calls = 0;
+    const delays: number[] = [];
     const client = new OpenAIClient(
       { baseUrl: 'http://x/v1', headers: {}, secret: null },
       {
@@ -328,7 +329,9 @@ describe('OpenAIClient', () => {
           calls += 1;
           return response(502);
         },
-        sleep: async () => {},
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
         logger,
       },
     );
@@ -337,7 +340,8 @@ describe('OpenAIClient', () => {
       status: 502,
       retryable: true,
     });
-    expect(calls).toBe(3);
+    expect(calls).toBe(5);
+    expect(delays).toEqual([500, 1000, 2000, 4000]);
   });
 
   it('honors Retry-After over the default backoff', async () => {

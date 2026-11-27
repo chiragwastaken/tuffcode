@@ -121,8 +121,8 @@ export const DEFAULT_MAX_TOKENS = 8192;
 const MAX_ERROR_BYTES = 4096;
 const MAX_RETRY_DELAY = 10000;
 const DEFAULT_RETRY_DELAY = 500;
-/** One request plus two retries, with the same backoff the OpenAI client uses. */
-const MAX_ATTEMPTS = 3;
+/** One request plus four retries, with the same backoff the OpenAI client uses. */
+const MAX_ATTEMPTS = 5;
 
 export class AnthropicRequestError extends Error {
   readonly status: number;
