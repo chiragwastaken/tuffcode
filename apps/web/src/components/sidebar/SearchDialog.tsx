@@ -160,10 +160,11 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
         </div>
         <div ref={listRef} className="max-h-[60vh] overflow-y-auto p-1" role="listbox" aria-label="Results">
           {remoteError !== null ? (
-            <p role="alert" className="px-3 py-6 text-center text-xs text-error-foreground">
-              Search unavailable: {remoteError}
+            <p role="alert" className="px-3 py-3 text-center text-xs text-error-foreground">
+              Message search unavailable: {remoteError}
             </p>
-          ) : hits.length === 0 ? (
+          ) : null}
+          {hits.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               {query.trim().length === 0 ? 'No chats yet.' : 'No matches.'}
             </p>

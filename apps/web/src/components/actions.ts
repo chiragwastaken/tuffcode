@@ -18,6 +18,7 @@ import type { AssistantItem, UserItem } from './thread/grouping';
 import {
   addLocalUserMessage,
   failLocalUserMessage,
+  hideLocalUserMessage,
   nextLocalUserMessageId,
   removeLocalUserMessage,
   resolveLocalUserMessage,
@@ -334,8 +335,9 @@ export const ACTIONS: Record<ActionId, ActionDefinition> = {
       const threadId = ctx.threadId;
       if (item === undefined || threadId === undefined) return;
 
-      // There is no server-side message delete yet, so this only hides the row in
-      // this session; the message returns on reload. The copy says exactly that.
+      // There is no server-side message delete yet, so this hides the row for the
+      // rest of the session. The hidden id survives transcript refetches.
+      hideLocalUserMessage(threadId, item.messageId);
       removeLocalUserMessage(item.messageId);
       ctx.store.removeMessage(threadId, item.messageId);
       ctx.notify.success('Hidden from this session');
