@@ -32,6 +32,7 @@ import {
   getDiff,
   listCheckpoints,
   openPullRequest,
+  preparePullRequest,
   pushThread,
   revertCheckpoint,
 } from './git/index.js';
@@ -196,6 +197,7 @@ export function createRpcHandlers(deps: RpcDeps): RpcHandlers {
   define('git.commit', ({ threadId, message }) => commitThread(deps.repos, threadId, message));
   define('git.push', ({ threadId }) => pushThread(deps.repos, threadId));
   define('git.pr', async ({ threadId, title, body, draft }) => {
+    await preparePullRequest(deps.repos, threadId, title);
     const result = await openPullRequest(deps.repos, threadId, { title, body, draft });
     deps.repos.threads.setPrUrl(threadId, result.url);
     emitThread(getThread(deps.repos, threadId));
