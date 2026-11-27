@@ -586,6 +586,17 @@ export function Composer({ thread }: ComposerProps) {
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
+          {connection === 'open' ? null : (
+            <p
+              data-testid="composer-disconnected"
+              className="px-1 pb-1 text-2xs text-warning-foreground"
+            >
+              {connection === 'protocol-error'
+                ? 'Connection error. Reload to reconnect.'
+                : 'Disconnected, reconnecting...'}
+            </p>
+          )}
+
           {councilMode ? (
             <CouncilGoal
               value={goalInput}
@@ -635,14 +646,6 @@ export function Composer({ thread }: ComposerProps) {
                 </p>
               ) : null}
 
-              {connection !== 'open' ? (
-                <p
-                  data-testid="composer-disconnected"
-                  className="truncate px-1 pb-1 text-2xs text-warning-foreground"
-                >
-                  Disconnected, reconnecting...
-                </p>
-              ) : null}
               <textarea
                 ref={textareaRef}
                 data-testid="composer-input"
