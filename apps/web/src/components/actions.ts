@@ -325,7 +325,7 @@ export const ACTIONS: Record<ActionId, ActionDefinition> = {
   },
   'message.delete': {
     id: 'message.delete',
-    label: 'Delete',
+    label: 'Hide from this session',
     shortcut: 'Del',
     destructive: true,
     icon: Trash,
@@ -334,9 +334,11 @@ export const ACTIONS: Record<ActionId, ActionDefinition> = {
       const threadId = ctx.threadId;
       if (item === undefined || threadId === undefined) return;
 
+      // There is no server-side message delete yet, so this only hides the row in
+      // this session; the message returns on reload. The copy says exactly that.
       removeLocalUserMessage(item.messageId);
       ctx.store.removeMessage(threadId, item.messageId);
-      ctx.notify.success('Message deleted');
+      ctx.notify.success('Hidden from this session');
     },
   },
   'message.retry': {
