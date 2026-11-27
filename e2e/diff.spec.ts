@@ -40,4 +40,7 @@ test('diff panel shows the file the mock provider wrote', async ({
   // A checkpoint snapshots the worktree and becomes a base option.
   await panel.getByTestId('diff-save-checkpoint').click();
   await expect(page.getByText('Checkpoint saved.')).toBeVisible();
+  await panel.getByLabel('Diff base').click();
+  await expect(page.getByRole('option', { name: /Checkpoint/ })).toBeVisible();
+  await page.keyboard.press('Escape');
 });
