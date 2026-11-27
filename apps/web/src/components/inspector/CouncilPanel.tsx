@@ -290,7 +290,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
                   Retry
                 </Button>
                 <Button size="sm" variant="ghost" onClick={handleNewGoal}>
-                  New goal
+                  Hide goal
                 </Button>
               </div>
             </div>
@@ -320,7 +320,7 @@ export function CouncilPanel({ threadId }: CouncilPanelProps) {
               </Button>
               {terminal ? (
                 <Button size="sm" variant="outline" onClick={handleNewGoal}>
-                  New goal
+                  Hide goal
                 </Button>
               ) : null}
             </div>

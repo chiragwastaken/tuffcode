@@ -32,6 +32,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
   const setActiveThread = useAppStore((state) => state.setActiveThread);
   const [query, setQuery] = useState('');
   const [remote, setRemote] = useState<RpcResult<'threads.search'>>([]);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -39,23 +40,30 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
     if (!open) {
       setQuery('');
       setRemote([]);
+      setRemoteError(null);
       setActive(0);
     }
   }, [open]);
 
   useEffect(() => {
     const needle = query.trim();
-    if (needle.length < 2) {
-      setRemote([]);
-      return;
-    }
+    setRemoteError(null);
+    // The next query's hits replace the previous ones instead of describing them.
+    setRemote([]);
+    if (needle.length < 2) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       void rpc.request('threads.search', { query: needle, limit: 20 }).then(
         (hits) => {
           if (!cancelled) setRemote(hits);
         },
-        () => undefined,
+        (caught: unknown) => {
+          if (cancelled) return;
+          setRemote([]);
+          setRemoteError(
+            caught instanceof Error ? caught.message : 'Could not search messages.',
+          );
+        },
       );
     }, DEBOUNCE_MS);
     return () => {
@@ -151,7 +159,11 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
           <Kbd>Esc</Kbd>
         </div>
         <div ref={listRef} className="max-h-[60vh] overflow-y-auto p-1" role="listbox" aria-label="Results">
-          {hits.length === 0 ? (
+          {remoteError !== null ? (
+            <p role="alert" className="px-3 py-6 text-center text-xs text-error-foreground">
+              Search unavailable: {remoteError}
+            </p>
+          ) : hits.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               {query.trim().length === 0 ? 'No chats yet.' : 'No matches.'}
             </p>
