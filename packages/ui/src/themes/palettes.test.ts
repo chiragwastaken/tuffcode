@@ -45,9 +45,27 @@ describe('theme palettes', () => {
     }
   });
 
+  it('keeps surfaces, secondary text and primary labels readable', () => {
+    for (const id of THEME_IDS) {
+      const palette = PALETTES[id];
+      expect(contrast(palette.tokens.foreground, palette.tokens['message-surface']), id).toBeGreaterThanOrEqual(3);
+      expect(contrast(palette.tokens['muted-foreground'], palette.tokens.background), id).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(palette.tokens['primary-foreground'], palette.tokens.primary), id).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps bright ANSI colors distinct from their normal counterparts', () => {
+    for (const id of THEME_IDS) {
+      const palette = PALETTES[id];
+      expect(palette.ansi.brightRed, id).not.toBe(palette.ansi.red);
+      expect(palette.ansi.brightCyan, id).not.toBe(palette.ansi.cyan);
+    }
+  });
+
   it('falls back to dark for an unknown or missing id', () => {
     expect(paletteFor(undefined).id).toBe('dark');
     expect(paletteFor('not-a-theme').id).toBe('dark');
+    expect(paletteFor('constructor').id).toBe('dark');
   });
 
   it('builds an xterm theme with all 16 ANSI colors', () => {

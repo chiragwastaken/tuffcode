@@ -41,17 +41,17 @@ export function useSettingsDraft<K extends SettingsKey>(
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Re-seed whenever the server settings change: first load, a save, or a
-    // settings.updated event from another surface.
-    if (settings) setDraft(pickSettings(settings, keys));
-    // `keys` is a module constant; the signature tracks its contents.
-  }, [settings, signature]); // oxlint-disable-line react-hooks/exhaustive-deps
-
   const dirty = useMemo(
     () => (draft && settings ? isSettingsDraftDirty(draft, settings, keys) : false),
     [draft, settings, signature], // oxlint-disable-line react-hooks/exhaustive-deps
   );
+
+  useEffect(() => {
+    // Re-seed on a server change only when the draft has no local edits: a per-key
+    // save (the theme picker) must not discard the section's other unsaved fields.
+    if (settings && !dirty) setDraft(pickSettings(settings, keys));
+    // `keys` is a module constant; the signature tracks its contents.
+  }, [settings, signature, dirty]); // oxlint-disable-line react-hooks/exhaustive-deps
 
   const update = useCallback((patch: Partial<Pick<Settings, K>>) => {
     setDraft((previous) => (previous === null ? previous : { ...previous, ...patch }));

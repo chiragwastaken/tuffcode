@@ -115,8 +115,9 @@ function hexOf(rgb: Rgb): string {
   return `#${part(rgb.r)}${part(rgb.g)}${part(rgb.b)}`;
 }
 
-/** `t` is the share of `b`: 0 returns `a`, 1 returns `b`. */
-function mix(a: string, b: string, t: number): string {
+/** `percent` is the share of `b`: 0 returns `a`, 100 returns `b`. */
+function mix(a: string, b: string, percent: number): string {
+  const t = percent / 100;
   const left = rgbOf(a);
   const right = rgbOf(b);
   return hexOf({
@@ -139,7 +140,32 @@ function contrast(hex: string): string {
     return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
   };
   const luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-  return luminance > 0.45 ? '#000000' : '#ffffff';
+  return luminance > 0.179 ? '#000000' : '#ffffff';
+}
+
+function luminanceOf(hex: string): number {
+  const { r, g, b } = rgbOf(hex);
+  const channel = (value: number): number => {
+    const unit = value / 255;
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+function contrastRatio(a: string, b: string): number {
+  const first = luminanceOf(a);
+  const second = luminanceOf(b);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+/** Steps a text color toward the readable extreme until it clears the floor. */
+function readable(color: string, background: string, floor = 4.5): string {
+  let next = color;
+  const target = contrast(background);
+  for (let step = 0; step < 12 && contrastRatio(next, background) < floor; step += 1) {
+    next = mix(next, target, 15);
+  }
+  return next;
 }
 
 /** One theme's authored colors. Everything else is derived. */
@@ -424,26 +450,26 @@ function buildPalette(id: ThemeId, core: CorePalette): ThemePalette {
     'primary-foreground': contrast(accent),
     secondary: alpha(foreground, 6),
     muted: alpha(foreground, 6),
-    'muted-foreground': core.mutedForeground,
+    'muted-foreground': readable(core.mutedForeground, background),
     accent: alpha(foreground, 8),
     overlay: dark ? 'rgb(0 0 0 / 60%)' : 'rgb(0 0 0 / 35%)',
     'message-surface': mix(surface, foreground, 6),
     error: core.red,
-    'error-foreground': core.red,
+    'error-foreground': readable(core.red, background),
     'error-surface': `color-mix(in srgb, ${core.red} 16%, transparent)`,
     border,
     input: alpha(foreground, 18),
     success: core.green,
-    'success-foreground': core.green,
+    'success-foreground': readable(core.green, background),
     warning: core.yellow,
-    'warning-foreground': core.yellow,
+    'warning-foreground': readable(core.yellow, background),
     'warning-surface': `color-mix(in srgb, ${core.yellow} 16%, transparent)`,
     info: core.blue,
-    'info-foreground': core.blue,
+    'info-foreground': readable(core.blue, background),
     ring: accent,
     sidebar,
     'sidebar-foreground': foreground,
-    'sidebar-muted-foreground': core.mutedForeground,
+    'sidebar-muted-foreground': readable(core.mutedForeground, sidebar),
     'sidebar-row-hover': surface,
     'sidebar-row-active': mix(surface, foreground, 12),
     'sidebar-row-selected': mix(surface, foreground, 6),
@@ -489,7 +515,7 @@ export const PALETTES: Record<ThemeId, ThemePalette> = Object.fromEntries(
 ) as Record<ThemeId, ThemePalette>;
 
 export function paletteFor(id: string | undefined): ThemePalette {
-  return id !== undefined && id in PALETTES ? PALETTES[id as ThemeId] : PALETTES.dark;
+  return id !== undefined && Object.hasOwn(PALETTES, id) ? PALETTES[id as ThemeId] : PALETTES.dark;
 }
 
 /** The xterm theme for a palette, including the 16 ANSI colors. */
