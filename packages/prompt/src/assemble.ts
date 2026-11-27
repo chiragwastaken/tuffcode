@@ -14,6 +14,7 @@ import { buildCustomInstructions, buildPersonalSection, type PersonalProfile, ty
 export const CUSTOM_INSTRUCTIONS_HEADING = '## Custom instructions';
 export const ABOUT_USER_HEADING = '## About the user';
 export const PROJECT_RULES_HEADING = '## Project rules';
+export const REVIEW_COMMENTS_HEADING = '## Review comments';
 
 const BRAIN_NOTES_HEADING = '## Brain notes';
 const RETRIEVED_MEMORY_HEADING = '## Retrieved memory';
@@ -26,6 +27,7 @@ export type PromptSectionName =
   | 'about-user'
   | 'custom-instructions'
   | 'project-rules'
+  | 'review-comments'
   | 'skills'
   | 'available-skills'
   | 'brain-always'
@@ -44,6 +46,8 @@ export interface PromptAssemblyInput {
   customInstructions?: string;
   /** Rendered project rule blocks from the repository, already budgeted. */
   projectRules?: string;
+  /** Unresolved inline review comments from the Changes panel. */
+  reviewComments?: string;
   /** Your Tuffcode profile; empty fields are left out. */
   profile?: PersonalProfile;
   responseStyle?: ResponseStyleName;
@@ -102,6 +106,15 @@ export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
       section(
         'project-rules',
         `${PROJECT_RULES_HEADING}\nRules committed in this repository. Follow them for this turn.\n${projectRules}`,
+      ),
+    );
+  }
+  const reviewComments = input.reviewComments?.trim() ?? '';
+  if (reviewComments.length > 0) {
+    sections.push(
+      section(
+        'review-comments',
+        `${REVIEW_COMMENTS_HEADING}\nUnresolved inline comments from the Changes panel. Address each one this turn.\n${reviewComments}`,
       ),
     );
   }
