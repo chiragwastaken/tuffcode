@@ -18,6 +18,8 @@ export interface SettingsDraftController<K extends SettingsKey> {
   update(patch: Partial<Pick<Settings, K>>): void;
   reset(): void;
   submit(): Promise<void>;
+  /** Persists one patch immediately, for controls that apply on click. */
+  save(patch: Partial<Pick<Settings, K>>): Promise<void>;
 }
 
 /**
@@ -80,5 +82,21 @@ export function useSettingsDraft<K extends SettingsKey>(
     }
   }, [draft, settings, keys, rpc, setSettings]);
 
-  return { draft, dirty, saving, error, update, reset, submit };
+  const save = useCallback(
+    async (patch: Partial<Pick<Settings, K>>) => {
+      setSaving(true);
+      setError(null);
+      try {
+        const next = await rpc.request('settings.set', { patch });
+        setSettings(next);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not save settings.');
+      } finally {
+        setSaving(false);
+      }
+    },
+    [rpc, setSettings],
+  );
+
+  return { draft, dirty, saving, error, update, reset, submit, save };
 }
