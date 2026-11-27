@@ -25,7 +25,7 @@ export function diffTotals(files: readonly DiffFile[]): DiffTotals {
 
 /**
  * The card under a finished turn: how much the thread changed, with Review changes
- * and Create PR. Counts come from one `diff.get` after the turn settles, so they are
+ * Commit and push, and Create PR. Counts come from one `diff.get` after the turn settles, so they are
  * the real working-tree numbers, not a sum of tool calls.
  */
 export function TurnSummary({ thread }: { thread: Thread }) {
@@ -124,7 +124,7 @@ export function TurnSummary({ thread }: { thread: Thread }) {
           <Button
             size="sm"
             variant="outline"
-            disabled={creating || thread.branch === null}
+            disabled={creating || pushing || thread.branch === null}
             title={thread.branch === null ? 'Pull requests need a worktree branch.' : undefined}
             onClick={() => void createPr()}
             data-testid="turn-summary-pr"

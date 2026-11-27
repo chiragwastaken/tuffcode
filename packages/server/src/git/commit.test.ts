@@ -102,6 +102,31 @@ describe('git commit and push', () => {
     expect(git(bare, ['rev-parse', `refs/heads/tuffcode/${setup.thread.id}`])).toBe(sha);
   });
 
+  it('refuses to prepare a pull request on a protected branch', async () => {
+    const now = new Date().toISOString();
+    ctx.repos.threads.create({
+      id: 'thr_main_pr',
+      projectId: setup.project.id,
+      parentThreadId: null,
+      title: 'Main checkout',
+      providerId: 'prv_test',
+      modelId: 'model-x',
+      executionMode: 'work',
+      permissionMode: 'ask',
+      status: 'idle',
+      worktreePath: setup.project.path,
+      branch: 'main',
+      baseBranch: 'main',
+      createdAt: now,
+      updatedAt: now,
+    });
+    writeFileSync(join(setup.project.path, 'README.md'), '# demo\nmain pr edit\n');
+
+    await expect(preparePullRequest(ctx.repos, 'thr_main_pr', 'Ship it')).rejects.toThrow(
+      'commits are not allowed on main',
+    );
+  });
+
   it('parses the pull request URL from gh output', () => {
     const output = [
       'Creating pull request for tuffcode/thr_1 into main in owner/repo',
