@@ -143,7 +143,7 @@ export function assemblePrompt(input: PromptAssemblyInput): AssembledPrompt {
   // Project rules with globs, skill mentions, the available-skill list and everything
   // from the brain on are message-dependent, so they must sit after the cache breakpoint.
   const splitAt = systemSections.findIndex((entry) =>
-    ['project-rules', 'skills', 'available-skills', 'brain-always', 'retrieved-memory', 'turn-context'].includes(
+    ['project-rules', 'review-comments', 'skills', 'available-skills', 'brain-always', 'retrieved-memory', 'turn-context'].includes(
       entry.name,
     ),
   );
