@@ -269,7 +269,11 @@ export class OpenAIClient implements ChatStreamer {
         status: response.status,
         retryable: error.retryable,
       });
-      if (!error.retryable || attempt >= MAX_ATTEMPTS - 1) throw error;
+      if (!error.retryable || attempt >= MAX_ATTEMPTS - 1) {
+        const attempts = attempt + 1;
+        const message = attempts > 1 ? `${error.message} after ${attempts} attempts` : error.message;
+        throw new OpenAIRequestError(message, error.status, error.retryable);
+      }
       attempt += 1;
       await this.sleep(retryDelay(response, attempt));
     }

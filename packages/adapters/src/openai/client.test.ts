@@ -319,6 +319,30 @@ describe('OpenAIClient', () => {
     expect(delays).toEqual([500, 1000]);
   });
 
+  it('recovers on the fifth attempt after four 502s', async () => {
+    let calls = 0;
+    const delays: number[] = [];
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          return calls <= 4 ? response(502) : response(200);
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        logger,
+      },
+    );
+
+    const stream = await client.stream(request, new AbortController().signal);
+
+    expect(stream).toBeDefined();
+    expect(calls).toBe(5);
+    expect(delays).toEqual([500, 1000, 2000, 4000]);
+  });
+
   it('gives up after five retryable failures with the full backoff', async () => {
     let calls = 0;
     const delays: number[] = [];
@@ -336,12 +360,13 @@ describe('OpenAIClient', () => {
       },
     );
 
-    await expect(client.stream(request, new AbortController().signal)).rejects.toMatchObject({
-      status: 502,
-      retryable: true,
-    });
+    const failure = await client
+      .stream(request, new AbortController().signal)
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: 502, retryable: true });
     expect(calls).toBe(5);
     expect(delays).toEqual([500, 1000, 2000, 4000]);
+    expect((failure as Error).message).toContain('after 5 attempts');
   });
 
   it('honors Retry-After over the default backoff', async () => {
