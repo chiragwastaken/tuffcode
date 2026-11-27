@@ -43,4 +43,6 @@ test('diff panel shows the file the mock provider wrote', async ({
   await panel.getByLabel('Diff base').click();
   await expect(page.getByRole('option', { name: /Checkpoint/ })).toBeVisible();
   await page.keyboard.press('Escape');
+  // Saving must not rebase the panel onto the new checkpoint.
+  await expect(panel.getByLabel('Diff base')).toHaveText(/Working tree/);
 });
