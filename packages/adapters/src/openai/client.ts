@@ -102,6 +102,8 @@ export class OpenAIRequestError extends Error {
 const MAX_ERROR_BYTES = 4096;
 const MAX_RETRY_DELAY = 10000;
 const DEFAULT_RETRY_DELAY = 500;
+const RATE_LIMIT_RETRY_DELAY = 5000;
+const MAX_RATE_LIMIT_DELAY = 60000;
 /**
  * One request plus four retries. A shared provider key under concurrent load answers
  * 429 or 502 for several seconds; three attempts gave up inside that window and the
@@ -201,29 +203,35 @@ function rejectsTokenField(excerpt: string): boolean {
   return excerpt.includes('max_tokens') && excerpt.includes('max_completion_tokens');
 }
 
+function rateLimitedBody(excerpt: string): boolean {
+  return /HTTP\s*429|"code"\s*:\s*"?429"?|rate.?limit/i.test(excerpt);
+}
+
 function errorFor(status: number, excerpt: string): OpenAIRequestError {
   if (status === 401 || status === 403) {
     return new OpenAIRequestError('unauthorized (check the provider key)', status, false);
   }
   if (status === 429 || status >= 500) {
     const detail = excerpt.replace(/\s+/g, ' ').trim().slice(0, 300);
-    return new OpenAIRequestError(
-      'request failed with status ' + status + (detail.length > 0 ? ': ' + detail : ''),
-      status,
-      true,
-    );
+    const prefix = rateLimitedBody(excerpt)
+      ? 'upstream rate limited (HTTP 429 behind status ' + status + ')'
+      : 'request failed with status ' + status;
+    return new OpenAIRequestError(prefix + (detail.length > 0 ? ': ' + detail : ''), status, true);
   }
   const detail = excerpt.length > 0 ? ': ' + excerpt.slice(0, 300) : '';
   return new OpenAIRequestError('request failed with status ' + status + detail, status, false);
 }
 
-function retryDelay(response: Response, attempt: number): number {
+function retryDelay(response: Response, attempt: number, rateLimited = false): number {
   const header = response.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0) {
-      return Math.min(seconds * 1000, MAX_RETRY_DELAY);
+      return Math.min(seconds * 1000, MAX_RATE_LIMIT_DELAY);
     }
+  }
+  if (rateLimited) {
+    return Math.min(RATE_LIMIT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RATE_LIMIT_DELAY);
   }
   return Math.min(DEFAULT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RETRY_DELAY);
 }
@@ -272,6 +280,7 @@ export class OpenAIClient implements ChatStreamer {
         continue;
       }
       const error = errorFor(response.status, excerpt);
+      const rateLimited = rateLimitedBody(excerpt);
       this.logger.warn('openai request failed', {
         status: response.status,
         retryable: error.retryable,
@@ -282,11 +291,12 @@ export class OpenAIClient implements ChatStreamer {
         streamOptions: includeUsage,
         tokenField: field,
         reasoningEffort: request.reasoningEffort ?? null,
+        rateLimited,
         excerpt: excerpt.replace(/\s+/g, ' ').slice(0, 200),
       });
       // Some OpenAI-compatible gateways answer 5xx for stream_options. Try the next
       // attempt without it before spending the rest of the retry budget.
-      if (error.retryable && response.status >= 500 && includeUsage) {
+      if (error.retryable && response.status >= 500 && includeUsage && !rateLimited) {
         includeUsage = false;
         this.logger.warn('retrying without stream_options after a server error', {
           status: response.status,
@@ -298,7 +308,7 @@ export class OpenAIClient implements ChatStreamer {
         throw new OpenAIRequestError(message, error.status, error.retryable);
       }
       attempt += 1;
-      await this.sleep(retryDelay(response, attempt));
+      await this.sleep(retryDelay(response, attempt, rateLimited));
     }
   }
 

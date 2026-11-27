@@ -343,6 +343,34 @@ describe('OpenAIClient', () => {
     expect(bodies[1]).not.toHaveProperty('stream_options');
   });
 
+  it('backs off for a 429 wrapped in a 502 and keeps stream_options', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const delays: number[] = [];
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async (_url, init) => {
+          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          calls += 1;
+          return calls === 1
+            ? response(502, '{"error":{"message":"Upstream HTTP 429"}}')
+            : response(200);
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        logger,
+      },
+    );
+
+    const stream = await client.stream(request, new AbortController().signal);
+
+    expect(stream).toBeDefined();
+    expect(delays).toEqual([5000]);
+    expect(bodies[1]?.['stream_options']).toEqual({ include_usage: true });
+  });
+
   it('recovers on the fifth attempt after four 502s', async () => {
     let calls = 0;
     const delays: number[] = [];
