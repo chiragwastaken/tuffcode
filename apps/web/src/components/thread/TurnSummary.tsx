@@ -1,6 +1,6 @@
 import type { DiffFile, Thread } from '@tuffcode/contracts';
 import { Button } from '@tuffcode/ui';
-import { FileDiff, GitPullRequest } from 'lucide-react';
+import { FileDiff, GitCommit, GitPullRequest } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
@@ -32,6 +32,7 @@ export function TurnSummary({ thread }: { thread: Thread }) {
   const rpc = useRpc();
   const [totals, setTotals] = useState<DiffTotals | null>(null);
   const [creating, setCreating] = useState(false);
+  const [pushing, setPushing] = useState(false);
   const [prError, setPrError] = useState<string | null>(null);
   const settled = thread.status !== 'running' && thread.status !== 'needs-approval';
 
@@ -70,6 +71,28 @@ export function TurnSummary({ thread }: { thread: Thread }) {
     }
   }
 
+  async function commitAndPush(): Promise<void> {
+    setPushing(true);
+    setPrError(null);
+    try {
+      try {
+        await rpc.request('git.commit', {
+          threadId: thread.id,
+          message: `Changes from ${thread.title}`,
+        });
+      } catch (error) {
+        // The agent may have committed already; pushing is still useful.
+        if (!(error instanceof Error) || !error.message.includes('nothing to commit')) throw error;
+      }
+      await rpc.request('git.push', { threadId: thread.id });
+      toast.success('Committed and pushed.');
+    } catch (error) {
+      setPrError(error instanceof Error ? error.message : 'Could not commit and push.');
+    } finally {
+      setPushing(false);
+    }
+  }
+
   return (
     <div
       data-testid="turn-summary"
@@ -85,6 +108,18 @@ export function TurnSummary({ thread }: { thread: Thread }) {
         <Button size="sm" variant="ghost" onClick={() => requestInspectorTab('diff')} data-testid="turn-summary-review">
           Review changes
         </Button>
+        {thread.branch === null ? null : (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pushing || creating}
+            onClick={() => void commitAndPush()}
+            data-testid="turn-summary-commit-push"
+          >
+            <GitCommit className="size-3.5" strokeWidth={1.75} />
+            Commit and push
+          </Button>
+        )}
         {thread.prUrl === null ? (
           <Button
             size="sm"

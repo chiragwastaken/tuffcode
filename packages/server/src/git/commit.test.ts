@@ -11,7 +11,7 @@ import {
   type TestContext,
 } from '../test-support.js';
 import { commitThread, pushThread } from './commit.js';
-import { parsePullRequestUrl } from './pr.js';
+import { parsePullRequestUrl, preparePullRequest } from './pr.js';
 
 describe('git commit and push', () => {
   let ctx: TestContext;
@@ -76,6 +76,30 @@ describe('git commit and push', () => {
     expect(pushed.remote).toBe('origin');
     expect(pushed.branch).toBe(`tuffcode/${setup.thread.id}`);
     expect(git(bare, ['rev-parse', `refs/heads/${pushed.branch}`])).toBe(sha);
+  });
+
+  it('commits and pushes leftover work before a pull request', async () => {
+    const bare = initBareRepo(join(ctx.env.root, 'pr-remote.git'));
+    git(setup.project.path, ['remote', 'add', 'origin', bare]);
+    writeFileSync(readme, '# demo\npr work\n');
+
+    await preparePullRequest(ctx.repos, setup.thread.id, 'Ship the widget');
+
+    expect(git(worktree, ['log', '-1', '--format=%s'])).toBe('Changes from Ship the widget');
+    const head = git(worktree, ['rev-parse', 'HEAD']);
+    expect(git(bare, ['rev-parse', `refs/heads/tuffcode/${setup.thread.id}`])).toBe(head);
+  });
+
+  it('pushes an already committed branch without making another commit', async () => {
+    const bare = initBareRepo(join(ctx.env.root, 'pr-remote-2.git'));
+    git(setup.project.path, ['remote', 'add', 'origin', bare]);
+    writeFileSync(readme, '# demo\nalready committed\n');
+    const { sha } = await commitThread(ctx.repos, setup.thread.id, 'worker commit');
+
+    await preparePullRequest(ctx.repos, setup.thread.id, 'Ship the widget');
+
+    expect(git(worktree, ['rev-parse', 'HEAD'])).toBe(sha);
+    expect(git(bare, ['rev-parse', `refs/heads/tuffcode/${setup.thread.id}`])).toBe(sha);
   });
 
   it('parses the pull request URL from gh output', () => {
