@@ -319,6 +319,30 @@ describe('OpenAIClient', () => {
     expect(delays).toEqual([500, 1000]);
   });
 
+  it('drops stream_options after a 5xx and recovers', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async (_url, init) => {
+          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          calls += 1;
+          return calls === 1 ? response(502, 'upstream overloaded') : response(200);
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    const stream = await client.stream(request, new AbortController().signal);
+
+    expect(stream).toBeDefined();
+    expect(calls).toBe(2);
+    expect(bodies[0]?.['stream_options']).toEqual({ include_usage: true });
+    expect(bodies[1]).not.toHaveProperty('stream_options');
+  });
+
   it('recovers on the fifth attempt after four 502s', async () => {
     let calls = 0;
     const delays: number[] = [];
@@ -351,7 +375,7 @@ describe('OpenAIClient', () => {
       {
         fetchFn: async () => {
           calls += 1;
-          return response(502);
+          return response(502, '{"error":{"message":"upstream failed"}}');
         },
         sleep: async (ms) => {
           delays.push(ms);
@@ -366,6 +390,7 @@ describe('OpenAIClient', () => {
     expect(failure).toMatchObject({ status: 502, retryable: true });
     expect(calls).toBe(5);
     expect(delays).toEqual([500, 1000, 2000, 4000]);
+    expect((failure as Error).message).toContain('upstream failed');
     expect((failure as Error).message).toContain('after 5 attempts');
   });
 

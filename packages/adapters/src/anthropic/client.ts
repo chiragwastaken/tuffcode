@@ -263,7 +263,12 @@ async function mapResponseError(response: Response): Promise<AnthropicRequestErr
     return new AnthropicRequestError('unauthorized (check the provider key)', status, false);
   }
   if (status === 429 || status === 529 || status >= 500) {
-    return new AnthropicRequestError('request failed with status ' + status, status, true);
+    const detail = excerpt.replace(/\s+/g, ' ').trim().slice(0, 300);
+    return new AnthropicRequestError(
+      'request failed with status ' + status + (detail.length > 0 ? ': ' + detail : ''),
+      status,
+      true,
+    );
   }
   const detail = excerpt.length > 0 ? ': ' + excerpt.slice(0, 300) : '';
   return new AnthropicRequestError('request failed with status ' + status + detail, status, false);

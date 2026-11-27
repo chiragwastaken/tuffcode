@@ -171,6 +171,7 @@ function buildBody(
   config: OpenAIClientConfig,
   request: ChatRequestBody,
   field: MaxTokensField,
+  includeUsage = true,
 ): Record<string, unknown> {
   const tools = toOpenAITools(request.toolAllowlist, request.toolOptions ?? {}, request.toolProfile);
   const maxTokens = request.maxTokens ?? config.maxTokens;
@@ -179,7 +180,7 @@ function buildBody(
     messages: request.messages,
     ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
     stream: true,
-    stream_options: { include_usage: true },
+    ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
     ...(maxTokens !== undefined ? { [field]: maxTokens } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     ...reasoningParams(config.baseUrl, request.reasoningEffort),
@@ -205,7 +206,12 @@ function errorFor(status: number, excerpt: string): OpenAIRequestError {
     return new OpenAIRequestError('unauthorized (check the provider key)', status, false);
   }
   if (status === 429 || status >= 500) {
-    return new OpenAIRequestError('request failed with status ' + status, status, true);
+    const detail = excerpt.replace(/\s+/g, ' ').trim().slice(0, 300);
+    return new OpenAIRequestError(
+      'request failed with status ' + status + (detail.length > 0 ? ': ' + detail : ''),
+      status,
+      true,
+    );
   }
   const detail = excerpt.length > 0 ? ': ' + excerpt.slice(0, 300) : '';
   return new OpenAIRequestError('request failed with status ' + status + detail, status, false);
@@ -239,12 +245,13 @@ export class OpenAIClient implements ChatStreamer {
   async stream(request: ChatRequestBody, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
     let attempt = 0;
     let fieldRetried = false;
+    let includeUsage = true;
     let field = maxTokensField(request.model, this.config.maxTokensField);
     while (true) {
       const response = await this.fetchFn(this.config.baseUrl + '/chat/completions', {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify(buildBody(this.config, request, field)),
+        body: JSON.stringify(buildBody(this.config, request, field, includeUsage)),
         signal,
       });
       if (response.ok) {
@@ -268,7 +275,23 @@ export class OpenAIClient implements ChatStreamer {
       this.logger.warn('openai request failed', {
         status: response.status,
         retryable: error.retryable,
+        model: request.model,
+        host: new URL(this.config.baseUrl).host,
+        messages: request.messages.length,
+        tools: toOpenAITools(request.toolAllowlist, request.toolOptions ?? {}, request.toolProfile).length,
+        streamOptions: includeUsage,
+        tokenField: field,
+        reasoningEffort: request.reasoningEffort ?? null,
+        excerpt: excerpt.replace(/\s+/g, ' ').slice(0, 200),
       });
+      // Some OpenAI-compatible gateways answer 5xx for stream_options. Try the next
+      // attempt without it before spending the rest of the retry budget.
+      if (error.retryable && response.status >= 500 && includeUsage) {
+        includeUsage = false;
+        this.logger.warn('retrying without stream_options after a server error', {
+          status: response.status,
+        });
+      }
       if (!error.retryable || attempt >= MAX_ATTEMPTS - 1) {
         const attempts = attempt + 1;
         const message = attempts > 1 ? `${error.message} after ${attempts} attempts` : error.message;
