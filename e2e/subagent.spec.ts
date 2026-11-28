@@ -15,7 +15,6 @@ import {
 import {
   MOCK_SUBAGENT_FINAL,
   MOCK_SUBAGENT_TASK,
-  MOCK_SUBAGENT_TWO_TASK,
   MOCK_TEXT,
 } from './mock-openai';
 
