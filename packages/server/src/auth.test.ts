@@ -1,8 +1,16 @@
 import { statSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
+import { PAIRING_CODE_TTL_MS, REMOTE_SESSION_TTL_MS } from '@tuffcode/contracts';
 import { tokenPath } from '@tuffcode/shared';
-import { ensureToken, verifyToken } from './auth.js';
-import { createTempEnv, type TempEnv } from './test-support.js';
+import {
+  createPairingStore,
+  createSessionAuth,
+  ensureToken,
+  hashSecret,
+  readCookie,
+  verifyToken,
+} from './auth.js';
+import { createTempEnv, createTestContext, type TempEnv } from './test-support.js';
 
 describe('auth token', () => {
   let env: TempEnv | undefined;

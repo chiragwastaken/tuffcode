@@ -125,7 +125,7 @@ describe('streamSse', () => {
 
   it('resets the idle budget whenever a chunk arrives', async () => {
     vi.useFakeTimers();
-    let inner: { enqueue: (chunk: Uint8Array) => void };
+    let inner!: { enqueue: (chunk: Uint8Array) => void };
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         inner = controller;

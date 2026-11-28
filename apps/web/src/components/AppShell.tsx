@@ -15,7 +15,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
 } from 'react';
 import { useAppStore } from '../store/app-store';
@@ -211,7 +211,7 @@ export function AppShell() {
   }
 
   /** Keeps Tab inside the modal drawer, as the modal dialog pattern requires. */
-  function trapDrawerFocus(event: KeyboardEvent<HTMLElement>): void {
+  function trapDrawerFocus(event: ReactKeyboardEvent<HTMLElement>): void {
     if (event.key !== 'Tab' || drawerRef.current === null) return;
     const focusable = drawerRef.current.querySelectorAll<HTMLElement>(
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',

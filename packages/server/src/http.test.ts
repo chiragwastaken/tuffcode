@@ -158,10 +158,11 @@ async function claim(
   harness: Harness,
   code: string,
   deviceName = 'Pixel 9',
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   return fetch(harness.url('/pair/claim'), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify({ code, deviceName }),
   });
 }
@@ -270,7 +271,7 @@ describe('http surface', () => {
     expect(first.status).toBe(201);
     const setCookie = first.headers.get('set-cookie') ?? '';
     expect(setCookie).toContain('HttpOnly');
-    expect(setCookie).toContain('Secure');
+    expect(setCookie).not.toContain('Secure');
     expect(setCookie).toContain('SameSite=Strict');
     const token = cookieToken(first);
     const claimed = PairClaimResultSchema.parse(await first.json());
@@ -281,6 +282,12 @@ describe('http surface', () => {
     expect(stored[0]?.deviceName).toBe('Pixel 9');
     expect(harness.sessions.verify(token)?.deviceName).toBe('Pixel 9');
     expect(harness.sessions.verify(`${token}0`)).toBeUndefined();
+
+    const secure = await claim(harness, await createCode(harness), 'Phone', {
+      'x-forwarded-proto': 'https',
+    });
+    expect(secure.status).toBe(201);
+    expect(secure.headers.get('set-cookie') ?? '').toContain('Secure');
 
     const reused = await claim(harness, code);
     expect(reused.status).toBe(401);

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { homedir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import {
   PairClaimRequestSchema,
@@ -16,6 +17,7 @@ import {
 import { newId } from '@tuffcode/shared';
 import {
   hashSecret,
+  readCookie,
   type PairingStore,
   type SessionAuth,
 } from './auth.js';
@@ -349,7 +351,7 @@ function staticFile(webRoot: string, pathname: string): StaticFile | undefined {
   if (!stats.isFile()) return undefined;
   const extension = extname(filePath).toLowerCase();
   const contentType = CONTENT_TYPES[extension] ?? 'application/octet-stream';
-  return { path: filePath, contentType, body: undefined };
+  return { path: filePath, contentType };
 }
 
 function serveFile(
@@ -414,9 +416,19 @@ function pairingUrl(origin: string, code: string): string {
   return `${origin}/pair?code=${encodeURIComponent(code)}`;
 }
 
-function sessionCookie(token: string): string {
+function isSecureRequest(request: IncomingMessage): boolean {
+  const forwarded = request.headers['x-forwarded-proto'];
+  if (typeof forwarded === 'string' && forwarded.split(',')[0]?.trim().toLowerCase() === 'https') {
+    return true;
+  }
+  const origin = request.headers.origin;
+  return typeof origin === 'string' && origin.startsWith('https:');
+}
+
+function sessionCookie(token: string, secure: boolean): string {
   const maxAge = Math.floor(REMOTE_SESSION_TTL_MS / 1000);
-  return `${REMOTE_SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+  const flags = secure ? '; Secure' : '';
+  return `${REMOTE_SESSION_COOKIE}=${token}; Path=/; HttpOnly${flags}; SameSite=Strict; Max-Age=${maxAge}`;
 }
 
 /**
@@ -428,6 +440,23 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const createLimiter = createRateLimiter(PAIRING_CREATE_LIMIT, RATE_WINDOW_MS);
   const claimLimiter = createRateLimiter(PAIRING_CLAIM_LIMIT, RATE_WINDOW_MS);
   const webRoot = options.webRoot === undefined ? undefined : resolve(options.webRoot);
+
+  function handleBootstrap(request: IncomingMessage, response: ServerResponse): void {
+    const session = options.verifySession(
+      readCookie(request.headers.cookie, REMOTE_SESSION_COOKIE),
+    );
+    if (session === undefined) {
+      writeError(request, response, 401, 'unauthorized');
+      return;
+    }
+    writeJson(request, response, 200, {
+      port: request.socket.localPort ?? 0,
+      version: options.version,
+      platform: process.platform,
+      home: process.env.TUFFCODE_HOME ?? homedir(),
+      wsPath: '/ws',
+    });
+  }
 
   async function handlePairCreate(
     request: IncomingMessage,
@@ -497,7 +526,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
       expiresAt: new Date(now.getTime() + REMOTE_SESSION_TTL_MS).toISOString(),
     });
     const result: PairClaimResult = { session: toView(session) };
-    writeJson(request, response, 201, result, { 'set-cookie': sessionCookie(token) });
+    writeJson(request, response, 201, result, {
+      'set-cookie': sessionCookie(token, isSecureRequest(request)),
+    });
   }
 
   function handleListSessions(request: IncomingMessage, response: ServerResponse): void {
@@ -553,6 +584,10 @@ export function createHttpServer(options: HttpServerOptions): Server {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     const method = request.method ?? 'GET';
 
+    if (method === 'GET' && url.pathname === '/bootstrap') {
+      handleBootstrap(request, response);
+      return;
+    }
     if (method === 'GET' && url.pathname === '/health') {
       const body: HealthBody = {
         ok: true,

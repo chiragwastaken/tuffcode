@@ -149,13 +149,13 @@ describe('tuffcodeToolSpecs', () => {
 });
 
 describe('classifyTuffcodeTool', () => {
-  it('keeps the config ladder: ask and accept-edits approve, read-only denies', () => {
+  it('keeps the config ladder: ask, accept-edits and full-auto approve, read-only denies', () => {
     const input = { action: 'provider.add' };
 
     expect(classifyTuffcodeTool('mcp__tuffcode__config', input, 'ask')).toBe('approve');
     expect(classifyTuffcodeTool('mcp__tuffcode__config', input, 'accept-edits')).toBe('approve');
     expect(classifyTuffcodeTool('mcp__tuffcode__config', input, 'read-only')).toBe('deny');
-    expect(classifyTuffcodeTool('mcp__tuffcode__config', input, 'full-auto')).toBe('allow');
+    expect(classifyTuffcodeTool('mcp__tuffcode__config', input, 'full-auto')).toBe('approve');
   });
 
   it('allows an mcp list and asks before an mcp call', () => {

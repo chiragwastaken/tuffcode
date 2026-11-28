@@ -51,7 +51,7 @@ describe('git checkpoints', () => {
     // HEAD and the branch never move, and the real index still knows nothing about keep.txt.
     expect(git(worktree, ['rev-parse', 'HEAD'])).toBe(head);
     expect(git(worktree, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(branch);
-    expect(git(worktree, ['ls-files', '--cached', '--name-only']).split('\n')).toEqual([
+    expect(git(worktree, ['ls-files', '--cached']).split('\n')).toEqual([
       'README.md',
     ]);
   });

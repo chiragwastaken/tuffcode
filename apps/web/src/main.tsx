@@ -16,6 +16,7 @@ import {
 import { applyAppearance, applyTheme } from './components/settings/appearance';
 import { createRpcClient, type RpcClient } from './rpc/client';
 import { RpcProvider } from './rpc/rpc-context';
+import { claimPairing, pairingCodeFromLocation } from './pairing';
 import { router } from './router';
 import { useAppStore } from './store/app-store';
 
@@ -50,15 +51,43 @@ function wireClient(client: RpcClient): void {
   });
 }
 
+function renderFatal(title: string, detail: string): void {
+  root.render(
+    <div className="flex h-screen items-center justify-center bg-background p-6">
+      <div className="max-w-sm text-center">
+        <p className="text-sm font-semibold text-error">{title}</p>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</p>
+      </div>
+    </div>,
+  );
+}
+
 async function boot(): Promise<void> {
+  // A phone opens the one-time link first. Claiming it sets the session cookie,
+  // then the address bar returns to the app so the router never sees /pair.
+  const code = pairingCodeFromLocation(window.location);
+  if (code !== undefined) {
+    try {
+      await claimPairing(code);
+      window.history.replaceState({}, '', '/');
+    } catch (error) {
+      renderFatal(
+        'Pairing failed',
+        error instanceof Error ? error.message : 'The pairing code was not accepted.',
+      );
+      return;
+    }
+  }
+
   let resolved: ResolvedBootstrap;
   try {
     resolved = await resolveBootstrap();
-  } catch {
-    root.render(
-      <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-error">
-        Could not start the Tuffcode server bridge.
-      </div>,
+  } catch (error) {
+    renderFatal(
+      'Could not start the Tuffcode server bridge',
+      error instanceof Error
+        ? error.message
+        : 'Open the pairing link from Tuffcode desktop, or run the desktop app.',
     );
     return;
   }
