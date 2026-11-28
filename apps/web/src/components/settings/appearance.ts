@@ -43,7 +43,7 @@ export function applyTheme(
   const palette = applyThemePalette(id, target);
   // The preload resolves the base scheme for the main process, which repaints the
   // native title bar overlay and window background.
-  window.tuffcode.setTheme(palette.id, palette.base);
+  window.tuffcode.setTheme(palette.base);
 }
 
 export interface AppearanceValues {

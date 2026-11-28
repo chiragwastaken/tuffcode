@@ -168,5 +168,13 @@ export function Terminal({
     term.options.theme = theme;
   }, [theme]);
 
-  return <div ref={containerRef} className={cn('size-full bg-terminal-background', className)} />;
+  return (
+    <div
+      ref={containerRef}
+      // The xterm theme is not reachable from the DOM, so expose its background for
+      // tests and for anyone inspecting which palette the terminal painted.
+      data-terminal-background={theme?.background}
+      className={cn('size-full bg-terminal-background', className)}
+    />
+  );
 }

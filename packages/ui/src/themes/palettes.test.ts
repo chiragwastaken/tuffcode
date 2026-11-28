@@ -4,6 +4,8 @@ import {
   ANSI_NAMES,
   PALETTES,
   THEME_TOKEN_NAMES,
+  colorToHex,
+  oklabDistance,
   paletteFor,
   paletteToXterm,
 } from './palettes.js';
@@ -15,6 +17,28 @@ function luminance(hex: string): number {
     unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4,
   ) as [number, number, number];
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Resolves a palette value and measures it against another resolved value. */
+function contrastOf(palette: (typeof PALETTES)[keyof typeof PALETTES], a: string, b: string): number {
+  return contrast(
+    colorToHex(palette.tokens[a as keyof typeof palette.tokens], palette.tokens),
+    colorToHex(palette.tokens[b as keyof typeof palette.tokens], palette.tokens),
+  );
+}
+
+/** The 10 percent tint a status chip paints behind its label. */
+function tintOf(background: string, color: string): string {
+  const value = (hex: string): number[] => {
+    const body = hex.replace('#', '');
+    return [0, 2, 4].map((offset) => Number.parseInt(body.slice(offset, offset + 2), 16));
+  };
+  const back = value(background);
+  const front = value(color);
+  return `#${back
+    .map((channel, index) => Math.round(channel + ((front[index] ?? 0) - channel) * 0.1))
+    .map((channel) => channel.toString(16).padStart(2, '0'))
+    .join('')}`;
 }
 
 function contrast(foreground: string, background: string): number {
@@ -41,16 +65,36 @@ describe('theme palettes', () => {
   it('keeps body text readable on every background', () => {
     for (const id of THEME_IDS) {
       const palette = PALETTES[id];
-      expect(contrast(palette.tokens.foreground, palette.tokens.background), id).toBeGreaterThanOrEqual(3);
+      expect(contrastOf(palette, 'foreground', 'background'), id).toBeGreaterThanOrEqual(3);
     }
   });
 
   it('keeps surfaces, secondary text and primary labels readable', () => {
     for (const id of THEME_IDS) {
       const palette = PALETTES[id];
-      expect(contrast(palette.tokens.foreground, palette.tokens['message-surface']), id).toBeGreaterThanOrEqual(3);
-      expect(contrast(palette.tokens['muted-foreground'], palette.tokens.background), id).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(palette.tokens['primary-foreground'], palette.tokens.primary), id).toBeGreaterThanOrEqual(4.5);
+      expect(contrastOf(palette, 'foreground', 'message-surface'), id).toBeGreaterThanOrEqual(3);
+      expect(contrastOf(palette, 'muted-foreground', 'background'), id).toBeGreaterThanOrEqual(4.5);
+      expect(contrastOf(palette, 'primary-foreground', 'primary'), id).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps primary-soft readable as text on every palette', () => {
+    for (const id of THEME_IDS) {
+      const palette = PALETTES[id];
+      expect(contrastOf(palette, 'primary-soft', 'background'), id).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the plan marker readable and apart from the running marker', () => {
+    for (const id of THEME_IDS) {
+      const palette = PALETTES[id];
+      const plan = colorToHex(palette.tokens['plan-foreground'], palette.tokens);
+      const info = colorToHex(palette.tokens['info-foreground'], palette.tokens);
+      const background = colorToHex(palette.tokens.background, palette.tokens);
+      expect(contrast(plan, background), id).toBeGreaterThanOrEqual(4.5);
+      // The chip paints a 10 percent tint of the marker behind its label.
+      expect(contrast(plan, tintOf(background, plan)), `${id} chip`).toBeGreaterThanOrEqual(4.2);
+      expect(oklabDistance(plan, info), `${id} distance`).toBeGreaterThanOrEqual(0.12);
     }
   });
 

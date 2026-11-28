@@ -43,7 +43,7 @@ const bridge: TuffcodeBridge = {
       ipcRenderer.removeListener(MENU_ACTION_CHANNEL, listener);
     };
   },
-  setTheme: (theme: string, kind: 'dark' | 'light'): void => {
+  setTheme: (kind: 'dark' | 'light'): void => {
     // The renderer owns `dataset.theme`; the main process only needs the base scheme.
     ipcRenderer.send(SET_THEME_CHANNEL, kind);
   },
