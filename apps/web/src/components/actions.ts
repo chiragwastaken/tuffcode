@@ -5,6 +5,7 @@ import {
   ClipboardPaste,
   Copy,
   Eraser,
+  EyeOff,
   MessageSquarePlus,
   PencilLine,
   RotateCcw,
@@ -326,8 +327,9 @@ export const ACTIONS: Record<ActionId, ActionDefinition> = {
     id: 'message.delete',
     label: 'Hide from this session',
     shortcut: 'Del',
-    destructive: true,
-    icon: Trash,
+    // Hiding is reversible: a reload brings the row back, so it is not destructive.
+    destructive: false,
+    icon: EyeOff,
     run: (ctx) => {
       const item = ctx.userMessage;
       const threadId = ctx.threadId;

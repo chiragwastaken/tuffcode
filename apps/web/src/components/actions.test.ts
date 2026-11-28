@@ -139,13 +139,14 @@ describe('action registry shape', () => {
     }
   });
 
-  it('only marks the delete actions destructive', () => {
+  it('only marks the delete action destructive', () => {
     const destructive = Object.values(ACTIONS)
       .filter((action) => action.destructive === true)
       .map((action) => action.id)
       .toSorted();
 
-    expect(destructive).toEqual(['message.delete', 'thread.delete']);
+    // Hiding a message is reversible, so only a real delete keeps the red styling.
+    expect(destructive).toEqual(['thread.delete']);
   });
 
   it('points every menu entry at a registered action', () => {

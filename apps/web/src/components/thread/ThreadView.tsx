@@ -22,6 +22,7 @@ import {
   useHiddenMessageIds,
   useLocalUserMessages,
   useSupersededTurns,
+  withoutHiddenMessages,
 } from './local-messages';
 import { StatusChip } from './status-chip';
 import { Timeline, type TimelineHandle } from './Timeline';
@@ -92,7 +93,7 @@ export function ThreadView({
   useDockInset(stageRef, dockRef, subagentPaneOpen);
 
   const visibleMessages = useMemo(
-    () => (messages ?? []).filter((message) => !hiddenMessages.has(message.id)),
+    () => withoutHiddenMessages(messages ?? [], hiddenMessages),
     [messages, hiddenMessages],
   );
   const items = useMemo(

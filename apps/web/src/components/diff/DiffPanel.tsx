@@ -82,6 +82,7 @@ function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
 
   const [checkpointId, setCheckpointId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const [commentsToken, setCommentsToken] = useState(0);
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +175,7 @@ function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [rpc, threadId, reloadToken]);
+  }, [rpc, threadId, commentsToken]);
 
   const directories = useMemo(() => buildDiffTree(files), [files]);
   const knownPaths = useMemo(() => new Set(files.map((file) => file.path)), [files]);
@@ -184,6 +185,12 @@ function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
 
   function reload(): void {
     setReloadToken((token) => token + 1);
+    setCommentsToken((token) => token + 1);
+  }
+
+  /** Only the comment list changed: refetching the diff would flash its spinner. */
+  function reloadComments(): void {
+    setCommentsToken((token) => token + 1);
   }
 
   function toggleTree(): void {
@@ -246,8 +253,9 @@ function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
         body: draftBody.trim(),
       });
       // Refetch instead of appending: an in-flight list request would otherwise wipe
-      // the new row, or a late response would duplicate it.
-      reload();
+      // the new row, or a late response would duplicate it. Only the comments changed,
+      // so the diff and checkpoint queries stay untouched.
+      reloadComments();
       setDraft(null);
       setDraftBody('');
     } catch (caught) {

@@ -129,11 +129,15 @@ export function pruneResolvedLocalUserMessages(
   emit();
 }
 
-/** Drops every echo of a thread; /clear replaced the transcript the echoes stood in for. */
+/**
+ * Drops every per-thread row: echoes, superseded turns and hidden ids. /clear replaced
+ * the transcript they stood in for, so each map has to go, not only the echoes.
+ */
 export function clearLocalUserMessages(threadId: string): void {
-  if (!messagesByThread.delete(threadId)) return;
-  supersededTurnsByThread.delete(threadId);
-  hiddenByThread.delete(threadId);
+  const hadEchoes = messagesByThread.delete(threadId);
+  const hadSuperseded = supersededTurnsByThread.delete(threadId);
+  const hadHidden = hiddenByThread.delete(threadId);
+  if (!hadEchoes && !hadSuperseded && !hadHidden) return;
   emit();
 }
 
@@ -143,6 +147,14 @@ export function hideLocalUserMessage(threadId: string, messageId: string): void 
   if (current.has(messageId)) return;
   hiddenByThread.set(threadId, new Set(current).add(messageId));
   emit();
+}
+
+/** The rows a thread may render: persisted and echoed messages the user did not hide. */
+export function withoutHiddenMessages<T extends { id: string }>(
+  messages: readonly T[],
+  hidden: ReadonlySet<string>,
+): T[] {
+  return messages.filter((message) => !hidden.has(message.id));
 }
 
 export function hiddenMessageIds(threadId: string): ReadonlySet<string> {
