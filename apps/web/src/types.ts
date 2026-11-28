@@ -1,9 +1,23 @@
 export interface BootstrapInfo {
   port: number;
-  token: string;
+  /** Bearer token from the desktop preload. Absent in a browser, where the
+   * socket authenticates with the session cookie the served origin set. */
+  token?: string;
   version: string;
   platform: string;
   home: string;
+}
+
+/** The `GET /bootstrap` payload a served origin returns to a browser. */
+export interface BootstrapResponse {
+  port: number;
+  version: string;
+  platform: string;
+  home: string;
+  /** Socket path on the served origin, so a proxy can move it without a rebuild. */
+  wsPath: string;
+  /** Present only when the server hands the socket token to the page. */
+  token?: string;
 }
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed' | 'protocol-error';
@@ -32,6 +46,9 @@ export interface NotifyTestResult {
 }
 
 export interface TuffcodeBridge {
+  /** Present only on the shim `main.tsx` installs in a served page, so bootstrap
+   * resolution can tell a browser from the Electron preload. */
+  browser?: boolean;
   getBootstrap(): Promise<BootstrapInfo>;
   pickFolder(): Promise<string | null>;
   onMenuAction(callback: (action: string) => void): () => void;

@@ -7,12 +7,17 @@ import { themeBase } from '@tuffcode/contracts';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Toaster, toast } from 'sonner';
+import {
+  createBrowserBridge,
+  readBridge,
+  resolveBootstrap,
+  type ResolvedBootstrap,
+} from './bootstrap';
 import { applyAppearance, applyTheme } from './components/settings/appearance';
 import { createRpcClient, type RpcClient } from './rpc/client';
 import { RpcProvider } from './rpc/rpc-context';
 import { router } from './router';
 import { useAppStore } from './store/app-store';
-import type { BootstrapInfo } from './types';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('Missing #root element.');
@@ -46,9 +51,9 @@ function wireClient(client: RpcClient): void {
 }
 
 async function boot(): Promise<void> {
-  let bootstrap: BootstrapInfo;
+  let resolved: ResolvedBootstrap;
   try {
-    bootstrap = await window.tuffcode.getBootstrap();
+    resolved = await resolveBootstrap();
   } catch {
     root.render(
       <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-error">
@@ -58,11 +63,19 @@ async function boot(): Promise<void> {
     return;
   }
 
-  useAppStore.getState().setBootstrap(bootstrap);
+  // A served page has no preload, so the renderer gets a bridge whose native only
+  // methods stay absent before any component can call one.
+  if (readBridge() === undefined) {
+    window.tuffcode = createBrowserBridge(resolved.bootstrap, (message) => {
+      toast.error(message);
+    });
+  }
+
+  useAppStore.getState().setBootstrap(resolved.bootstrap);
 
   const client = createRpcClient({
-    url: `ws://127.0.0.1:${bootstrap.port}/ws`,
-    token: bootstrap.token,
+    url: resolved.wsUrl,
+    token: resolved.bootstrap.token,
   });
   wireClient(client);
 
