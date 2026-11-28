@@ -150,15 +150,18 @@ export function attachWebSocket(server: Server, deps: WebSocketDeps): AttachedWe
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
+    const token = extractToken(request);
+    const fileToken = deps.verifyToken(token);
     // A browser always sends Origin here; refusing a foreign one blocks cross-site
-    // WebSocket hijacking even when the cookie is attached automatically.
-    if (!isAllowedOrigin(request.headers.origin, request.headers.host, deps.remote)) {
+    // WebSocket hijacking when the session cookie is attached automatically. The
+    // desktop renderer is a file:// origin and authenticates with the file token,
+    // which a foreign page cannot read, so the token itself is the boundary there.
+    if (!fileToken && !isAllowedOrigin(request.headers.origin, request.headers.host, deps.remote)) {
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
-    const token = extractToken(request);
     const authenticated =
-      deps.verifyToken(token) ||
+      fileToken ||
       (token === undefined && deps.verifySession(extractSessionToken(request)) !== undefined);
     if (!authenticated) {
       rejectUpgrade(socket, 401, 'Unauthorized');
