@@ -63,7 +63,6 @@ export {
   ABOUT_USER_HEADING,
   CUSTOM_INSTRUCTIONS_HEADING,
   PROJECT_RULES_HEADING,
-  REVIEW_COMMENTS_HEADING,
   type AssembledPrompt,
   type PromptAssemblyInput,
   type PromptSection,

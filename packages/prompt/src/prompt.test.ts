@@ -555,23 +555,6 @@ describe('assemblePrompt', () => {
     expect(assembly.total).toBe(assembly.sections.reduce((sum, entry) => sum + entry.tokens, 0));
   });
 
-  it('includes unresolved review comments only when there are any', () => {
-    const withComments = assemblePrompt({
-      reviewComments: '- src/a.ts:12 (new): handle the null case',
-      turnContext,
-      userMessage: 'fix the review',
-    });
-    expect(withComments.sections.map((entry) => entry.name)).toContain('review-comments');
-    expect(withComments.systemPrompt).toContain('## Review comments');
-    expect(withComments.systemPrompt).toContain('src/a.ts:12');
-    // Comments change independently of the message, so they must not sit in the cache.
-    expect(withComments.staticPrefix).not.toContain('## Review comments');
-    expect(withComments.dynamicPrompt).toContain('## Review comments');
-
-    const without = assemblePrompt({ turnContext, userMessage: 'fix the review' });
-    expect(without.sections.some((entry) => entry.name === 'review-comments')).toBe(false);
-  });
-
   it('keeps the cached prefix identical when the message changes rules and skills', () => {
     const first = assemblePrompt({
       projectRules: '- alpha rule',
