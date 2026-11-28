@@ -510,4 +510,79 @@ describe('OpenAIClient', () => {
     }
     expect(calls).toBe(1);
   });
+
+  it('retries a network failure and then streams', async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          if (calls === 1) {
+            throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+          }
+          return response(200);
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        logger,
+      },
+    );
+
+    const stream = await client.stream(request, new AbortController().signal);
+
+    expect(stream).toBeDefined();
+    expect(calls).toBe(2);
+    expect(delays).toEqual([500]);
+  });
+
+  it('surfaces a retryable network error after the full backoff', async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          throw new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } });
+        },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+        logger,
+      },
+    );
+
+    const failure = await client
+      .stream(request, new AbortController().signal)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(OpenAIRequestError);
+    expect(failure).toMatchObject({ status: 0, retryable: true });
+    expect((failure as Error).message).toContain('ENOTFOUND');
+    expect((failure as Error).message).toContain('after 5 attempts');
+    expect(calls).toBe(5);
+    expect(delays).toEqual([500, 1000, 2000, 4000]);
+  });
+
+  it('does not retry an aborted fetch', async () => {
+    let calls = 0;
+    const abort = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+    const client = new OpenAIClient(
+      { baseUrl: 'http://x/v1', headers: {}, secret: null },
+      {
+        fetchFn: async () => {
+          calls += 1;
+          throw abort;
+        },
+        sleep: async () => {},
+        logger,
+      },
+    );
+
+    await expect(client.stream(request, new AbortController().signal)).rejects.toBe(abort);
+    expect(calls).toBe(1);
+  });
 });

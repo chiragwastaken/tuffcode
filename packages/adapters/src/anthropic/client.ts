@@ -75,7 +75,7 @@ export interface AnthropicRequestBody {
   toolOptions?: ToolListOptions;
   /** A subagent child's profile; unset offers the full harness list. */
   toolProfile?: ToolProfile;
-  /** Reasoning level mapped to a thinking budget; `none` or unset leaves thinking off. */
+  /** Reasoning level: a manual budget below 4.7, an adaptive effort from 4.7 on. */
   reasoningEffort?: string;
 }
 
@@ -92,6 +92,44 @@ export const THINKING_BUDGETS: Readonly<Record<string, number>> = {
 export function thinkingBudget(effort: string | undefined): number | null {
   if (effort === undefined) return null;
   return THINKING_BUDGETS[effort] ?? null;
+}
+
+/**
+ * How a model takes extended thinking: Claude 4.7 and later only accept adaptive
+ * thinking, while 4.5 and earlier only accept a manual budget. Unversioned ids keep
+ * the legacy shape, which is the conservative choice.
+ */
+export type AnthropicThinkingMode = 'legacy' | 'adaptive';
+
+export function thinkingMode(model: string): AnthropicThinkingMode {
+  // Version tokens are one or two digits; an eight-digit date must not read as a minor.
+  const match = /(\d+)(?:[.-](\d{1,2})(?!\d))?/.exec(model.toLowerCase());
+  if (match === null) return 'legacy';
+  const major = Number(match[1]);
+  const minor = match[2] === undefined ? null : Number(match[2]);
+  if (major > 4) return 'adaptive';
+  return major === 4 && minor !== null && minor >= 7 ? 'adaptive' : 'legacy';
+}
+
+/** Anthropic's effort levels; `minimal` has no equivalent and folds into `low`. */
+export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export function adaptiveEffort(effort: string | undefined): AnthropicEffort | null {
+  switch (effort) {
+    case 'minimal':
+    case 'low':
+      return 'low';
+    case 'medium':
+      return 'medium';
+    case 'high':
+      return 'high';
+    case 'xhigh':
+      return 'xhigh';
+    case 'max':
+      return 'max';
+    default:
+      return null;
+  }
 }
 
 export type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
@@ -218,9 +256,11 @@ function buildBody(
       cache_control: { type: 'ephemeral' },
     };
   }
-  const budget = thinkingBudget(request.reasoningEffort);
-  // The API needs max_tokens above the thinking budget and rejects a custom temperature
-  // while thinking is on, so both are adjusted only when a budget applies.
+  const adaptive =
+    thinkingMode(request.model) === 'adaptive' ? adaptiveEffort(request.reasoningEffort) : null;
+  const budget = adaptive === null ? thinkingBudget(request.reasoningEffort) : null;
+  // The legacy API needs max_tokens above the thinking budget and rejects a custom
+  // temperature while thinking is on; adaptive thinking takes the request as configured.
   const maxTokens = budget === null ? request.max_tokens : Math.max(request.max_tokens, budget + 4096);
   // The static head is cached on its own so a changing memory block cannot invalidate it.
   const staticSystem = request.systemStatic?.trim() ?? '';
@@ -240,8 +280,11 @@ function buildBody(
     ...(tools.length > 0 ? { tools } : {}),
     stream: true,
     ...(system.length > 0 ? { system: systemPayload } : {}),
+    ...(adaptive !== null
+      ? { thinking: { type: 'adaptive' }, output_config: { effort: adaptive } }
+      : {}),
     ...(budget !== null ? { thinking: { type: 'enabled', budget_tokens: budget } } : {}),
-    ...(budget === null && config.temperature !== undefined
+    ...((adaptive !== null || budget === null) && config.temperature !== undefined
       ? { temperature: config.temperature }
       : {}),
   };
@@ -274,8 +317,8 @@ async function mapResponseError(response: Response): Promise<AnthropicRequestErr
   return new AnthropicRequestError('request failed with status ' + status + detail, status, false);
 }
 
-function retryDelay(response: Response, attempt: number): number {
-  const header = response.headers.get('retry-after');
+function retryDelay(response: Response | null, attempt: number): number {
+  const header = response?.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0) {
@@ -283,6 +326,28 @@ function retryDelay(response: Response, attempt: number): number {
     }
   }
   return Math.min(DEFAULT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RETRY_DELAY);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
+}
+
+/**
+ * Node's fetch rejects a network failure with `TypeError: fetch failed`; the reason
+ * (ECONNRESET, ENOTFOUND, ECONNREFUSED) sits one level down in `cause.code`.
+ */
+function networkDetail(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause: unknown = error.cause;
+  const code =
+    typeof cause === 'object' &&
+    cause !== null &&
+    'code' in cause &&
+    typeof cause.code === 'string'
+      ? cause.code
+      : null;
+  const message = error.message.length > 0 ? error.message : 'request failed';
+  return code !== null && !message.includes(code) ? message + ' (' + code + ')' : message;
 }
 
 export class AnthropicClient implements MessagesStreamer {
@@ -305,12 +370,37 @@ export class AnthropicClient implements MessagesStreamer {
   ): Promise<ReadableStream<Uint8Array>> {
     let attempt = 0;
     while (true) {
-      const response = await this.fetchFn(this.config.baseUrl + '/v1/messages', {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify(buildBody(this.config, request)),
-        signal,
-      });
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.config.baseUrl + '/v1/messages', {
+          method: 'POST',
+          headers: this.headers(),
+          body: JSON.stringify(buildBody(this.config, request)),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) throw error;
+        const failure = new AnthropicRequestError(
+          'network error: ' + networkDetail(error),
+          0,
+          true,
+        );
+        this.logger.warn('anthropic request failed', {
+          status: 0,
+          retryable: true,
+          error: failure.message,
+        });
+        if (attempt >= MAX_ATTEMPTS - 1) {
+          throw new AnthropicRequestError(
+            failure.message + ' after ' + (attempt + 1) + ' attempts',
+            0,
+            true,
+          );
+        }
+        attempt += 1;
+        await this.sleep(retryDelay(null, attempt));
+        continue;
+      }
       if (response.ok) {
         if (!response.body) {
           throw new AnthropicRequestError('response has no body', response.status, true);
@@ -355,6 +445,21 @@ export interface AnthropicSseEvent {
 export interface AnthropicSseOptions {
   signal?: AbortSignal;
   logger?: AdapterLogger;
+  /** Idle budget between chunks; 120s by default, 0 or less disables it. */
+  idleTimeoutMs?: number;
+}
+
+/** A stream that sends no bytes for this long is treated as dead. */
+export const DEFAULT_ANTHROPIC_SSE_IDLE_TIMEOUT_MS = 120_000;
+
+/** A stalled stream; retryable because the request itself was never answered. */
+export class AnthropicSseIdleTimeoutError extends Error {
+  readonly retryable = true;
+
+  constructor(timeoutMs: number) {
+    super('stream sent no data for ' + timeoutMs + 'ms');
+    this.name = 'AnthropicSseIdleTimeoutError';
+  }
 }
 
 type ParsedEvent =
@@ -407,8 +512,25 @@ export async function* streamAnthropicSse(
   const decoder = new TextDecoder();
   const signal = options.signal;
   const logger = options.logger;
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_ANTHROPIC_SSE_IDLE_TIMEOUT_MS;
   let buffer = '';
   let overflow = false;
+
+  /** Reads one chunk, rejecting when the provider sends nothing for the idle budget. */
+  const readChunk = async () => {
+    if (idleTimeoutMs <= 0) return reader.read();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const idle = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), idleTimeoutMs);
+    });
+    try {
+      const chunk = await Promise.race([reader.read(), idle]);
+      if (chunk === null) throw new AnthropicSseIdleTimeoutError(idleTimeoutMs);
+      return chunk;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   const drain = function* (): Generator<AnthropicSseEvent> {
     while (true) {
@@ -439,7 +561,7 @@ export async function* streamAnthropicSse(
   try {
     while (true) {
       if (signal?.aborted) return;
-      const chunk = await reader.read();
+      const chunk = await readChunk();
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, { stream: true });
 
@@ -473,6 +595,10 @@ export async function* streamAnthropicSse(
       }
     }
   } catch (error) {
+    if (error instanceof AnthropicSseIdleTimeoutError) {
+      logger?.warn('anthropic sse stream idle', { timeoutMs: idleTimeoutMs });
+      throw error;
+    }
     if (signal?.aborted) return;
     throw error;
   } finally {
