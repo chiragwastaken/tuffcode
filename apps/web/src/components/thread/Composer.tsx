@@ -38,6 +38,7 @@ import {
 import { toast } from 'sonner';
 import { useRpc } from '../../rpc/rpc-context';
 import { useAppStore } from '../../store/app-store';
+import { CONNECTION_META } from '../connection-meta';
 import { CouncilGoal } from '../council/CouncilGoal';
 import { CouncilStatusStrip } from '../council/CouncilStatusStrip';
 import { councilSummary } from '../council/council-goal';
@@ -588,12 +589,11 @@ export function Composer({ thread }: ComposerProps) {
         >
           {connection === 'open' ? null : (
             <p
+              role="status"
               data-testid="composer-disconnected"
               className="px-1 pb-1 text-2xs text-warning-foreground"
             >
-              {connection === 'protocol-error'
-                ? 'Connection error. Reload to reconnect.'
-                : 'Disconnected, reconnecting...'}
+              {CONNECTION_META[connection].label}. Sending resumes when the app is connected.
             </p>
           )}
 

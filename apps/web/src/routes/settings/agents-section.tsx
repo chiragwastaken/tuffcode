@@ -199,7 +199,6 @@ export function AgentsSection() {
               onChange={(subagentConcurrency) => update({ subagentConcurrency })}
             />
           </SettingsRow>
-
         </div>
       </Card>
 
