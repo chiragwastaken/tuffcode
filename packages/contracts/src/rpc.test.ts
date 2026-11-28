@@ -492,7 +492,10 @@ const fixtures: Record<RpcMethod, MethodFixture> = {
     result: checkpoint,
   },
   'checkpoints.list': { params: { threadId: 't1' }, result: [checkpoint] },
-  'checkpoints.revert': { params: { threadId: 't1', checkpointId: 'c1' }, result: {} },
+  'checkpoints.revert': {
+    params: { threadId: 't1', checkpointId: 'c1', confirm: true },
+    result: {},
+  },
   'diff.get': { params: { threadId: 't1', checkpointId: 'c1' }, result: { files: [diffFile] } },
   'comments.list': { params: { threadId: 't1' }, result: [reviewComment] },
   'comments.add': {
@@ -1124,6 +1127,12 @@ describe('rpc methods', () => {
         { threadId: 't1', filePath: 'a.ts', line: 0, side: 'new', body: 'x' },
       ],
       ['comments.resolve', 'params', { id: 'rc1' }],
+      ['checkpoints.revert', 'params', { threadId: 't1', checkpointId: 'c1' }],
+      [
+        'checkpoints.revert',
+        'params',
+        { threadId: 't1', checkpointId: 'c1', confirm: false },
+      ],
       ['comments.list', 'result', [{ ...reviewComment, line: -1 }]],
       ['providers.test', 'result', { ok: true, detail: 'x', signedIn: 'yes' }],
       ['providers.test', 'result', { ok: true, detail: 'x', models: 'claude-opus-4-5' }],
