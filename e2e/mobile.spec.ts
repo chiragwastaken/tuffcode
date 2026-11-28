@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 /**
@@ -89,11 +92,12 @@ test.beforeAll(async () => {
 });
 
 test.beforeEach(() => {
-  test.skip(
-    unreachable !== null,
-    `${unreachable}. Start the mobile server with remote.enabled on port 4310, or set ` +
-      'TUFFCODE_MOBILE_URL to the address it serves.',
-  );
+  if (unreachable !== null) {
+    throw new Error(
+      `${unreachable}. The Playwright webServer should have started the mobile server; ` +
+        'check scripts/mobile-test-server.mjs.',
+    );
+  }
 });
 
 test('serves the shell with a linked, valid manifest', async ({ page }) => {
@@ -124,6 +128,37 @@ test('serves the shell with a linked, valid manifest', async ({ page }) => {
     expect.arrayContaining(['192x192', '512x512']),
   );
   for (const icon of icons) expect(icon.type).toBe('image/png');
+});
+
+test('pairs a phone and opens the workspace over the session cookie', async ({ page, context }) => {
+  const token = readFileSync(join(tmpdir(), 'tuffcode-mobile-e2e-token'), 'utf8').trim();
+  const created = await fetch(servedUrl('/pair/create'), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, origin: BASE_URL },
+  });
+  expect(created.ok, 'the test server must create a pairing code').toBe(true);
+  const { code } = (await created.json()) as { code: string };
+
+  const claimed = await fetch(servedUrl('/pair/claim'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: BASE_URL },
+    body: JSON.stringify({ code, deviceName: 'Playwright phone' }),
+  });
+  expect(claimed.ok, 'the phone must claim the code').toBe(true);
+  const setCookie = claimed.headers.get('set-cookie') ?? '';
+  const value = /tuffcode_session=([0-9a-f]{64})/.exec(setCookie)?.[1];
+  expect(value, 'the claim must set the session cookie').toBeTruthy();
+
+  await context.addCookies([
+    { name: 'tuffcode_session', value: value ?? '', domain: new URL(BASE_URL).hostname, path: '/' },
+  ]);
+  await page.goto(servedUrl('/'), { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('[data-testid="connection-status"]')).toHaveAttribute(
+    'data-status',
+    'open',
+    { timeout: 20_000 },
+  );
+  await expect(page.getByText('Workspace', { exact: false }).first()).toBeVisible();
 });
 
 test('serves each declared icon at its declared size', async () => {

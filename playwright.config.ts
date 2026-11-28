@@ -38,6 +38,12 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { trace: 'retain-on-failure' },
+  webServer: {
+    command: 'node scripts/mobile-test-server.mjs',
+    url: 'http://127.0.0.1:4310/health',
+    reuseExistingServer: false,
+    timeout: 120_000,
+  },
   projects: [
     {
       name: 'electron',

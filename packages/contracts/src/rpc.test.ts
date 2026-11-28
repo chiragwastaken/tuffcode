@@ -1661,7 +1661,13 @@ describe('settings', () => {
         onlyWhenUnfocused: true,
       },
       keepAwake: false,
-      remote: { enabled: false, bindHost: '127.0.0.1', port: 4310, allowedOrigins: [] },
+      remote: {
+        enabled: false,
+        bindHost: '127.0.0.1',
+        port: 4310,
+        publicUrl: '',
+        allowedOrigins: [],
+      },
     });
     expect(SettingsSchema.parse({})).toEqual(DEFAULT_SETTINGS);
     expect(SettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);

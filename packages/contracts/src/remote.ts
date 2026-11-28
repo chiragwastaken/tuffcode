@@ -10,6 +10,11 @@ export const RemoteSettingsSchema = z.object({
   bindHost: z.string().min(1),
   port: z.number().int().min(1).max(65535),
   /**
+   * Address a phone should open, for example `http://192.168.1.20:4310` or a
+   * Tailscale `https://host.ts.net` URL. Empty means use the pairing request origin.
+   */
+  publicUrl: z.string(),
+  /**
    * Extra browser origins allowed to open a WebSocket, for example
    * `http://192.168.1.20:4310`. Same-origin and loopback origins are always allowed.
    */
@@ -21,6 +26,7 @@ export const DEFAULT_REMOTE_SETTINGS: RemoteSettings = {
   enabled: false,
   bindHost: '127.0.0.1',
   port: 4310,
+  publicUrl: '',
   allowedOrigins: [],
 };
 

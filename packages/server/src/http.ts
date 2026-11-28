@@ -215,6 +215,33 @@ function securityHeaders(csp: string): Record<string, string> {
   };
 }
 
+/** A desktop renderer is a file:// origin, so its pairing calls arrive as Origin: null. */
+function corsHeaders(request: IncomingMessage): Record<string, string> {
+  const origin = request.headers.origin;
+  if (origin === undefined) return {};
+  if (origin === 'null') {
+    return {
+      'access-control-allow-origin': 'null',
+      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-headers': 'authorization, content-type',
+      vary: 'origin',
+    };
+  }
+  try {
+    if (isLoopbackHost(new URL(origin).host)) {
+      return {
+        'access-control-allow-origin': origin,
+        'access-control-allow-methods': 'GET, POST, OPTIONS',
+        'access-control-allow-headers': 'authorization, content-type',
+        vary: 'origin',
+      };
+    }
+  } catch {
+    return {};
+  }
+  return {};
+}
+
 function writeJson(
   request: IncomingMessage,
   response: ServerResponse,
@@ -228,6 +255,7 @@ function writeJson(
     'content-length': Buffer.byteLength(payload),
     'cache-control': 'no-store',
     ...securityHeaders(buildContentSecurityPolicy(originOf(request))),
+    ...corsHeaders(request),
     ...extra,
   });
   if (request.method === 'HEAD') response.end();
@@ -481,9 +509,10 @@ export function createHttpServer(options: HttpServerOptions): Server {
       return;
     }
     const issued = pairing.issue();
+    const publicUrl = options.remote.publicUrl.trim();
     const result: PairCreateResult = {
       code: issued.code,
-      url: pairingUrl(origin, issued.code),
+      url: pairingUrl(publicUrl.length > 0 ? publicUrl : origin, issued.code),
       expiresAt: issued.expiresAt,
     };
     writeJson(request, response, 201, result);
@@ -583,6 +612,18 @@ export function createHttpServer(options: HttpServerOptions): Server {
     }
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     const method = request.method ?? 'GET';
+
+    if (
+      method === 'OPTIONS' &&
+      (url.pathname === '/pair/create' || url.pathname.startsWith('/remote/sessions'))
+    ) {
+      response.writeHead(204, {
+        ...securityHeaders(buildContentSecurityPolicy(originOf(request))),
+        ...corsHeaders(request),
+      });
+      response.end();
+      return;
+    }
 
     if (method === 'GET' && url.pathname === '/bootstrap') {
       handleBootstrap(request, response);
