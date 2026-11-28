@@ -121,6 +121,12 @@ describe('tool profile', () => {
       allowed: true,
     });
     expect(profileAllows('bash', { command: 'pnpm test' }, explorer, 'C:/wt').allowed).toBe(false);
+    const refused = profileAllows('bash', { command: 'pnpm test' }, explorer, 'C:/wt');
+    expect(refused.allowed === false ? refused.reason : '').toContain('2>/dev/null');
+    expect(refused.allowed === false ? refused.reason : '').toContain('git status/log/show');
+    expect(profileAllows('bash', { command: 'git status 2>&1' }, explorer, 'C:/wt')).toEqual({
+      allowed: true,
+    });
     expect(profileAllows('bash', { command: 'git status' }, explorer, 'C:/wt')).toEqual({
       allowed: true,
     });

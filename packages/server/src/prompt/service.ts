@@ -129,6 +129,7 @@ export function planPrompt(repos: Repos, input: PromptPlanInput): PromptPlan {
   const projectRules = loadProjectRules(project.path, message);
   const reviewComments = renderReviewComments(repos, thread.id);
   const assembly = assemblePrompt({
+    role: thread.parentThreadId === null ? 'main' : 'child',
     customInstructions: settings.customInstructions,
     projectRules: projectRules.text,
     reviewComments,
