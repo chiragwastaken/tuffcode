@@ -15,12 +15,14 @@ describe('db migrations', () => {
     env = createTempEnv();
     const db = openDb(join(env.root, 'tuffcode.db'));
     try {
-      expect(migrate(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(migrate(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17]);
       expect(migrate(db)).toEqual([]);
 
       const versions = db.prepare('SELECT version FROM schema_migrations').all();
-      expect(versions).toHaveLength(11);
-      expect(versions.map((row) => row['version'])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(versions).toHaveLength(12);
+      expect(versions.map((row) => row['version'])).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 17,
+      ]);
 
       expect(db.prepare('PRAGMA journal_mode').get()?.['journal_mode']).toBe('wal');
       expect(db.prepare('PRAGMA foreign_keys').get()?.['foreign_keys']).toBe(1);
@@ -69,6 +71,12 @@ describe('db migrations', () => {
       ]) {
         expect(modelColumns).toContain(column);
       }
+
+      const commentColumns = db
+        .prepare('PRAGMA table_info(review_comments)')
+        .all()
+        .map((row) => row['name']);
+      expect(commentColumns).toContain('delivered_at');
     } finally {
       db.close();
     }

@@ -409,6 +409,16 @@ ALTER TABLE mcp_servers ADD COLUMN auth_header TEXT;
 UPDATE mcp_servers SET auth_mode = 'bearer' WHERE secret_ref IS NOT NULL;
 `;
 
+/**
+ * Round 8: review comment delivery. `delivered_at` records the first turn whose prompt
+ * carried the comment, so it stops repeating without being marked resolved. NULL means
+ * the agent has not been told about it yet; a resolved comment keeps its timestamp so
+ * the two states stay distinguishable.
+ */
+const REVIEW_COMMENT_DELIVERY_SQL = `
+ALTER TABLE review_comments ADD COLUMN delivered_at TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -464,5 +474,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 11,
     name: 'mcp-connector-auth',
     sql: MCP_AUTH_SQL,
+  },
+  {
+    version: 17,
+    name: 'review-comment-delivery',
+    sql: REVIEW_COMMENT_DELIVERY_SQL,
   },
 ];
