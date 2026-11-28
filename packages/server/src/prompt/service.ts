@@ -22,6 +22,7 @@ import {
 import { pluginSkillRoots } from '../skills/roots.js';
 import { SELF_CONFIG_SKILL, matchesSelfConfigIntent } from '../skills/system.js';
 import { loadProjectRules } from './rules.js';
+import { subagentChildFor } from '../runner/turn-options.js';
 
 export interface PromptPlanInput {
   thread: Thread;
@@ -110,8 +111,12 @@ export function planPrompt(repos: Repos, input: PromptPlanInput): PromptPlan {
 
   const skillPlan = planSkills(repos, project.path, message, settings);
   const projectRules = loadProjectRules(project.path, message);
+  // Only a subagent row makes this a child turn. Council planner, task and review
+  // threads also carry a parentThreadId, and they keep the main prompt: they have a
+  // conversation, and they are offered the skill tool.
+  const role = subagentChildFor(repos, thread.id) === undefined ? 'main' : 'child';
   const assembly = assemblePrompt({
-    role: thread.parentThreadId === null ? 'main' : 'child',
+    role,
     customInstructions: settings.customInstructions,
     projectRules: projectRules.text,
     profile: settings.profile,
