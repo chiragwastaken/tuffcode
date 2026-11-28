@@ -19,6 +19,7 @@ import {
 } from '@tuffcode/prompt';
 import { applyEol, dominantEol, normalizeEol, resolveWithin, type Eol } from '@tuffcode/shared';
 import { isExtraToolName } from '../extra-tools.js';
+import { scanShellCommand, shellFamiliesFor, type ShellFamily } from './readonly-shell.js';
 
 const MAX_OUTPUT = 64 * 1024;
 const MAX_READ_LINES = 2000;
@@ -408,265 +409,55 @@ function isReadOnlySegment(tokens: readonly string[]): boolean {
   return false;
 }
 
-type ShellScan = { segments: string[][] } | { failure: 'syntax' | 'redirect' };
-
-/**
- * Reads the target of a redirect: one bare or quoted word. Anything that continues into
- * another operator means the redirect was malformed, which is refused rather than
- * guessed at.
- */
-function readRedirectTarget(
-  command: string,
-  start: number,
-): { target: string; next: number } | null {
-  let i = start;
-  let target = '';
-  let quote: string | null = null;
-  while (i < command.length) {
-    const ch = command[i] as string;
-    if (quote !== null) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        target += ch;
-      }
-      i += 1;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      i += 1;
-      continue;
-    }
-    if (
-      ch === ' ' ||
-      ch === '\t' ||
-      ch === '\n' ||
-      ch === '\r' ||
-      ch === ';' ||
-      ch === '|' ||
-      ch === '&' ||
-      ch === '<' ||
-      ch === '>'
-    ) {
-      break;
-    }
-    target += ch;
-    i += 1;
-  }
-  if (quote !== null || target.length === 0) return null;
-  return { target, next: i };
-}
-
-/**
- * Splits a command into segments of words, removing quotes so a flag check sees the
- * same text the shell would hand the program. Only `>` to the null device and `2>&1`
- * survive: every other redirect names a file, and command substitution, backticks,
- * grouping and unbalanced quotes are refused outright.
- */
-function scanShell(command: string): ShellScan {
-  const segments: string[][] = [];
-  let tokens: string[] = [];
-  let word = '';
-  let hasWord = false;
-  let single = false;
-  let double = false;
-
-  const flushWord = (): void => {
-    if (!hasWord) return;
-    tokens.push(word);
-    word = '';
-    hasWord = false;
-  };
-  const flushSegment = (): void => {
-    flushWord();
-    segments.push(tokens);
-    tokens = [];
-  };
-
-  let i = 0;
-  while (i < command.length) {
-    const ch = command[i] as string;
-    if (single) {
-      if (ch === "'") single = false;
-      else {
-        word += ch;
-        hasWord = true;
-      }
-      i += 1;
-      continue;
-    }
-    if (double) {
-      if (ch === '"') {
-        double = false;
-        i += 1;
-        continue;
-      }
-      if (ch === '`') return { failure: 'syntax' };
-      if (ch === '$' && command[i + 1] === '(') return { failure: 'syntax' };
-      const next = command[i + 1];
-      if (ch === '\\' && (next === '"' || next === '\\' || next === '$' || next === '`')) {
-        word += next;
-        hasWord = true;
-        i += 2;
-        continue;
-      }
-      word += ch;
-      hasWord = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '\\') {
-      const next = command[i + 1];
-      if (next === undefined) return { failure: 'syntax' };
-      word += next;
-      hasWord = true;
-      i += 2;
-      continue;
-    }
-    if (ch === "'") {
-      single = true;
-      hasWord = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '"') {
-      double = true;
-      hasWord = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '`') return { failure: 'syntax' };
-    if (ch === '$' && command[i + 1] === '(') return { failure: 'syntax' };
-    if (ch === '(' || ch === ')' || ch === '{' || ch === '}') return { failure: 'syntax' };
-    if (ch === ' ' || ch === '\t') {
-      flushWord();
-      i += 1;
-      continue;
-    }
-    if (ch === '\n' || ch === '\r' || ch === ';') {
-      flushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === '&') {
-      if (command[i + 1] === '&') {
-        flushSegment();
-        i += 2;
-        continue;
-      }
-      if (command[i + 1] === '>') return { failure: 'redirect' };
-      flushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === '|') {
-      if (command[i + 1] === '|') {
-        flushSegment();
-        i += 2;
-        continue;
-      }
-      flushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === '>' || ch === '<') {
-      let fd: string | null = null;
-      if (word === '1' || word === '2') {
-        fd = word;
-        word = '';
-        hasWord = false;
-      }
-      if (fd === null && !hasWord) {
-        const last = tokens[tokens.length - 1];
-        if (last === '1' || last === '2') {
-          fd = last;
-          tokens.pop();
-        }
-      }
-      let op = ch;
-      i += 1;
-      if (ch === '>') {
-        if (command[i] === '>') {
-          op = '>>';
-          i += 1;
-        } else if (command[i] === '|') {
-          op = '>|';
-          i += 1;
-        }
-      } else if (command[i] === '<') {
-        op = '<<';
-        i += 1;
-        if (command[i] === '<') {
-          op = '<<<';
-          i += 1;
-        }
-      } else if (command[i] === '>') {
-        op = '<>';
-        i += 1;
-      }
-      while (command[i] === ' ' || command[i] === '\t') i += 1;
-      if (op === '>' && command[i] === '&') {
-        i += 1;
-        let digits = '';
-        while (i < command.length) {
-          const digit = command[i] as string;
-          if (digit < '0' || digit > '9') break;
-          digits += digit;
-          i += 1;
-        }
-        if (fd === '2' && digits === '1') continue;
-        return { failure: 'redirect' };
-      }
-      if (op !== '>') return { failure: 'redirect' };
-      const target = readRedirectTarget(command, i);
-      if (target === null) return { failure: 'redirect' };
-      const isNull =
-        target.target === '/dev/null' || target.target.toLowerCase() === 'nul';
-      const allowed = isNull && (fd === null || fd === '1' || fd === '2');
-      if (!allowed) return { failure: 'redirect' };
-      i = target.next;
-      continue;
-    }
-    word += ch;
-    hasWord = true;
-    i += 1;
-  }
-  if (single || double) return { failure: 'syntax' };
-  flushSegment();
-  return { segments };
-}
-
 const READ_ONLY_PROGRAM_LIST = Object.keys(READ_ONLY_PROGRAMS).join(', ');
 const READ_ONLY_POWERSHELL_LIST = Object.keys(READ_ONLY_POWERSHELL_PROGRAMS).join(', ');
 const READ_ONLY_GIT_LIST = `git ${Object.keys(GIT_READ_SUBCOMMANDS).join('/')}`;
 
 /**
+ * Whether a command only reads when `shell` runs it. The allowlist is shared across
+ * shells; the shell decides how the line splits into words and segments, and anything
+ * its grammar cannot resolve with certainty is refused.
+ */
+export function isReadOnlyCommandFor(
+  command: string,
+  shell: ShellFamily,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (typeof command !== 'string') return false;
+  const normalized = command.replace(/\r\n?/g, '\n').trim();
+  if (normalized.length === 0) return false;
+  if (GIT_GLOBAL_FLAGS.some((flag) => normalized.includes(flag))) return false;
+  const scan = scanShellCommand(normalized, shell, platform);
+  if ('failure' in scan) return false;
+  if (scan.segments.length === 0) return false;
+  return scan.segments.every((segment) => segment.length > 0 && isReadOnlySegment(segment));
+}
+
+/**
  * Why a read-only turn refused a command, or null when the command only reads. The
- * allowlist is the security boundary; the message names it and the one redirect shape
- * that is still allowed, so a child can correct its command instead of guessing.
+ * allowlist is the security boundary; the message names it, the null device for this
+ * platform, and the one merge that is still allowed, so a child can correct its command
+ * instead of guessing.
  */
 export function readOnlyCommandRefusal(command: string): string | null {
   const allowed =
     `bash only runs read-only commands for this agent. Allowed: ${READ_ONLY_PROGRAM_LIST}, ` +
     `${READ_ONLY_POWERSHELL_LIST}, ${READ_ONLY_GIT_LIST}, rg, find and grep. ` +
-    'Stderr may be discarded or merged (2>/dev/null, 2>&1, 2>NUL) and stdout may go to the null device; every other redirect is refused.';
-  if (typeof command !== 'string') return allowed;
-  const normalized = command.replace(/\r\n?/g, '\n').trim();
-  if (normalized.length === 0) return allowed;
-  if (GIT_GLOBAL_FLAGS.some((flag) => normalized.includes(flag))) return allowed;
-  const scan = scanShell(normalized);
-  if ('failure' in scan) return allowed;
-  if (scan.segments.length === 0) return allowed;
-  const readOnly = scan.segments.every(
-    (segment) => segment.length > 0 && isReadOnlySegment(segment),
-  );
-  return readOnly ? null : allowed;
+    `Stderr may be merged with 2>&1 or discarded with ${process.platform === 'win32' ? '2>NUL' : '2>/dev/null'}; ` +
+    'every other redirect is refused.';
+  if (!isReadOnlyCommand(command)) return allowed;
+  return null;
 }
 
-/** Whether a shell command only reads; see `readOnlyCommandRefusal` for the reason. */
+/**
+ * Whether a shell command only reads under every shell this platform can spawn. On
+ * Windows that is PowerShell and cmd, because the resolved shell depends on what is
+ * installed; elsewhere it is bash.
+ */
 export function isReadOnlyCommand(command: string): boolean {
-  return readOnlyCommandRefusal(command) === null;
+  return shellFamiliesFor(process.platform).every((shell) =>
+    isReadOnlyCommandFor(command, shell, process.platform),
+  );
 }
 
 export function classifyTool(

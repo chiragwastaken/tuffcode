@@ -11,9 +11,11 @@ import {
   createToolSessionState,
   executeTool,
   isReadOnlyCommand,
+  isReadOnlyCommandFor,
   readOnlyCommandRefusal,
   ripgrepArgs,
 } from './tools.js';
+import { shellFamiliesFor } from './readonly-shell.js';
 
 const LF = String.fromCharCode(10);
 const CRLF = String.fromCharCode(13) + LF;
@@ -745,18 +747,51 @@ describe('isReadOnlyCommand', () => {
       'ls | wc -l',
       'git log\ngit status',
       'git log\r\ngit status',
-      // An explorer suppresses stderr without wasting a turn on a refusal.
-      'rg needle 2>/dev/null',
       'git status 2>&1',
-      'git log --oneline -5 2>/dev/null',
-      'find . -name "*.ts" 2>/dev/null',
-      'grep -rn "needle" src 2>/dev/null',
-      'ls -la 2>NUL',
-      'git diff --stat 2> /dev/null',
-      'ls >/dev/null',
       'git log 2>&1 | head -n 5',
     ];
     for (const command of allowed) expect(isReadOnlyCommand(command), command).toBe(true);
+  });
+
+  it('allows only the null device the running shell understands', () => {
+    // The resolved shell is PowerShell or cmd on Windows and bash elsewhere, and the
+    // other platform's null device is a file write there.
+    const here =
+      process.platform === 'win32'
+        ? ['ls -la 2>NUL', 'ls >NUL', 'git log --oneline -5 2>NUL']
+        : [
+            'rg needle 2>/dev/null',
+            'git log --oneline -5 2>/dev/null',
+            'find . -name "*.ts" 2>/dev/null',
+            'grep -rn "needle" src 2>/dev/null',
+            'git diff --stat 2> /dev/null',
+            'ls >/dev/null',
+          ];
+    for (const command of here) expect(isReadOnlyCommand(command), command).toBe(true);
+    const there =
+      process.platform === 'win32'
+        ? ['rg needle 2>/dev/null', 'ls >/dev/null']
+        : ['ls -la 2>NUL', 'ls >NUL'];
+    for (const command of there) expect(isReadOnlyCommand(command), command).toBe(false);
+  });
+
+  it('refuses the backslash inputs that only bash reads as escapes', () => {
+    // `\` is an ordinary character under PowerShell and cmd, where these start a
+    // program. Checked per shell so the assertion runs on every platform: Windows
+    // refuses the line when any shell it can spawn refuses it.
+    const denied = [
+      'ls "\\"; node evil.js #"',
+      'ls \\; node evil.js',
+      'dir "\\" & node evil.js & rem "',
+      'ls \\| node --version',
+      'dir \\| node --version',
+    ];
+    for (const command of denied) {
+      const readOnly = shellFamiliesFor('win32').every((shell) =>
+        isReadOnlyCommandFor(command, shell, 'win32'),
+      );
+      expect(readOnly, command).toBe(false);
+    }
   });
 
   it('refuses writes, chains, redirects, substitutions and unknown programs', () => {
@@ -776,6 +811,7 @@ describe('isReadOnlyCommand', () => {
       'git branch --force x',
       'git branch --set-upstream-to=origin/main',
       'git log --output=x',
+      'git log -p --format=%s$IFS--output=file',
       'git log --output x',
       'git log --outp=x',
       'git log "--output=x"',
@@ -874,17 +910,17 @@ describe('isReadOnlyCommand', () => {
     for (const command of denied) expect(isReadOnlyCommand(command), command).toBe(false);
   });
 
-  it('names the allowlist and the one allowed redirect when it refuses', () => {
+  it('names the allowlist and the running platform null device when it refuses', () => {
     const refusal = readOnlyCommandRefusal('ls 2>out.txt');
     expect(refusal).toContain('bash only runs read-only commands for this agent');
     expect(refusal).toContain(
       'git status/log/show/diff/branch/rev-parse/ls-files/grep/blame/remote',
     );
-    expect(refusal).toContain('2>/dev/null');
     expect(refusal).toContain('2>&1');
-    expect(refusal).toContain('2>NUL');
+    // The other platform's null device is a file write here, so only one is named.
+    expect(refusal).toContain(process.platform === 'win32' ? '2>NUL' : '2>/dev/null');
+    expect(refusal).not.toContain(process.platform === 'win32' ? '2>/dev/null' : '2>NUL');
     expect(refusal).toContain('every other redirect is refused');
-    expect(readOnlyCommandRefusal('ls 2>/dev/null')).toBeNull();
     expect(readOnlyCommandRefusal('git status 2>&1')).toBeNull();
     expect(readOnlyCommandRefusal('ls 2>out.txt')).not.toBeNull();
   });

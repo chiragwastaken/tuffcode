@@ -122,8 +122,10 @@ describe('tool profile', () => {
     });
     expect(profileAllows('bash', { command: 'pnpm test' }, explorer, 'C:/wt').allowed).toBe(false);
     const refused = profileAllows('bash', { command: 'pnpm test' }, explorer, 'C:/wt');
-    expect(refused.allowed === false ? refused.reason : '').toContain('2>/dev/null');
-    expect(refused.allowed === false ? refused.reason : '').toContain('git status/log/show');
+    const reason = refused.allowed === false ? refused.reason : '';
+    expect(reason).toContain('git status/log/show');
+    // The hint names the null device of the shell this platform spawns, and only that one.
+    expect(reason).toContain(process.platform === 'win32' ? '2>NUL' : '2>/dev/null');
     expect(profileAllows('bash', { command: 'git status 2>&1' }, explorer, 'C:/wt')).toEqual({
       allowed: true,
     });
