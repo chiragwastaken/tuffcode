@@ -260,11 +260,21 @@ export function UserBubble({
 }
 
 /**
- * Assistant prose links leave the app: the desktop bridge validates the scheme
- * (http and https only) and opens the system browser.
+ * Assistant prose links leave the app. Only web links are handed over: the desktop
+ * bridge opens the system browser, and in the browser build (no bridge) the link opens
+ * a tab. Every other scheme, and every relative path, stays a dead click, which keeps
+ * `file:`, `javascript:` and custom handlers away from the OS.
  */
-function openExternalLink(href: string): void {
-  window.tuffcode?.openExternal?.(href);
+const EXTERNAL_LINK = /^https?:\/\//i;
+
+export function openExternalLink(href: string): void {
+  if (!EXTERNAL_LINK.test(href)) return;
+  const bridge = typeof window === 'undefined' ? undefined : window.tuffcode;
+  if (bridge !== undefined && typeof bridge.openExternal === 'function') {
+    bridge.openExternal(href);
+    return;
+  }
+  if (typeof window !== 'undefined') window.open(href, '_blank', 'noreferrer');
 }
 
 /** Context the model wrote before reaching for a tool: smaller and narrower. */

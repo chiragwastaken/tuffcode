@@ -61,4 +61,33 @@ describe('markdown link props', () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(onLinkClick).not.toHaveBeenCalled();
   });
+
+  it('sends a middle click to the hook instead of asking for a window', () => {
+    const onLinkClick = vi.fn();
+    const props = linkProps('https://example.com/docs', undefined, onLinkClick);
+    const preventDefault = vi.fn();
+    const middle = { button: 1, preventDefault } as unknown as MouseEvent<HTMLAnchorElement>;
+
+    props.onAuxClick?.(middle);
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(onLinkClick).toHaveBeenCalledWith('https://example.com/docs');
+  });
+
+  it('ignores a right click on a link', () => {
+    const onLinkClick = vi.fn();
+    const props = linkProps('https://example.com/docs', undefined, onLinkClick);
+    const preventDefault = vi.fn();
+    const right = { button: 2, preventDefault } as unknown as MouseEvent<HTMLAnchorElement>;
+
+    props.onAuxClick?.(right);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(onLinkClick).not.toHaveBeenCalled();
+  });
+
+  it('keeps the plain browser new-tab gesture when no hook is given', () => {
+    const props = linkProps('https://example.com/docs', undefined, undefined);
+    expect(props.onAuxClick).toBeUndefined();
+  });
 });

@@ -138,6 +138,13 @@ export function linkProps(
       event.preventDefault();
       if (href !== undefined) onLinkClick(href);
     },
+    // A middle click never fires `click`; without this it asks Electron for a window,
+    // which the shell denies, so the gesture would do nothing at all.
+    onAuxClick: (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      if (href !== undefined) onLinkClick(href);
+    },
   };
 }
 
