@@ -7,9 +7,10 @@ const revealOnHover = cn(
   'group-hover/project:pointer-events-auto group-hover/project:opacity-100',
   'focus-visible:pointer-events-auto focus-visible:opacity-100',
   '[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
+  'max-md:pointer-events-auto max-md:opacity-100',
 );
 
-const compactIcon = 'size-6 [&_svg]:size-3';
+const compactIcon = 'size-11 md:size-6 [&_svg]:size-4 md:[&_svg]:size-3';
 
 export interface ProjectGroupHeaderProps {
   project: Project;
@@ -32,7 +33,7 @@ export function ProjectGroupHeader({
   const FolderIcon = collapsed ? Folder : FolderOpen;
 
   return (
-    <div className="group/project flex h-8 items-center gap-0.5 border-t border-sidebar-border px-1">
+    <div className="group/project flex h-11 items-center gap-0.5 border-t border-sidebar-border px-1 md:h-8">
       <button
         type="button"
         data-testid="project-toggle"
@@ -40,7 +41,7 @@ export function ProjectGroupHeader({
         onClick={() => onToggle(project.id)}
         title={project.path}
         className={cn(
-          'flex h-[26px] min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 text-left',
+          'flex h-11 min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 text-left md:h-[26px]',
           'hover:bg-sidebar-row-hover',
           'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
         )}
