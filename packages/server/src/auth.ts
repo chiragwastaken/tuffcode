@@ -1,7 +1,13 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import {
+  PAIRING_CODE_ALPHABET,
+  PAIRING_CODE_LENGTH,
+  PAIRING_CODE_TTL_MS,
+} from '@tuffcode/contracts';
 import { tokenPath } from '@tuffcode/shared';
+import type { RemoteSessionRecord, RemoteSessionsRepo } from './db/repos/remote-sessions.js';
 
 /**
  * Reads the bearer token from `tokenPath()`, creating a 32 byte random token with
@@ -44,4 +50,126 @@ export function verifyToken(candidate: string | undefined | null): boolean {
   const stored = Buffer.from(expected, 'utf8');
   if (provided.length !== stored.length) return false;
   return timingSafeEqual(provided, stored);
+}
+
+/** SHA-256 hex of a secret. Sessions and pairing codes are stored only in this form. */
+export function hashSecret(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/** Fingerprint of the current bearer token, or undefined when the file is missing. */
+export function currentTokenFingerprint(): string | undefined {
+  try {
+    const token = readFileSync(tokenPath(), 'utf8').trim();
+    return token.length === 0 ? undefined : hashSecret(token);
+  } catch {
+    return undefined;
+  }
+}
+
+export interface IssuedPairingCode {
+  code: string;
+  expiresAt: string;
+}
+
+export interface PairingStore {
+  /** Issues one code and forgets it after `ttlMs`. Codes are held in memory only. */
+  issue(): IssuedPairingCode;
+  /**
+   * Consumes a code. A wrong, expired or already used code returns false; a match is
+   * deleted before returning true, so two claims can never share one code.
+   */
+  consume(code: string): boolean;
+  pending(): number;
+}
+
+export interface PairingStoreOptions {
+  ttlMs?: number;
+  now?: () => number;
+}
+
+/**
+ * One-time pairing codes. Only the hash is kept, so a heap dump or a log of this map
+ * does not hand out a live code. Nothing survives a restart, which is the point.
+ */
+export function createPairingStore(options: PairingStoreOptions = {}): PairingStore {
+  const ttlMs = options.ttlMs ?? PAIRING_CODE_TTL_MS;
+  const now = options.now ?? Date.now;
+  const codes = new Map<string, number>();
+
+  function prune(at: number): void {
+    for (const [hash, expiresAt] of codes) {
+      if (expiresAt <= at) codes.delete(hash);
+    }
+  }
+
+  function generate(): string {
+    const bytes = randomBytes(PAIRING_CODE_LENGTH);
+    let code = '';
+    for (const byte of bytes) {
+      code += PAIRING_CODE_ALPHABET.charAt(byte % PAIRING_CODE_ALPHABET.length);
+    }
+    return code;
+  }
+
+  return {
+    issue: () => {
+      const at = now();
+      prune(at);
+      let code = generate();
+      // A collision is vanishingly rare, but a duplicate would silently replace a code.
+      while (codes.has(hashSecret(code))) code = generate();
+      const expiresAt = at + ttlMs;
+      codes.set(hashSecret(code), expiresAt);
+      return { code, expiresAt: new Date(expiresAt).toISOString() };
+    },
+    consume: (code) => {
+      const at = now();
+      prune(at);
+      const hash = hashSecret(code.trim().toUpperCase());
+      const expiresAt = codes.get(hash);
+      if (expiresAt === undefined) return false;
+      codes.delete(hash);
+      return expiresAt > at;
+    },
+    pending: () => {
+      prune(now());
+      return codes.size;
+    },
+  };
+}
+
+export interface SessionAuth {
+  /**
+   * Resolves a cookie token to an active session. A rotated bearer token revokes every
+   * session before the lookup, so a paired device cannot outlive the token file.
+   */
+  verify(presented: string | undefined | null): RemoteSessionRecord | undefined;
+}
+
+export function createSessionAuth(sessions: RemoteSessionsRepo): SessionAuth {
+  return {
+    verify: (presented) => {
+      if (typeof presented !== 'string' || presented.length === 0) return undefined;
+      const fingerprint = currentTokenFingerprint();
+      if (fingerprint === undefined) return undefined;
+      const now = new Date().toISOString();
+      sessions.syncTokenFingerprint(fingerprint, now);
+      return sessions.touch(hashSecret(presented), now);
+    },
+  };
+}
+
+/**
+ * Reads one cookie from a `Cookie` header. Values are not decoded: session tokens are
+ * hex and pairing codes never travel as cookies.
+ */
+export function readCookie(header: string | undefined, name: string): string | undefined {
+  if (header === undefined) return undefined;
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+  }
+  return undefined;
 }

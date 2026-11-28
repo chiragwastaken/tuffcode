@@ -1,8 +1,9 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_REMOTE_SETTINGS, type RemoteSettings } from '@tuffcode/contracts';
 import {
   cacheRoot,
   createLogger,
@@ -18,7 +19,7 @@ import {
   type AdapterFactoryOverrides,
 } from './adapters/factory.js';
 import { createResolveCommand } from './adapters/resolveCommand.js';
-import { ensureToken, verifyToken } from './auth.js';
+import { createSessionAuth, createPairingStore, ensureToken, hashSecret, verifyToken } from './auth.js';
 import { searchMemory } from './brain/search.js';
 import { createBrainStore } from './brain/store.js';
 import { createCommandHandlers } from './commands/handlers.js';
@@ -69,10 +70,15 @@ export interface StartServerOptions {
   featureHandlers?: readonly RpcHandlers[];
   adapterOverrides?: AdapterFactoryOverrides;
   logger?: Logger;
+  /** Overrides for the persisted remote settings, used by tests and the packaged app. */
+  remoteOverrides?: Partial<RemoteSettings>;
+  /** Built renderer directory; defaults to `TUFFCODE_WEB_ROOT` or `apps/web/dist`. */
+  webRoot?: string;
 }
 
 export interface RunningServer {
   port: number;
+  host: string;
   token: string;
   dbPath: string;
   db: DatabaseSync;
@@ -84,17 +90,29 @@ export interface RunningServer {
   providers: ProvidersService;
   secrets: Secrets;
   mcp: McpService;
+  /** Effective remote access settings for this boot. */
+  remote: RemoteSettings;
+  webRoot: string | undefined;
   close(): Promise<void>;
 }
 
-function listen(server: Server, port: number): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
+function listen(server: Server, host: string, port: number): Promise<void> {
+  const { promise, resolve: resolveListen, reject } = Promise.withResolvers<void>();
   server.once('error', reject);
-  server.listen(port, '127.0.0.1', () => {
+  server.listen(port, host, () => {
     server.off('error', reject);
-    resolve();
+    resolveListen();
   });
   return promise;
+}
+
+/** Where the built renderer lives: explicit option, Electron's env var, then the workspace path. */
+function resolveWebRoot(explicit: string | undefined): string | undefined {
+  if (explicit !== undefined && explicit.length > 0) return resolve(explicit);
+  const fromEnv = process.env['TUFFCODE_WEB_ROOT'];
+  if (fromEnv !== undefined && fromEnv.length > 0) return resolve(fromEnv);
+  const candidate = resolve(process.cwd(), 'apps', 'web', 'dist');
+  return existsSync(candidate) ? candidate : undefined;
 }
 
 function closeHttp(server: Server): Promise<void> {
@@ -116,7 +134,7 @@ export function writeServerJson(info: ServerJson): void {
 /**
  * Boots the Node-side core: database plus migrations, token, HTTP surface, WS
  * transport, provider registry, secret bridge, thread runner, and the RPC registry.
- * Binds 127.0.0.1 on an OS-assigned port unless one is supplied.
+ * Binds 127.0.0.1 on an OS-assigned port unless remote access is enabled.
  */
 export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
   const version = options.version ?? process.env.TUFFCODE_APP_VERSION ?? '0.0.0';
@@ -130,6 +148,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const bus = createEventBus();
   const token = ensureToken();
   const startedAt = Date.now();
+  const storedRemote = repos.settings.get().remote ?? DEFAULT_REMOTE_SETTINGS;
+  const remote: RemoteSettings = { ...storedRemote, ...options.remoteOverrides };
+  const webRoot = resolveWebRoot(options.webRoot);
+  // The fingerprint of the file token decides whether paired devices survive a boot.
+  repos.remoteSessions.syncTokenFingerprint(hashSecret(token), new Date().toISOString());
+  const pairing = createPairingStore();
+  const sessions = createSessionAuth(repos.remoteSessions);
 
   const logger = options.logger ?? createLogger({ dir: logsDir(), channel: 'server' });
   const adapterLogger = createLogger({ dir: logsDir(), channel: 'adapter' });
@@ -267,7 +292,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     },
   });
 
-  const httpServer = createHttpSurface({ version, startedAt });
+  const httpServer = createHttpSurface({
+    version,
+    startedAt,
+    webRoot,
+    remote,
+    sessions: repos.remoteSessions,
+    pairing,
+    verifyToken,
+    verifySession: sessions.verify,
+  });
   const handlers = createRpcHandlers({
     repos,
     bus,
@@ -290,7 +324,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       ...(options.featureHandlers ?? []),
     ],
   });
-  const ws: AttachedWebSocket = attachWebSocket(httpServer, { handlers, bus, verifyToken });
+  const ws: AttachedWebSocket = attachWebSocket(httpServer, {
+    handlers,
+    bus,
+    verifyToken,
+    verifySession: sessions.verify,
+    remote,
+  });
 
   let closed = false;
   const close = async (): Promise<void> => {
@@ -311,8 +351,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (options.logger === undefined) await logger.close().catch(() => undefined);
   };
 
+  const host = remote.enabled ? remote.bindHost : '127.0.0.1';
   try {
-    await listen(httpServer, options.port ?? 0);
+    await listen(httpServer, host, remote.enabled ? remote.port : (options.port ?? 0));
   } catch (error) {
     await close();
     throw error;
@@ -335,6 +376,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
   return {
     port,
+    host,
     token,
     dbPath: file,
     db,
@@ -346,6 +388,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     providers,
     secrets,
     mcp,
+    remote,
+    webRoot,
     close,
   };
 }

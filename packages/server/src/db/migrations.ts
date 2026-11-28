@@ -463,6 +463,28 @@ const SUBAGENT_REWORK_SQL = `
 ALTER TABLE subagents ADD COLUMN rework_round INTEGER NOT NULL DEFAULT 0;
 `;
 
+/**
+ * Remote access: a paired device is one row keyed by the SHA-256 of its cookie token,
+ * never the token itself. `remote_state` keeps the fingerprint of the current
+ * `~/.tuffcode/token` value, so rewriting that file revokes every device.
+ */
+const REMOTE_ACCESS_SQL = `
+CREATE TABLE remote_sessions (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  device_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX idx_remote_sessions_expiry ON remote_sessions(expires_at);
+CREATE TABLE remote_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -543,5 +565,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 16,
     name: 'subagent-rework-round',
     sql: SUBAGENT_REWORK_SQL,
+  },
+  {
+    version: 17,
+    name: 'remote-access',
+    sql: REMOTE_ACCESS_SQL,
   },
 ];
