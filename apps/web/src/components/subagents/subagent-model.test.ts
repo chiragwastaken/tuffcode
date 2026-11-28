@@ -6,6 +6,7 @@ import {
   selectActiveSubagent,
   subagentElapsedMs,
   subagentFinishedLabel,
+  subagentPaneChildren,
   subagentStripChips,
   subagentsOfThread,
   type SubagentChip,
@@ -92,6 +93,25 @@ describe('childForThread', () => {
 
     expect(childForThread(registry, 'child-thread-2')?.childId).toBe('c2');
     expect(childForThread(registry, 'child-thread-3')).toBeUndefined();
+  });
+});
+
+describe('subagentPaneChildren', () => {
+  const running = child({ childId: 'r' });
+  const done = settled('d');
+  const failed = child({ childId: 'f', status: 'failed', finishedAt: T0 });
+  const cancelled = child({ childId: 'c', status: 'cancelled', finishedAt: T0 });
+
+  it('keeps running and failed children, and hides settled ones', () => {
+    expect(
+      subagentPaneChildren([running, done, failed, cancelled], null).map((item) => item.childId),
+    ).toEqual(['r', 'f']);
+  });
+
+  it('keeps the open settled child so its panel is reachable', () => {
+    expect(
+      subagentPaneChildren([running, done, failed, cancelled], 'd').map((item) => item.childId),
+    ).toEqual(['r', 'd', 'f']);
   });
 });
 

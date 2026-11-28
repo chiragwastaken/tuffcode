@@ -16,6 +16,7 @@ import {
   isRunningSubagent,
   selectActiveSubagent,
   subagentElapsedMs,
+  subagentPaneChildren,
   subagentsOfThread,
 } from './subagent-model';
 import { SubagentTimeline } from './SubagentTimeline';
@@ -48,6 +49,7 @@ export function SubagentPane({
   );
   const activeChildId = useAppStore((state) => state.subagentPane.activeChildId);
   const active = selectActiveSubagent(subagents, activeChildId);
+  const paneChildren = subagentPaneChildren(subagents, activeChildId);
   const now = useSubagentClock(subagents);
 
   const [cancelling, setCancelling] = useState(false);
@@ -162,13 +164,13 @@ export function SubagentPane({
           />
         </div>
 
-        {subagents.length > 1 ? (
+        {paneChildren.length > 1 ? (
           <div
             data-testid="subagent-tabs"
             className="shrink-0 overflow-x-auto border-b border-border px-2 py-1.5"
           >
             <TabsList aria-label="Subagent children" className="min-w-0">
-              {subagents.map((child) => {
+              {paneChildren.map((child) => {
                 const Icon = SUBAGENT_TYPE_ICON[child.type];
                 return (
                   <TabsTab

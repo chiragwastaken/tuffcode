@@ -134,6 +134,21 @@ export function subagentStripChips(children: readonly SubagentChild[]): Subagent
   return chips;
 }
 
+/**
+ * The pane's tabs: live work plus anything that needs attention. A settled child
+ * stays reachable only while it is the open tab, so the tab row does not fill with
+ * finished work.
+ */
+export function subagentPaneChildren(
+  children: readonly SubagentChild[],
+  activeChildId: string | null,
+): SubagentChild[] {
+  return children.filter(
+    (child) =>
+      isRunningSubagent(child) || child.status === 'failed' || child.childId === activeChildId,
+  );
+}
+
 /** Elapsed time from start to finish, or to `nowMs` while the child runs. */
 export function subagentElapsedMs(child: SubagentChild, nowMs: number): number | null {
   if (child.startedAt === null) return null;
