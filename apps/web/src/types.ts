@@ -5,7 +5,12 @@ export interface BootstrapInfo {
   token?: string;
   version: string;
   platform: string;
-  home: string;
+  /** Desktop home directory. The served bootstrap does not report it. */
+  home?: string;
+  /** True when a paired device opened this page, so desktop-only surfaces hide. */
+  remote?: boolean;
+  /** The name the paired device chose, shown in the desktop device list. */
+  deviceName?: string;
 }
 
 /** The `GET /bootstrap` payload a served origin returns to a browser. */
@@ -13,11 +18,14 @@ export interface BootstrapResponse {
   port: number;
   version: string;
   platform: string;
-  home: string;
+  /** Absent from the served payload on purpose: a phone has no use for it. */
+  home?: string;
   /** Socket path on the served origin, so a proxy can move it without a rebuild. */
   wsPath: string;
   /** Present only when the server hands the socket token to the page. */
   token?: string;
+  remote?: boolean;
+  deviceName?: string;
 }
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed' | 'protocol-error';

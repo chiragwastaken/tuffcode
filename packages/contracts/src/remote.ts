@@ -19,6 +19,12 @@ export const RemoteSettingsSchema = z.object({
    * `http://192.168.1.20:4310`. Same-origin and loopback origins are always allowed.
    */
   allowedOrigins: z.string().array(),
+  /**
+   * Off by default. A plain HTTP request to a network address is readable by anyone on
+   * that network, so the session cookie is only handed out there when the user has
+   * explicitly accepted that. The normal path is an HTTPS public URL.
+   */
+  allowInsecureLan: z.boolean().default(false),
 });
 export type RemoteSettings = z.infer<typeof RemoteSettingsSchema>;
 
@@ -28,6 +34,7 @@ export const DEFAULT_REMOTE_SETTINGS: RemoteSettings = {
   port: 4310,
   publicUrl: '',
   allowedOrigins: [],
+  allowInsecureLan: false,
 };
 
 /** Name of the cookie that carries a paired device session. */
@@ -77,6 +84,8 @@ export const RemoteSessionViewSchema = z.object({
   lastSeenAt: z.string(),
   expiresAt: z.string(),
   revokedAt: z.string().nullable(),
+  /** True while this device holds an open socket right now. */
+  connected: z.boolean(),
 });
 export type RemoteSessionView = z.infer<typeof RemoteSessionViewSchema>;
 

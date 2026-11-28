@@ -43,8 +43,14 @@ export interface PhoneDockMenuProps {
 export function PhoneDockMenu({ threadId, activeTab, openTabs, onToggle }: PhoneDockMenuProps) {
   const thread = useAppStore((state) => state.threads[threadId]);
   const browserEnabled = useAppStore((state) => state.settings?.capabilities.browser ?? true);
+  const remote = useAppStore((state) => state.bootstrap?.remote === true);
+  // A paired device has no shell and no arbitrary file reads, so the panels that need
+  // them are not offered rather than opened and denied.
   const tabs = INSPECTOR_TABS.filter(
-    (tab) => tabAllowed(tab, thread) && (tab !== 'browser' || browserEnabled),
+    (tab) =>
+      tabAllowed(tab, thread) &&
+      (tab !== 'browser' || browserEnabled) &&
+      (!remote || (tab !== 'terminal' && tab !== 'files' && tab !== 'brain')),
   );
 
   return (

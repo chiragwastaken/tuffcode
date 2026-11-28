@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
@@ -57,6 +57,15 @@ export function hashSecret(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+/**
+ * Stored form of a pairing code: an HMAC under the store secret, so the map never
+ * holds anything that can be reversed to a live code without the secret. Exported so
+ * the keying is testable without exposing the map.
+ */
+export function pairingCodeKey(code: string, secret: string): string {
+  return createHmac('sha256', secret).update(code.trim().toUpperCase(), 'utf8').digest('hex');
+}
+
 /** Fingerprint of the current bearer token, or undefined when the file is missing. */
 export function currentTokenFingerprint(): string | undefined {
   try {
@@ -86,15 +95,23 @@ export interface PairingStore {
 export interface PairingStoreOptions {
   ttlMs?: number;
   now?: () => number;
+  /**
+   * Key for the HMAC that protects stored pairing codes. Defaults to a fresh random
+   * secret per process, which is enough because codes never outlive the process.
+   */
+  secret?: string;
 }
 
 /**
- * One-time pairing codes. Only the hash is kept, so a heap dump or a log of this map
- * does not hand out a live code. Nothing survives a restart, which is the point.
+ * One-time pairing codes. The map holds an HMAC of each code under a per-process
+ * secret, so a heap dump or a debugger does not hand out a live code without also
+ * recovering the secret. Nothing survives a restart, which is the point.
  */
 export function createPairingStore(options: PairingStoreOptions = {}): PairingStore {
   const ttlMs = options.ttlMs ?? PAIRING_CODE_TTL_MS;
   const now = options.now ?? Date.now;
+  const secret = options.secret ?? randomBytes(32).toString('hex');
+  const keyOf = (code: string): string => pairingCodeKey(code, secret);
   const codes = new Map<string, number>();
 
   function prune(at: number): void {
@@ -118,15 +135,15 @@ export function createPairingStore(options: PairingStoreOptions = {}): PairingSt
       prune(at);
       let code = generate();
       // A collision is vanishingly rare, but a duplicate would silently replace a code.
-      while (codes.has(hashSecret(code))) code = generate();
+      while (codes.has(keyOf(code))) code = generate();
       const expiresAt = at + ttlMs;
-      codes.set(hashSecret(code), expiresAt);
+      codes.set(keyOf(code), expiresAt);
       return { code, expiresAt: new Date(expiresAt).toISOString() };
     },
     consume: (code) => {
       const at = now();
       prune(at);
-      const hash = hashSecret(code.trim().toUpperCase());
+      const hash = keyOf(code);
       const expiresAt = codes.get(hash);
       if (expiresAt === undefined) return false;
       codes.delete(hash);

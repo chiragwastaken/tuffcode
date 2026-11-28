@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { homedir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import {
   PairClaimRequestSchema,
@@ -21,6 +20,12 @@ import {
   type PairingStore,
   type SessionAuth,
 } from './auth.js';
+import {
+  remoteAddressKey,
+  remoteTransportAllowsCookie,
+  resolvePairingBase,
+} from './remote-policy.js';
+import type { RemoteSockets } from './remote-sockets.js';
 import type {
   RemoteSessionRecord,
   RemoteSessionsRepo,
@@ -38,11 +43,19 @@ export interface HttpServerOptions {
   startedAt: number;
   /** Built renderer directory. Absent means the static surface is not mounted. */
   webRoot?: string | undefined;
-  remote: RemoteSettings;
+  /** Read per request, so disabling remote access takes effect without a restart. */
+  getRemote: () => RemoteSettings;
   sessions: RemoteSessionsRepo;
   pairing: PairingStore;
   verifyToken: (candidate: string | undefined | null) => boolean;
   verifySession: SessionAuth['verify'];
+  /** Shared socket registry, so revoke and the device list see live connections. */
+  sockets: RemoteSockets;
+  /**
+   * True only on the listener remote access opened. A session cookie is refused on the
+   * desktop loopback listener, so switching the feature off closes that path entirely.
+   */
+  allowSessionAuth: boolean;
 }
 
 const IPV4_LOOPBACK = /^127\./;
@@ -199,10 +212,23 @@ export function buildContentSecurityPolicy(origin: string | undefined): string {
   ].join('; ');
 }
 
+/**
+ * Scheme and host of the request as the browser sees them. A reverse proxy in front of
+ * the loopback listener (Tailscale Serve) terminates TLS, so the forwarded scheme is
+ * honoured under the same rule as the cookie: only for a loopback peer and only when a
+ * public address is configured.
+ */
 function originOf(request: IncomingMessage): string | undefined {
   const host = request.headers.host;
   if (typeof host !== 'string' || host.length === 0) return undefined;
-  return `http://${host}`;
+  // Display only: this builds the CSP and a fallback pairing origin for the host the
+  // browser already used. It grants nothing, so the forwarded scheme is fine here; the
+  // cookie decision uses the strict isSecureRequest rule instead.
+  const forwarded = request.headers['x-forwarded-proto'];
+  const secure =
+    typeof forwarded === 'string' &&
+    forwarded.split(',')[0]?.trim().toLowerCase() === 'https';
+  return `${secure ? 'https' : 'http'}://${host}`;
 }
 
 function securityHeaders(csp: string): Record<string, string> {
@@ -269,6 +295,16 @@ function writeError(
   error: string,
 ): void {
   writeJson(request, response, status, { error });
+}
+
+function writeErrorDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  status: number,
+  code: string,
+  message: string,
+): void {
+  writeJson(request, response, status, { error: code, message });
 }
 
 function extractBearer(request: IncomingMessage): string | undefined {
@@ -343,7 +379,7 @@ function readJsonBody(request: IncomingMessage, limit: number): Promise<JsonRead
   return promise;
 }
 
-function toView(session: RemoteSessionRecord): RemoteSessionView {
+function toView(session: RemoteSessionRecord, connected: ReadonlySet<string>): RemoteSessionView {
   return {
     id: session.id,
     deviceName: session.deviceName,
@@ -351,6 +387,7 @@ function toView(session: RemoteSessionRecord): RemoteSessionView {
     lastSeenAt: session.lastSeenAt,
     expiresAt: session.expiresAt,
     revokedAt: session.revokedAt,
+    connected: connected.has(session.id),
   };
 }
 
@@ -444,13 +481,20 @@ function pairingUrl(origin: string, code: string): string {
   return `${origin}/pair?code=${encodeURIComponent(code)}`;
 }
 
-function isSecureRequest(request: IncomingMessage): boolean {
+/**
+ * True when the browser reached this server over TLS. The Node listener itself is plain
+ * HTTP, so TLS always comes from a proxy in front of it. `x-forwarded-proto` is
+ * client-controlled on a LAN, so it is only believed when a public address is
+ * configured and the request itself arrived over loopback.
+ */
+function isSecureRequest(request: IncomingMessage, remote: RemoteSettings): boolean {
+  if (remote.publicUrl.trim().length === 0) return false;
+  if (!isLoopbackAddress(request.socket.remoteAddress)) return false;
   const forwarded = request.headers['x-forwarded-proto'];
-  if (typeof forwarded === 'string' && forwarded.split(',')[0]?.trim().toLowerCase() === 'https') {
-    return true;
-  }
-  const origin = request.headers.origin;
-  return typeof origin === 'string' && origin.startsWith('https:');
+  return (
+    typeof forwarded === 'string' &&
+    forwarded.split(',')[0]?.trim().toLowerCase() === 'https'
+  );
 }
 
 function sessionCookie(token: string, secure: boolean): string {
@@ -465,11 +509,16 @@ function sessionCookie(token: string, secure: boolean): string {
  */
 export function createHttpServer(options: HttpServerOptions): Server {
   const pairing = options.pairing;
+  const getRemote = options.getRemote;
   const createLimiter = createRateLimiter(PAIRING_CREATE_LIMIT, RATE_WINDOW_MS);
   const claimLimiter = createRateLimiter(PAIRING_CLAIM_LIMIT, RATE_WINDOW_MS);
   const webRoot = options.webRoot === undefined ? undefined : resolve(options.webRoot);
 
   function handleBootstrap(request: IncomingMessage, response: ServerResponse): void {
+    if (!options.allowSessionAuth) {
+      writeError(request, response, 401, 'unauthorized');
+      return;
+    }
     const session = options.verifySession(
       readCookie(request.headers.cookie, REMOTE_SESSION_COOKIE),
     );
@@ -477,12 +526,15 @@ export function createHttpServer(options: HttpServerOptions): Server {
       writeError(request, response, 401, 'unauthorized');
       return;
     }
+    // The OS home path is not part of what a paired device needs, and it is the first
+    // fact a shell would use to find the token and the provider keys. It stays out.
     writeJson(request, response, 200, {
       port: request.socket.localPort ?? 0,
       version: options.version,
       platform: process.platform,
-      home: process.env.TUFFCODE_HOME ?? homedir(),
       wsPath: '/ws',
+      remote: true,
+      deviceName: session.deviceName,
     });
   }
 
@@ -498,21 +550,36 @@ export function createHttpServer(options: HttpServerOptions): Server {
       writeError(request, response, 401, 'unauthorized');
       return;
     }
-    const key = request.socket.remoteAddress ?? 'unknown';
-    if (!createLimiter.take(key)) {
+    const remote = getRemote();
+    if (!remote.enabled) {
+      writeErrorDetail(
+        request,
+        response,
+        400,
+        'remote-disabled',
+        'Turn on remote access before creating a pairing link',
+      );
+      return;
+    }
+    if (!createLimiter.take(remoteAddressKey(request.socket.remoteAddress))) {
       writeError(request, response, 429, 'rate-limited');
       return;
     }
-    const origin = originOf(request);
-    if (origin === undefined) {
-      writeError(request, response, 400, 'bad-request');
+    const base = resolvePairingBase(remote, originOf(request));
+    if (base.url === undefined) {
+      writeErrorDetail(
+        request,
+        response,
+        400,
+        base.error?.code ?? 'no-public-url',
+        base.error?.message ?? 'no address a phone can reach is configured',
+      );
       return;
     }
     const issued = pairing.issue();
-    const publicUrl = options.remote.publicUrl.trim();
     const result: PairCreateResult = {
       code: issued.code,
-      url: pairingUrl(publicUrl.length > 0 ? publicUrl : origin, issued.code),
+      url: pairingUrl(base.url, issued.code),
       expiresAt: issued.expiresAt,
     };
     writeJson(request, response, 201, result);
@@ -522,12 +589,24 @@ export function createHttpServer(options: HttpServerOptions): Server {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    if (!isAllowedOrigin(request.headers.origin, request.headers.host, options.remote)) {
+    const remote = getRemote();
+    if (!isAllowedOrigin(request.headers.origin, request.headers.host, remote)) {
       writeError(request, response, 403, 'forbidden');
       return;
     }
-    const key = request.socket.remoteAddress ?? 'unknown';
-    if (!claimLimiter.take(key)) {
+    const loopbackPeer = isLoopbackAddress(request.socket.remoteAddress);
+    const secure = isSecureRequest(request, remote);
+    if (!remoteTransportAllowsCookie(loopbackPeer, secure, remote)) {
+      writeErrorDetail(
+        request,
+        response,
+        400,
+        'insecure-transport',
+        'Pairing over plain HTTP on a network address would send the session cookie in the clear. Use an HTTPS address, or turn on the plain HTTP option in Settings > Remote access.',
+      );
+      return;
+    }
+    if (!claimLimiter.take(remoteAddressKey(request.socket.remoteAddress))) {
       writeError(request, response, 429, 'rate-limited');
       return;
     }
@@ -554,9 +633,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + REMOTE_SESSION_TTL_MS).toISOString(),
     });
-    const result: PairClaimResult = { session: toView(session) };
+    const result: PairClaimResult = { session: toView(session, options.sockets.connectedSessionIds()) };
     writeJson(request, response, 201, result, {
-      'set-cookie': sessionCookie(token, isSecureRequest(request)),
+      'set-cookie': sessionCookie(token, secure),
     });
   }
 
@@ -565,8 +644,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
       writeError(request, response, 401, 'unauthorized');
       return;
     }
+    const connected = options.sockets.connectedSessionIds();
     const result = RemoteSessionListSchema.parse({
-      sessions: options.sessions.list().map(toView),
+      sessions: options.sessions.list().map((session) => toView(session, connected)),
     });
     writeJson(request, response, 200, result);
   }
@@ -598,15 +678,20 @@ export function createHttpServer(options: HttpServerOptions): Server {
           : options.sessions.revoke(parsed.data.id, now)
             ? 1
             : 0;
+    // The row is the record; the socket is the access. Revoke is the only kill switch
+    // the user has, so it closes the connection in the same request.
+    if (parsed.data.all === true) options.sockets.disconnectAllRemote();
+    else if (parsed.data.id !== undefined) options.sockets.disconnectSession(parsed.data.id);
     writeJson(request, response, 200, { revoked });
   }
 
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (!options.remote.enabled && !isLoopbackAddress(request.socket.remoteAddress)) {
+    const remote = getRemote();
+    if (!remote.enabled && !isLoopbackAddress(request.socket.remoteAddress)) {
       writeError(request, response, 403, 'forbidden');
       return;
     }
-    if (!isAllowedHost(request.headers.host, options.remote)) {
+    if (!isAllowedHost(request.headers.host, remote)) {
       writeError(request, response, 403, 'forbidden');
       return;
     }

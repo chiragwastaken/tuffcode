@@ -37,7 +37,12 @@ export function RemoteSection() {
         ...init.headers,
       },
     });
-    if (!response.ok) throw new Error(`${path} answered HTTP ${response.status}`);
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => null)) as
+        | { error?: string; message?: string }
+        | null;
+      throw new Error(detail?.message ?? detail?.error ?? `${path} answered HTTP ${response.status}`);
+    }
     return (await response.json()) as T;
   }
 
@@ -54,6 +59,10 @@ export function RemoteSection() {
 
   useEffect(() => {
     void loadSessions();
+    // The device list carries a live `connected` flag, so it refreshes while the
+    // section is open instead of only when the user presses Refresh.
+    const timer = setInterval(() => void loadSessions(), 5_000);
+    return () => clearInterval(timer);
     // The token is stable for this window; reloading sessions on every render would loop.
   }, [token]); // oxlint-disable-line react-hooks/exhaustive-deps
 
@@ -100,7 +109,7 @@ export function RemoteSection() {
       <div className="divide-y divide-border rounded-lg border border-border">
         <SettingsRow
           label="Enable remote access"
-          description="Off keeps the server on loopback. Restart Tuffcode after changing this, the host or the port."
+          description="Off keeps the server on loopback and closes the remote listener at once. On opens the address below to paired devices."
         >
           <label className="flex items-center gap-2 text-sm text-foreground">
             <input
@@ -156,6 +165,23 @@ export function RemoteSection() {
             }
             placeholder="https://my-machine.tailnet.ts.net"
           />
+        </SettingsRow>
+        <SettingsRow
+          label="Allow plain HTTP on a network address"
+          description="Off by default. When on, the session cookie crosses the network unencrypted and anyone on that network can read the traffic, including shell output and prompts. Prefer an HTTPS address such as Tailscale Serve."
+        >
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={remote.allowInsecureLan}
+              onChange={(event) =>
+                controller.update({
+                  remote: { ...remote, allowInsecureLan: event.target.checked },
+                })
+              }
+            />
+            I accept that this traffic is readable on this network
+          </label>
         </SettingsRow>
         <SettingsRow
           label="Extra allowed origins"
@@ -250,7 +276,22 @@ export function RemoteSection() {
             {sessions.map((session) => (
               <li key={session.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
                 <span className="flex flex-col">
-                  <span className="font-medium text-foreground">{session.deviceName}</span>
+                  <span className="flex items-center gap-2 font-medium text-foreground">
+                    {session.deviceName}
+                    <span
+                      className={
+                        session.connected
+                          ? 'rounded-full bg-success/15 px-2 py-0.5 text-2xs text-success'
+                          : 'rounded-full bg-muted px-2 py-0.5 text-2xs text-muted-foreground'
+                      }
+                    >
+                      {session.revokedAt !== null
+                        ? 'Revoked'
+                        : session.connected
+                          ? 'Connected now'
+                          : 'Paired'}
+                    </span>
+                  </span>
                   <span className="text-muted-foreground">
                     Last seen {new Date(session.lastSeenAt).toLocaleString()}
                   </span>
@@ -271,8 +312,8 @@ export function RemoteSection() {
       </div>
 
       <p className="text-xs leading-5 text-muted-foreground">
-        On a LAN, HTTP traffic is not encrypted. Use Tailscale Serve for HTTPS, or keep remote access
-        to a trusted network.
+        Plain HTTP on a LAN is not encrypted. Use an HTTPS address such as Tailscale Serve, or turn on
+        the plain HTTP option above and accept that the traffic is readable on that network.
       </p>
 
       <SaveBar

@@ -7,6 +7,7 @@ import {
   createSessionAuth,
   ensureToken,
   hashSecret,
+  pairingCodeKey,
   readCookie,
   verifyToken,
 } from './auth.js';
@@ -96,6 +97,24 @@ describe('remote auth primitives', () => {
     now += PAIRING_CODE_TTL_MS + 1;
     expect(store.consume(expired.code)).toBe(false);
     expect(store.pending()).toBe(0);
+  });
+
+  it('keys stored pairing codes with the store secret', () => {
+    const code = 'ABCD2345';
+    const keyed = pairingCodeKey(code, 'server-secret');
+    expect(keyed).toMatch(/^[0-9a-f]{64}$/);
+    // A heap dump of the map cannot be turned back into a live code by hashing the
+    // 40 bit space, because the stored value is keyed and the bare hash is not it.
+    expect(keyed).not.toBe(hashSecret(code));
+    expect(keyed).not.toBe(hashSecret(code.toLowerCase()));
+    expect(pairingCodeKey(code, 'other-secret')).not.toBe(keyed);
+    expect(pairingCodeKey(' abcd2345 ', 'server-secret')).toBe(keyed);
+
+    // The store still round-trips its own codes and refuses everything else.
+    const store = createPairingStore({ secret: 'server-secret' });
+    const issued = store.issue();
+    expect(store.consume(issued.code)).toBe(true);
+    expect(store.consume(issued.code)).toBe(false);
   });
 
   it('verifies a session, touches it, and refuses expired or revoked rows', () => {

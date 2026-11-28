@@ -17,6 +17,7 @@ import { applyAppearance, applyTheme } from './components/settings/appearance';
 import { createRpcClient, type RpcClient } from './rpc/client';
 import { RpcProvider } from './rpc/rpc-context';
 import { claimPairing, pairingCodeFromLocation } from './pairing';
+import { registerPwa } from './pwa';
 import { router } from './router';
 import { useAppStore } from './store/app-store';
 
@@ -101,6 +102,10 @@ async function boot(): Promise<void> {
   }
 
   useAppStore.getState().setBootstrap(resolved.bootstrap);
+
+  // The phone shell registers its service worker itself. A browser that refuses (an
+  // insecure LAN address, for example) stays online only; the boot is never blocked.
+  await registerPwa();
 
   const client = createRpcClient({
     url: resolved.wsUrl,

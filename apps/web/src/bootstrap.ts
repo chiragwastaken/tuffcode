@@ -66,13 +66,18 @@ export function parseBootstrapResponse(raw: unknown): BootstrapResponse {
   if (token !== undefined && typeof token !== 'string') {
     throw new Error(`${BOOTSTRAP_PATH} reported a token that is not a string.`);
   }
+  const home = typeof source.home === 'string' ? source.home : undefined;
+  const remote = source.remote === true;
+  const deviceName = typeof source.deviceName === 'string' ? source.deviceName : undefined;
   return {
     port,
     version: readText(source, 'version'),
     platform: readText(source, 'platform'),
-    home: readText(source, 'home', true),
+    ...(home === undefined ? {} : { home }),
     wsPath: typeof source.wsPath === 'string' ? source.wsPath : WS_PATH,
     ...(typeof token === 'string' && token.length > 0 ? { token } : {}),
+    ...(remote ? { remote } : {}),
+    ...(deviceName === undefined ? {} : { deviceName }),
   };
 }
 
@@ -129,8 +134,10 @@ export async function resolveBootstrap(
     port: payload.port,
     version: payload.version,
     platform: payload.platform,
-    home: payload.home,
+    ...(payload.home === undefined ? {} : { home: payload.home }),
     ...(payload.token === undefined ? {} : { token: payload.token }),
+    ...(payload.remote === true ? { remote: true } : {}),
+    ...(payload.deviceName === undefined ? {} : { deviceName: payload.deviceName }),
   };
   return { bootstrap, wsUrl: browserWsUrl(location, payload.wsPath) };
 }

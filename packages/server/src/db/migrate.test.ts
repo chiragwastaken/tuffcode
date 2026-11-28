@@ -1,7 +1,8 @@
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTempEnv, type TempEnv } from '../test-support.js';
-import { migrate, openDb, transaction } from './index.js';
+import { createRepos } from './repos/index.js';
+import { MIGRATIONS, migrate, openDb, transaction } from './index.js';
 
 describe('db migrations', () => {
   let env: TempEnv | undefined;
@@ -70,6 +71,56 @@ describe('db migrations', () => {
       ]) {
         expect(modelColumns).toContain(column);
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('adds the remote session tables to a database that already holds data', () => {
+    env = createTempEnv();
+    const db = openDb(join(env.root, 'upgrade.db'));
+    try {
+      const now = new Date().toISOString();
+      // Build the previous schema, then write the rows an installed app already has.
+      for (const migration of MIGRATIONS.filter((entry) => entry.version <= 16)) {
+        db.exec(migration.sql);
+        db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(
+          migration.version,
+          now,
+        );
+      }
+      db.prepare(
+        'INSERT INTO projects (id, name, path, default_branch, created_at) VALUES (?, ?, ?, ?, ?)',
+      ).run('prj_keep', 'Keep me', 'C:/work/keep', 'main', now);
+      db.prepare(
+        `INSERT INTO threads (id, project_id, title, provider_id, model_id, execution_mode, permission_mode, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('thr_keep', 'prj_keep', 'Existing chat', 'prv_keep', 'model', 'work', 'ask', 'idle', now, now);
+      db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+        'theme',
+        JSON.stringify('light'),
+        now,
+      );
+
+      expect(migrate(db)).toEqual([17]);
+
+      expect(db.prepare('SELECT name FROM projects WHERE id = ?').get('prj_keep')?.['name']).toBe(
+        'Keep me',
+      );
+      expect(db.prepare('SELECT title FROM threads WHERE id = ?').get('thr_keep')?.['title']).toBe(
+        'Existing chat',
+      );
+      expect(
+        JSON.parse(
+          String(db.prepare('SELECT value FROM settings WHERE key = ?').get('theme')?.['value']),
+        ),
+      ).toBe('light');
+      expect(db.prepare('SELECT COUNT(*) AS n FROM remote_sessions').get()?.['n']).toBe(0);
+
+      // The repository reads the new table and the token fingerprint row.
+      const repos = createRepos(db);
+      expect(repos.remoteSessions.list()).toEqual([]);
+      expect(repos.remoteSessions.tokenFingerprint()).toBeUndefined();
     } finally {
       db.close();
     }

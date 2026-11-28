@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { DEFAULT_REMOTE_SETTINGS, type RemoteSettings } from '@tuffcode/contracts';
+import { DEFAULT_REMOTE_SETTINGS, type RemoteSettings, type Settings } from '@tuffcode/contracts';
 import {
   cacheRoot,
   createLogger,
@@ -50,6 +50,7 @@ import { createTodoService } from './todos/service.js';
 import { createWebFetch } from './tools/web-fetch.js';
 import type { Subagents } from './subagents/types.js';
 import { createExtraTools } from './tools/extra.js';
+import { createRemoteSockets } from './remote-sockets.js';
 import { attachWebSocket, type AttachedWebSocket } from './ws.js';
 
 export interface ServerJson {
@@ -90,8 +91,10 @@ export interface RunningServer {
   providers: ProvidersService;
   secrets: Secrets;
   mcp: McpService;
-  /** Effective remote access settings for this boot. */
-  remote: RemoteSettings;
+  /** Effective remote access settings right now; replaced when the user saves. */
+  readonly remote: RemoteSettings;
+  /** The remote listener's port while remote access is on, otherwise undefined. */
+  readonly remotePort: number | undefined;
   webRoot: string | undefined;
   close(): Promise<void>;
 }
@@ -149,7 +152,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const token = ensureToken();
   const startedAt = Date.now();
   const storedRemote = repos.settings.get().remote ?? DEFAULT_REMOTE_SETTINGS;
-  const remote: RemoteSettings = { ...storedRemote, ...options.remoteOverrides };
+  // Overrides are a test and packaged-app seam for the boot value. A settings save
+  // replaces them, which is what lets a test disable remote access at runtime.
+  let remote: RemoteSettings = { ...storedRemote, ...options.remoteOverrides };
+  const getRemote = (): RemoteSettings => remote;
+  const getSettings = (): Settings => repos.settings.get();
   const webRoot = resolveWebRoot(options.webRoot);
   // The fingerprint of the file token decides whether paired devices survive a boot.
   repos.remoteSessions.syncTokenFingerprint(hashSecret(token), new Date().toISOString());
@@ -292,15 +299,18 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     },
   });
 
+  const sockets = createRemoteSockets();
   const httpServer = createHttpSurface({
     version,
     startedAt,
     webRoot,
-    remote,
+    getRemote,
     sessions: repos.remoteSessions,
     pairing,
     verifyToken,
     verifySession: sessions.verify,
+    sockets,
+    allowSessionAuth: false,
   });
   const handlers = createRpcHandlers({
     repos,
@@ -329,7 +339,106 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     bus,
     verifyToken,
     verifySession: sessions.verify,
-    remote,
+    getRemote,
+    getSettings,
+    sockets,
+    allowSessionAuth: false,
+  });
+
+  // The desktop listener stays on loopback at a stable OS assigned port. Remote access
+  // is a second listener, so switching it off closes that socket instead of leaving the
+  // LAN reachable until the app restarts.
+  let remoteServer: Server | undefined;
+  let remoteWs: AttachedWebSocket | undefined;
+  let remotePort: number | undefined;
+
+  const openRemoteListener = async (): Promise<void> => {
+    if (!remote.enabled || remoteServer !== undefined) return;
+    const server = createHttpSurface({
+      version,
+      startedAt,
+      webRoot,
+      getRemote,
+      sessions: repos.remoteSessions,
+      pairing,
+      verifyToken,
+      verifySession: sessions.verify,
+      sockets,
+      allowSessionAuth: true,
+    });
+    const attached = attachWebSocket(server, {
+      handlers,
+      bus,
+      verifyToken,
+      verifySession: sessions.verify,
+      getRemote,
+      getSettings,
+      sockets,
+      allowSessionAuth: true,
+    });
+    try {
+      await listen(server, remote.bindHost, remote.port);
+    } catch (error) {
+      await attached.close();
+      server.closeAllConnections();
+      const reason = error instanceof Error ? error.message : String(error);
+      bus.emit({
+        kind: 'event',
+        type: 'server.warning',
+        payload: {
+          message: `Remote access could not listen on ${remote.bindHost}:${remote.port} (${reason}). The desktop stays on loopback.`,
+          code: 'remote-bind-failed',
+        },
+      });
+      return;
+    }
+    const address = server.address();
+    remoteServer = server;
+    remoteWs = attached;
+    remotePort = address !== null && typeof address !== 'string' ? address.port : undefined;
+  };
+
+  const closeRemoteListener = async (): Promise<void> => {
+    const server = remoteServer;
+    const attached = remoteWs;
+    remoteServer = undefined;
+    remoteWs = undefined;
+    remotePort = undefined;
+    sockets.disconnectAllRemote();
+    if (attached !== undefined) await attached.close();
+    if (server !== undefined) {
+      server.closeIdleConnections();
+      server.closeAllConnections();
+      await closeHttp(server);
+    }
+  };
+
+  const reconfigureRemote = async (next: RemoteSettings): Promise<void> => {
+    const previous = remote;
+    remote = next;
+    const listenerChanged =
+      previous.enabled !== next.enabled ||
+      previous.bindHost !== next.bindHost ||
+      previous.port !== next.port;
+    if (!listenerChanged) return;
+    await closeRemoteListener();
+    await openRemoteListener();
+  };
+
+  bus.subscribe((event) => {
+    if (event.type !== 'settings.updated') return;
+    const next = event.payload.remote;
+    if (JSON.stringify(next) === JSON.stringify(remote)) return;
+    void reconfigureRemote(next).catch((error: unknown) => {
+      bus.emit({
+        kind: 'event',
+        type: 'server.warning',
+        payload: {
+          message: `Remote access could not be reconfigured: ${error instanceof Error ? error.message : String(error)}`,
+          code: 'remote-reconfigure-failed',
+        },
+      });
+    });
   });
 
   let closed = false;
@@ -342,6 +451,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     mcp.dispose();
     secrets.dispose();
     await terminals.disposeAll();
+    await closeRemoteListener();
     await ws.close();
     httpServer.closeIdleConnections();
     httpServer.closeAllConnections();
@@ -351,9 +461,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (options.logger === undefined) await logger.close().catch(() => undefined);
   };
 
-  const host = remote.enabled ? remote.bindHost : '127.0.0.1';
+  const host = '127.0.0.1';
   try {
-    await listen(httpServer, host, remote.enabled ? remote.port : (options.port ?? 0));
+    await listen(httpServer, host, options.port ?? 0);
   } catch (error) {
     await close();
     throw error;
@@ -364,6 +474,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     throw new Error('server did not bind a TCP port');
   }
   const port = (address as AddressInfo).port;
+  await openRemoteListener();
 
   if (options.writeServerJson !== false) {
     try {
@@ -388,7 +499,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     providers,
     secrets,
     mcp,
-    remote,
+    get remote() {
+      return remote;
+    },
+    get remotePort() {
+      return remotePort;
+    },
     webRoot,
     close,
   };
