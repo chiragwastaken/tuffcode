@@ -332,7 +332,8 @@ export const methods = {
     result: CheckpointSchema.array(),
   },
   'checkpoints.revert': {
-    params: z.object({ threadId: IdSchema, checkpointId: IdSchema }),
+    // The revert discards working-tree changes, so the caller must say so explicitly.
+    params: z.object({ threadId: IdSchema, checkpointId: IdSchema, confirm: z.literal(true) }),
     result: EmptyObjectSchema,
   },
   'diff.get': {
