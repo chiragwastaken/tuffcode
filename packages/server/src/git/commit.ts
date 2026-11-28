@@ -31,6 +31,18 @@ export async function commitThread(
   return { sha };
 }
 
+/** The line git prints for the failure itself; the last lines are hints. */
+export function diagnosticLine(stderr: string): string | undefined {
+  const lines = stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return (
+    lines.find((line) => /^(fatal|error):/.test(line) || line.startsWith('! [rejected]')) ??
+    lines[0]
+  );
+}
+
 /** Pushes the thread branch to `origin` and sets its upstream. */
 export async function pushThread(
   repos: Repos,
@@ -43,12 +55,8 @@ export async function pushThread(
     await runGit(['push', '-u', 'origin', branch], worktreePath);
   } catch (error) {
     if (error instanceof GitError) {
-      const detail = error.stderr
-        .trim()
-        .split('\n')
-        .filter((line) => line.length > 0)
-        .pop();
-      throw new RpcError('bad-request', detail === undefined ? 'git push failed' : `git push failed: ${detail}`);
+      const detail = diagnosticLine(error.stderr) ?? 'git push failed';
+      throw badRequest(`git push failed: ${detail}`);
     }
     throw error;
   }

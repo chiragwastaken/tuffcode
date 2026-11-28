@@ -1,6 +1,6 @@
 import type { Repos } from '../db/repos/index.js';
 import { badRequest, conflict, RpcError } from '../errors.js';
-import { commitThread, pushThread } from './commit.js';
+import { commitThread, diagnosticLine, pushThread } from './commit.js';
 import { requireWorktree } from './context.js';
 import { runExecutable, GitError } from './runGit.js';
 import { currentBranch } from './worktree.js';
@@ -14,6 +14,24 @@ export interface PullRequestInput {
 export interface PullRequestResult {
   url: string;
   number: number;
+}
+
+/**
+ * Checks `gh` before anything leaves the machine. Without this a missing or signed-out
+ * CLI would only surface after the branch had already been committed and pushed.
+ */
+export async function assertGitHubCli(repos: Repos, threadId: string): Promise<void> {
+  const { worktreePath } = requireWorktree(repos, threadId);
+  try {
+    await runExecutable('gh', ['auth', 'status'], worktreePath);
+  } catch (error) {
+    if (!(error instanceof GitError)) throw error;
+    if (error.spawnCode === 'ENOENT') {
+      throw new RpcError('provider-unavailable', 'GitHub CLI (gh) not found');
+    }
+    const detail = diagnosticLine(error.stderr) ?? 'not signed in';
+    throw badRequest(`GitHub CLI (gh) is not ready: ${detail}`);
+  }
 }
 
 /**
@@ -31,7 +49,11 @@ export async function preparePullRequest(
   try {
     await commitThread(repos, threadId, `Changes from ${title}`);
   } catch (error) {
-    if (!(error instanceof RpcError) || error.code !== 'conflict') throw error;
+    const nothingToCommit =
+      error instanceof RpcError &&
+      error.code === 'conflict' &&
+      error.message.includes('nothing to commit');
+    if (!nothingToCommit) throw error;
   }
   await pushThread(repos, threadId);
 }
@@ -90,14 +112,8 @@ export async function openPullRequest(
       if (error.spawnCode === 'ENOENT') {
         throw new RpcError('provider-unavailable', 'GitHub CLI (gh) not found');
       }
-      const detail = error.stderr
-        .trim()
-        .split('\n')
-        .filter((line) => line.length > 0)
-        .pop();
-      throw badRequest(
-        detail === undefined ? 'gh pr create failed' : `gh pr create failed: ${detail}`,
-      );
+      const detail = diagnosticLine(error.stderr) ?? 'gh pr create failed';
+      throw badRequest(`gh pr create failed: ${detail}`);
     }
     throw error;
   }

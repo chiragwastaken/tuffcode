@@ -3,6 +3,7 @@ import { Button } from '@tuffcode/ui';
 import { FileDiff, GitCommit, GitPullRequest } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { RpcRequestError } from '../../rpc/client';
 import { useRpc } from '../../rpc/rpc-context';
 import { requestInspectorTab } from '../inspector/panel-requests';
 
@@ -30,7 +31,7 @@ export function diffTotals(files: readonly DiffFile[]): DiffTotals {
  */
 export function TurnSummary({ thread }: { thread: Thread }) {
   const rpc = useRpc();
-  const [totals, setTotals] = useState<DiffTotals | null>(null);
+  const [summary, setSummary] = useState<{ totals: DiffTotals; paths: string[] } | null>(null);
   const [creating, setCreating] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [prError, setPrError] = useState<string | null>(null);
@@ -41,7 +42,9 @@ export function TurnSummary({ thread }: { thread: Thread }) {
     let cancelled = false;
     void rpc.request('diff.get', { threadId: thread.id }).then(
       (result) => {
-        if (!cancelled) setTotals(diffTotals(result.files));
+        if (!cancelled) {
+          setSummary({ totals: diffTotals(result.files), paths: result.files.map((file) => file.path) });
+        }
       },
       () => undefined,
     );
@@ -50,7 +53,8 @@ export function TurnSummary({ thread }: { thread: Thread }) {
     };
   }, [rpc, settled, thread.id, thread.lastSeq, thread.worktreePath]);
 
-  if (!settled || totals === null || totals.files === 0) return null;
+  if (!settled || summary === null || summary.totals.files === 0) return null;
+  const totals = summary.totals;
 
   async function createPr(): Promise<void> {
     setCreating(true);
@@ -75,6 +79,7 @@ export function TurnSummary({ thread }: { thread: Thread }) {
     setPushing(true);
     setPrError(null);
     try {
+      let committed = true;
       try {
         await rpc.request('git.commit', {
           threadId: thread.id,
@@ -82,10 +87,15 @@ export function TurnSummary({ thread }: { thread: Thread }) {
         });
       } catch (error) {
         // The agent may have committed already; pushing is still useful.
-        if (!(error instanceof Error) || !error.message.includes('nothing to commit')) throw error;
+        const nothingToCommit =
+          error instanceof RpcRequestError &&
+          error.code === 'conflict' &&
+          error.message.includes('nothing to commit');
+        if (!nothingToCommit) throw error;
+        committed = false;
       }
       await rpc.request('git.push', { threadId: thread.id });
-      toast.success('Committed and pushed.');
+      toast.success(committed ? 'Committed and pushed.' : 'Pushed.');
     } catch (error) {
       setPrError(error instanceof Error ? error.message : 'Could not commit and push.');
     } finally {
@@ -114,6 +124,9 @@ export function TurnSummary({ thread }: { thread: Thread }) {
             variant="ghost"
             disabled={pushing || creating}
             onClick={() => void commitAndPush()}
+            title={`Stages and pushes all ${totals.files} changed ${
+              totals.files === 1 ? 'file' : 'files'
+            }, untracked ones included:\n${summary.paths.join('\n')}`}
             data-testid="turn-summary-commit-push"
           >
             <GitCommit className="size-3.5" strokeWidth={1.75} />

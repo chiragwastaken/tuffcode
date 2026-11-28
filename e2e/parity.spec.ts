@@ -353,8 +353,9 @@ test('Turn Summary shows the diff totals, opens the diff and reports PR errors i
   await expect(page.getByTestId('inspector-tab-diff')).toHaveAttribute('aria-selected', 'true');
   await closeDock(page);
 
-  // Create PR reaches the server's git.pr handler. This temp repo has no GitHub
-  // remote, so the handler fails and the card must show that error inline.
+  // Create PR reaches the server's git.pr handler. The workspace origin is a local
+  // bare repository, not GitHub, so the handler commits and pushes the branch and then
+  // gh fails; the card must show that error inline.
   const threadId = await page.getByTestId('thread-row').first().getAttribute('data-thread-id');
   expect(threadId).not.toBeNull();
   await page.getByTestId('turn-summary-pr').click();
