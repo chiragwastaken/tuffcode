@@ -189,7 +189,7 @@ function DiffPanelBody({ threadId, onOpenInTerminal }: DiffPanelProps) {
     setSavingCheckpoint(true);
     setCheckpointError(null);
     try {
-      const label = `Checkpoint ${checkpoints.length + 1} · ${new Date().toLocaleString()}`;
+      const label = `Checkpoint · ${new Date().toLocaleString()}`;
       await rpc.request('checkpoints.create', { threadId, label });
       toast.success('Checkpoint saved.');
       reload();
