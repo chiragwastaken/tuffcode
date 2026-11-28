@@ -60,6 +60,31 @@ export function councilSummary(status: RpcResult<'council.status'>): CouncilSumm
 }
 
 /**
+ * Whether Stop must stay disabled: a cancel has been requested and the goal is not
+ * terminal yet. The server can take seconds to tear a goal down, so clearing the lock
+ * as soon as `council.cancel` resolves lets the button re-enable and send a second
+ * cancel. A permanent poll failure releases the lock so the control is not left dead.
+ */
+export function isCancelPending(
+  requested: boolean,
+  state: GoalState | undefined,
+  pollingStopped: boolean,
+): boolean {
+  if (!requested || pollingStopped) return false;
+  return state === undefined || !isGoalTerminal(state);
+}
+
+/**
+ * A late status load may only write the composer's status while the goal it was
+ * started for is still the goal the composer follows. The user can start a second
+ * goal while a cancel is settling, and the response for the first must not overwrite
+ * the second one's status.
+ */
+export function stillTracksGoal(trackedGoalId: string | null, target: string): boolean {
+  return trackedGoalId === target;
+}
+
+/**
  * Autonomy for a goal started from the composer. Settings carry no council field,
  * so the permission default is the user's stated trust level: full auto means the
  * council may merge without a captain, anything stricter leaves the decision to
