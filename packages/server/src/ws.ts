@@ -156,7 +156,13 @@ export function attachWebSocket(server: Server, deps: WebSocketDeps): AttachedWe
     // WebSocket hijacking when the session cookie is attached automatically. The
     // desktop renderer is a file:// origin and authenticates with the file token,
     // which a foreign page cannot read, so the token itself is the boundary there.
-    if (!fileToken && !isAllowedOrigin(request.headers.origin, request.headers.host, deps.remote)) {
+    const origin = request.headers.origin;
+    const desktopOrigin =
+      origin === undefined || origin === 'null' || origin.startsWith('file://');
+    if (
+      !(fileToken && desktopOrigin) &&
+      !isAllowedOrigin(origin, request.headers.host, deps.remote)
+    ) {
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }

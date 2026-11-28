@@ -236,6 +236,17 @@ describe('websocket transport', () => {
     expect(status).toBe(403);
   });
 
+  it('accepts the desktop file origin with the file token', async () => {
+    const server = await boot();
+    const socket = await openSocketWithHeaders(`ws://127.0.0.1:${server.port}/ws`, {
+      origin: 'null',
+      authorization: `Bearer ${server.token}`,
+    });
+    sockets.push(socket);
+    const response = await rpc(socket, 'req-file-origin', 'app.health', {});
+    expect(response.ok).toBe(true);
+  });
+
   it('rejects a foreign Origin for a cookie session when remote access is on', async () => {
     const server = await boot(true);
     const token = await pairDevice(server);
