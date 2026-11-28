@@ -1,4 +1,28 @@
-import { createServer, type Server, type ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
+import { createReadStream, readFileSync, statSync } from 'node:fs';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { extname, resolve, sep } from 'node:path';
+import {
+  PairClaimRequestSchema,
+  REMOTE_SESSION_COOKIE,
+  REMOTE_SESSION_TTL_MS,
+  RemoteSessionListSchema,
+  RevokeSessionsRequestSchema,
+  type PairClaimResult,
+  type PairCreateResult,
+  type RemoteSessionView,
+  type RemoteSettings,
+} from '@tuffcode/contracts';
+import { newId } from '@tuffcode/shared';
+import {
+  hashSecret,
+  type PairingStore,
+  type SessionAuth,
+} from './auth.js';
+import type {
+  RemoteSessionRecord,
+  RemoteSessionsRepo,
+} from './db/repos/remote-sessions.js';
 
 export interface HealthBody {
   ok: true;
@@ -10,10 +34,48 @@ export interface HealthBody {
 export interface HttpServerOptions {
   version: string;
   startedAt: number;
+  /** Built renderer directory. Absent means the static surface is not mounted. */
+  webRoot?: string | undefined;
+  remote: RemoteSettings;
+  sessions: RemoteSessionsRepo;
+  pairing: PairingStore;
+  verifyToken: (candidate: string | undefined | null) => boolean;
+  verifySession: SessionAuth['verify'];
 }
 
 const IPV4_LOOPBACK = /^127\./;
 const IPV6_MAPPED_LOOPBACK = /^::ffff:127\./i;
+const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+const PAIRING_BODY_LIMIT = 4096;
+const PAIRING_CREATE_LIMIT = 5;
+const PAIRING_CLAIM_LIMIT = 10;
+const RATE_WINDOW_MS = 60_000;
+const INDEX_FILE = 'index.html';
+const META_CSP = /<meta\b[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i;
+
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
+};
 
 export function isLoopbackAddress(address: string | undefined): boolean {
   if (address === undefined) return false;
@@ -44,42 +106,513 @@ export function isLoopbackHost(host: string | undefined): boolean {
   return hostname === 'localhost' || isLoopbackAddress(hostname);
 }
 
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
+function isIpLiteral(hostname: string): boolean {
+  return IPV4_LITERAL.test(hostname) || hostname.includes(':');
+}
+
+function isWildcardBind(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '[::]';
+}
+
+function normalizeOrigin(origin: string): string {
+  return origin.trim().replace(/\/+$/, '').toLowerCase();
+}
+
+/** Origin header value as a URL, or undefined when it is missing, `null` or malformed. */
+function parseOrigin(origin: string | undefined): URL | undefined {
+  if (origin === undefined || origin.length === 0 || origin === 'null') return undefined;
+  try {
+    return new URL(origin);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Host header policy. Loopback is always accepted. When remote access is on, the
+ * configured bind host and the allowed origins are accepted, and a wildcard bind also
+ * accepts IP literals so DNS rebinding names are still refused.
+ */
+export function isAllowedHost(
+  host: string | undefined,
+  remote: RemoteSettings,
+): boolean {
+  if (isLoopbackHost(host)) return true;
+  if (!remote.enabled) return false;
+  if (host === undefined || host.length === 0) return false;
+  const hostname = hostnameOf(host).toLowerCase();
+  if (hostname === remote.bindHost.toLowerCase()) return true;
+  if (isWildcardBind(remote.bindHost) && isIpLiteral(hostname)) return true;
+  const origin = `http://${host.toLowerCase()}`;
+  return remote.allowedOrigins.some((allowed) => normalizeOrigin(allowed) === origin);
+}
+
+/**
+ * WebSocket and state changing HTTP requests carry an Origin header from a browser.
+ * Loopback origins are always trusted. Otherwise the request must be same-origin or
+ * listed in `remote.allowedOrigins`; a missing Origin (non-browser client) passes,
+ * because the bearer token or session cookie still has to be valid.
+ */
+export function isAllowedOrigin(
+  origin: string | undefined,
+  host: string | undefined,
+  remote: RemoteSettings,
+): boolean {
+  if (origin === undefined || origin.length === 0) return true;
+  if (origin === 'null') return false;
+  const parsed = parseOrigin(origin);
+  if (parsed === undefined) return false;
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (hostname === 'localhost' || isLoopbackAddress(hostname)) return true;
+  if (!remote.enabled) return false;
+  if (host !== undefined && host.length > 0) {
+    const sameOrigin = `http://${host.toLowerCase()}`;
+    if (normalizeOrigin(origin) === sameOrigin) return true;
+  }
+  const requested = normalizeOrigin(origin);
+  return remote.allowedOrigins.some((allowed) => normalizeOrigin(allowed) === requested);
+}
+
+/**
+ * CSP for the page served from this origin. `connect-src 'self'` does not match
+ * WebSocket schemes in every browser, so the ws origin is listed explicitly.
+ */
+export function buildContentSecurityPolicy(origin: string | undefined): string {
+  const connect = ["'self'"];
+  if (origin !== undefined && origin.length > 0) {
+    connect.push(origin.replace(/^http/, 'ws'));
+    connect.push(origin);
+  }
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src ${connect.join(' ')}`,
+    'frame-src http: https:',
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ');
+}
+
+function originOf(request: IncomingMessage): string | undefined {
+  const host = request.headers.host;
+  if (typeof host !== 'string' || host.length === 0) return undefined;
+  return `http://${host}`;
+}
+
+function securityHeaders(csp: string): Record<string, string> {
+  return {
+    'content-security-policy': csp,
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'x-frame-options': 'DENY',
+    'cross-origin-opener-policy': 'same-origin',
+  };
+}
+
+function writeJson(
+  request: IncomingMessage,
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  extra: Record<string, string> = {},
+): void {
   const payload = JSON.stringify(body);
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'cache-control': 'no-store',
+    ...securityHeaders(buildContentSecurityPolicy(originOf(request))),
+    ...extra,
   });
-  response.end(payload);
+  if (request.method === 'HEAD') response.end();
+  else response.end(payload);
+}
+
+function writeError(
+  request: IncomingMessage,
+  response: ServerResponse,
+  status: number,
+  error: string,
+): void {
+  writeJson(request, response, status, { error });
+}
+
+function extractBearer(request: IncomingMessage): string | undefined {
+  const authorization = request.headers.authorization;
+  if (typeof authorization !== 'string') return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
+  return match?.[1];
+}
+
+interface RateLimiter {
+  take(key: string): boolean;
+}
+
+/** Fixed window limiter keyed by socket address, pruned so a scan cannot grow it forever. */
+function createRateLimiter(limit: number, windowMs: number, now: () => number = Date.now): RateLimiter {
+  const buckets = new Map<string, { count: number; resetAt: number }>();
+  return {
+    take: (key) => {
+      const at = now();
+      if (buckets.size > 512) {
+        for (const [bucketKey, bucket] of buckets) {
+          if (bucket.resetAt <= at) buckets.delete(bucketKey);
+        }
+      }
+      const bucket = buckets.get(key);
+      if (bucket === undefined || bucket.resetAt <= at) {
+        buckets.set(key, { count: 1, resetAt: at + windowMs });
+        return true;
+      }
+      if (bucket.count >= limit) return false;
+      bucket.count += 1;
+      return true;
+    },
+  };
+}
+
+type JsonRead = { ok: true; value: unknown } | { ok: false; status: number };
+
+function readJsonBody(request: IncomingMessage, limit: number): Promise<JsonRead> {
+  const { promise, resolve: resolvePromise } = Promise.withResolvers<JsonRead>();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let settled = false;
+  const finish = (result: JsonRead): void => {
+    if (settled) return;
+    settled = true;
+    resolvePromise(result);
+  };
+  request.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > limit) {
+      finish({ ok: false, status: 413 });
+      request.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  request.on('end', () => {
+    if (size === 0) {
+      finish({ ok: false, status: 400 });
+      return;
+    }
+    try {
+      finish({ ok: true, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown });
+    } catch {
+      finish({ ok: false, status: 400 });
+    }
+  });
+  request.on('error', () => {
+    finish({ ok: false, status: 400 });
+  });
+  return promise;
+}
+
+function toView(session: RemoteSessionRecord): RemoteSessionView {
+  return {
+    id: session.id,
+    deviceName: session.deviceName,
+    createdAt: session.createdAt,
+    lastSeenAt: session.lastSeenAt,
+    expiresAt: session.expiresAt,
+    revokedAt: session.revokedAt,
+  };
+}
+
+function renderIndexHtml(html: string, csp: string): string {
+  const tag = `<meta http-equiv="Content-Security-Policy" content="${csp.replaceAll('"', '&quot;')}" />`;
+  if (META_CSP.test(html)) return html.replace(META_CSP, tag);
+  return html.replace('</head>', `  ${tag}\n  </head>`);
+}
+
+interface StaticFile {
+  path: string;
+  contentType: string;
+}
+
+function staticFile(webRoot: string, pathname: string): StaticFile | undefined {
+  const decoded = decodeURIComponent(pathname);
+  if (decoded.includes('\0')) return undefined;
+  const filePath = resolve(webRoot, `.${decoded}`);
+  if (filePath !== webRoot && !filePath.startsWith(`${webRoot}${sep}`)) return undefined;
+  let stats;
+  try {
+    stats = statSync(filePath);
+  } catch {
+    return undefined;
+  }
+  if (!stats.isFile()) return undefined;
+  const extension = extname(filePath).toLowerCase();
+  const contentType = CONTENT_TYPES[extension] ?? 'application/octet-stream';
+  return { path: filePath, contentType, body: undefined };
+}
+
+function serveFile(
+  request: IncomingMessage,
+  response: ServerResponse,
+  file: StaticFile,
+  cacheControl: string,
+  extra: Record<string, string> = {},
+): void {
+  const size = statSync(file.path).size;
+  response.writeHead(200, {
+    'content-type': file.contentType,
+    'content-length': size,
+    'cache-control': cacheControl,
+    ...securityHeaders(buildContentSecurityPolicy(originOf(request))),
+    ...extra,
+  });
+  if (request.method === 'HEAD') {
+    response.end();
+    return;
+  }
+  const stream = createReadStream(file.path);
+  stream.on('error', () => {
+    response.destroy();
+  });
+  stream.pipe(response);
+}
+
+function serveIndex(
+  request: IncomingMessage,
+  response: ServerResponse,
+  webRoot: string,
+  extra: Record<string, string> = {},
+): void {
+  const indexPath = resolve(webRoot, INDEX_FILE);
+  let html: string;
+  try {
+    html = readFileSync(indexPath, 'utf8');
+  } catch {
+    writeError(request, response, 404, 'not-found');
+    return;
+  }
+  const csp = buildContentSecurityPolicy(originOf(request));
+  const body = renderIndexHtml(html, csp);
+  response.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+    ...securityHeaders(csp),
+    ...extra,
+  });
+  if (request.method === 'HEAD') response.end();
+  else response.end(body);
+}
+
+function hasExtension(pathname: string): boolean {
+  const last = pathname.slice(pathname.lastIndexOf('/') + 1);
+  return last.includes('.');
+}
+
+function pairingUrl(origin: string, code: string): string {
+  return `${origin}/pair?code=${encodeURIComponent(code)}`;
+}
+
+function sessionCookie(token: string): string {
+  const maxAge = Math.floor(REMOTE_SESSION_TTL_MS / 1000);
+  return `${REMOTE_SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
 }
 
 /**
- * The plain HTTP surface: `/health` for readiness probes and nothing else. Requests
- * from a non-loopback socket or with a non-loopback Host header are rejected before
- * routing. The WS upgrade is handled separately in `ws.ts`.
+ * The plain HTTP surface: `/health` for readiness probes, the built renderer with an
+ * SPA fallback, and the remote access endpoints. The WS upgrade is handled in `ws.ts`.
  */
 export function createHttpServer(options: HttpServerOptions): Server {
-  return createServer((request, response) => {
-    if (!isLoopbackAddress(request.socket.remoteAddress)) {
-      writeJson(response, 403, { error: 'forbidden' });
+  const pairing = options.pairing;
+  const createLimiter = createRateLimiter(PAIRING_CREATE_LIMIT, RATE_WINDOW_MS);
+  const claimLimiter = createRateLimiter(PAIRING_CLAIM_LIMIT, RATE_WINDOW_MS);
+  const webRoot = options.webRoot === undefined ? undefined : resolve(options.webRoot);
+
+  async function handlePairCreate(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    if (!isLoopbackAddress(request.socket.remoteAddress) || !isLoopbackHost(request.headers.host)) {
+      writeError(request, response, 403, 'forbidden');
       return;
     }
-    if (!isLoopbackHost(request.headers.host)) {
-      writeJson(response, 403, { error: 'forbidden' });
+    if (!options.verifyToken(extractBearer(request))) {
+      writeError(request, response, 401, 'unauthorized');
+      return;
+    }
+    const key = request.socket.remoteAddress ?? 'unknown';
+    if (!createLimiter.take(key)) {
+      writeError(request, response, 429, 'rate-limited');
+      return;
+    }
+    const origin = originOf(request);
+    if (origin === undefined) {
+      writeError(request, response, 400, 'bad-request');
+      return;
+    }
+    const issued = pairing.issue();
+    const result: PairCreateResult = {
+      code: issued.code,
+      url: pairingUrl(origin, issued.code),
+      expiresAt: issued.expiresAt,
+    };
+    writeJson(request, response, 201, result);
+  }
+
+  async function handlePairClaim(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    if (!isAllowedOrigin(request.headers.origin, request.headers.host, options.remote)) {
+      writeError(request, response, 403, 'forbidden');
+      return;
+    }
+    const key = request.socket.remoteAddress ?? 'unknown';
+    if (!claimLimiter.take(key)) {
+      writeError(request, response, 429, 'rate-limited');
+      return;
+    }
+    const body = await readJsonBody(request, PAIRING_BODY_LIMIT);
+    if (!body.ok) {
+      writeError(request, response, body.status, 'bad-request');
+      return;
+    }
+    const parsed = PairClaimRequestSchema.safeParse(body.value);
+    if (!parsed.success) {
+      writeError(request, response, 400, 'bad-request');
+      return;
+    }
+    if (!pairing.consume(parsed.data.code)) {
+      writeError(request, response, 401, 'invalid-code');
+      return;
+    }
+    const token = randomBytes(32).toString('hex');
+    const now = new Date();
+    const session = options.sessions.create({
+      id: newId('ses'),
+      tokenHash: hashSecret(token),
+      deviceName: parsed.data.deviceName,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + REMOTE_SESSION_TTL_MS).toISOString(),
+    });
+    const result: PairClaimResult = { session: toView(session) };
+    writeJson(request, response, 201, result, { 'set-cookie': sessionCookie(token) });
+  }
+
+  function handleListSessions(request: IncomingMessage, response: ServerResponse): void {
+    if (!options.verifyToken(extractBearer(request))) {
+      writeError(request, response, 401, 'unauthorized');
+      return;
+    }
+    const result = RemoteSessionListSchema.parse({
+      sessions: options.sessions.list().map(toView),
+    });
+    writeJson(request, response, 200, result);
+  }
+
+  async function handleRevokeSessions(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    if (!options.verifyToken(extractBearer(request))) {
+      writeError(request, response, 401, 'unauthorized');
+      return;
+    }
+    const body = await readJsonBody(request, PAIRING_BODY_LIMIT);
+    if (!body.ok) {
+      writeError(request, response, body.status, 'bad-request');
+      return;
+    }
+    const parsed = RevokeSessionsRequestSchema.safeParse(body.value);
+    if (!parsed.success) {
+      writeError(request, response, 400, 'bad-request');
+      return;
+    }
+    const now = new Date().toISOString();
+    const revoked =
+      parsed.data.all === true
+        ? options.sessions.revokeAll(now)
+        : parsed.data.id === undefined
+          ? 0
+          : options.sessions.revoke(parsed.data.id, now)
+            ? 1
+            : 0;
+    writeJson(request, response, 200, { revoked });
+  }
+
+  async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (!options.remote.enabled && !isLoopbackAddress(request.socket.remoteAddress)) {
+      writeError(request, response, 403, 'forbidden');
+      return;
+    }
+    if (!isAllowedHost(request.headers.host, options.remote)) {
+      writeError(request, response, 403, 'forbidden');
       return;
     }
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    if (request.method === 'GET' && url.pathname === '/health') {
+    const method = request.method ?? 'GET';
+
+    if (method === 'GET' && url.pathname === '/health') {
       const body: HealthBody = {
         ok: true,
         version: options.version,
         pid: process.pid,
         uptimeMs: Date.now() - options.startedAt,
       };
-      writeJson(response, 200, body);
+      writeJson(request, response, 200, body);
       return;
     }
-    writeJson(response, 404, { error: 'not-found' });
+    if (method === 'POST' && url.pathname === '/pair/create') {
+      await handlePairCreate(request, response);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/pair/claim') {
+      await handlePairClaim(request, response);
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/remote/sessions') {
+      handleListSessions(request, response);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/remote/sessions/revoke') {
+      await handleRevokeSessions(request, response);
+      return;
+    }
+
+    if (method !== 'GET' && method !== 'HEAD') {
+      writeError(request, response, 404, 'not-found');
+      return;
+    }
+    if (webRoot === undefined) {
+      writeError(request, response, 404, 'not-found');
+      return;
+    }
+    let file: StaticFile | undefined;
+    try {
+      file = staticFile(webRoot, url.pathname);
+    } catch {
+      writeError(request, response, 400, 'bad-request');
+      return;
+    }
+    if (file !== undefined) {
+      const isHtml = file.contentType.startsWith('text/html');
+      if (isHtml) serveIndex(request, response, webRoot);
+      else serveFile(request, response, file, 'public, max-age=3600');
+      return;
+    }
+    // SPA fallback: extensionless paths are client routes, so they get the shell.
+    if (!hasExtension(url.pathname)) {
+      serveIndex(request, response, webRoot);
+      return;
+    }
+    writeError(request, response, 404, 'not-found');
+  }
+
+  return createServer((request, response) => {
+    handle(request, response).catch(() => {
+      if (!response.headersSent) writeError(request, response, 500, 'internal');
+      else response.destroy();
+    });
   });
 }

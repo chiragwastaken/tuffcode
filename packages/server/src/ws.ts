@@ -2,12 +2,15 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
   ClientRequestSchema,
+  REMOTE_SESSION_COOKIE,
   ServerResponseSchema,
+  type RemoteSettings,
   type ServerResponse,
 } from '@tuffcode/contracts';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
+import { readCookie, type SessionAuth } from './auth.js';
 import type { EventBus } from './events.js';
-import { isLoopbackHost } from './http.js';
+import { isAllowedHost, isAllowedOrigin } from './http.js';
 import { dispatch, type RpcHandlers } from './rpc.js';
 
 const WS_PATH = '/ws';
@@ -17,6 +20,8 @@ export interface WebSocketDeps {
   handlers: RpcHandlers;
   bus: EventBus;
   verifyToken: (candidate: string | undefined | null) => boolean;
+  verifySession: SessionAuth['verify'];
+  remote: RemoteSettings;
 }
 
 export interface AttachedWebSocket {
@@ -56,6 +61,11 @@ export function extractToken(request: IncomingMessage): string | undefined {
     }
   }
   return undefined;
+}
+
+/** The paired device cookie, which browsers send on the upgrade request automatically. */
+export function extractSessionToken(request: IncomingMessage): string | undefined {
+  return readCookie(request.headers.cookie, REMOTE_SESSION_COOKIE);
 }
 
 function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
@@ -136,11 +146,21 @@ export function attachWebSocket(server: Server, deps: WebSocketDeps): AttachedWe
       rejectUpgrade(socket, 404, 'Not Found');
       return;
     }
-    if (!isLoopbackHost(request.headers.host)) {
+    if (!isAllowedHost(request.headers.host, deps.remote)) {
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
-    if (!deps.verifyToken(extractToken(request))) {
+    // A browser always sends Origin here; refusing a foreign one blocks cross-site
+    // WebSocket hijacking even when the cookie is attached automatically.
+    if (!isAllowedOrigin(request.headers.origin, request.headers.host, deps.remote)) {
+      rejectUpgrade(socket, 403, 'Forbidden');
+      return;
+    }
+    const token = extractToken(request);
+    const authenticated =
+      deps.verifyToken(token) ||
+      (token === undefined && deps.verifySession(extractSessionToken(request)) !== undefined);
+    if (!authenticated) {
       rejectUpgrade(socket, 401, 'Unauthorized');
       return;
     }
