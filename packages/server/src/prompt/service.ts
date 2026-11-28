@@ -111,6 +111,7 @@ export function planPrompt(repos: Repos, input: PromptPlanInput): PromptPlan {
   const skillPlan = planSkills(repos, project.path, message, settings);
   const projectRules = loadProjectRules(project.path, message);
   const assembly = assemblePrompt({
+    role: thread.parentThreadId === null ? 'main' : 'child',
     customInstructions: settings.customInstructions,
     projectRules: projectRules.text,
     profile: settings.profile,
