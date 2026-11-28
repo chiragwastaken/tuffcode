@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
 /**
  * Electron E2E: one worker because every test owns a real app instance, a temp
@@ -6,10 +6,27 @@ import { defineConfig } from '@playwright/test';
  * Each workspace is deleted on teardown, and TUFFCODE_USER_DATA gives every run its
  * own Electron single-instance lock, so two suites can run concurrently in separate
  * worktrees without either app instance quitting.
+ *
+ * The mobile projects drive a served browser build instead: the mobile server serves
+ * `apps/web/dist` on `remote.port` (4310 by default) and a phone opens
+ * `http://<bindHost>:4310`. TUFFCODE_MOBILE_URL overrides that address for a LAN or
+ * Tailscale run.
  */
+const mobileBaseUrl = process.env['TUFFCODE_MOBILE_URL'] ?? 'http://127.0.0.1:4310';
+
+/**
+ * A run that names only mobile.spec.ts drives a served build, so it must not pay for the
+ * Electron build in global setup. Every other invocation (the full suite, a single
+ * Electron spec, a --project filter) still builds first, because those tests launch the
+ * packaged app.
+ */
+const specArguments = process.argv.slice(2).filter((argument) => argument.endsWith('.spec.ts'));
+const mobileOnlyRun =
+  specArguments.length > 0 && specArguments.every((argument) => argument.includes('mobile.spec'));
+
 export default defineConfig({
   testDir: './e2e',
-  globalSetup: './e2e/global-setup.ts',
+  ...(mobileOnlyRun ? {} : { globalSetup: './e2e/global-setup.ts' }),
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env['CI']),
@@ -21,4 +38,20 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { trace: 'retain-on-failure' },
+  projects: [
+    {
+      name: 'electron',
+      testIgnore: /mobile\.spec\.ts$/,
+    },
+    {
+      name: 'pixel-7',
+      testMatch: /mobile\.spec\.ts$/,
+      use: { ...devices['Pixel 7'], baseURL: mobileBaseUrl },
+    },
+    {
+      name: 'iphone-13',
+      testMatch: /mobile\.spec\.ts$/,
+      use: { ...devices['iPhone 13'], baseURL: mobileBaseUrl },
+    },
+  ],
 });
