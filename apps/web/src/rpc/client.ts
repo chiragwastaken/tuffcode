@@ -81,7 +81,9 @@ export interface EventSink {
 
 export interface RpcClientOptions {
   url: string;
-  token: string;
+  /** Desktop bearer token. A browser omits it and authenticates the upgrade with
+   * the session cookie the served origin set, so no subprotocol is requested. */
+  token?: string;
   socketFactory?: RpcSocketFactory;
   requestTimeoutMs?: number;
   jitter?: () => number;
@@ -127,6 +129,9 @@ export function createRpcClient(options: RpcClientOptions): RpcClient {
     store = useAppStore,
     logger = console,
   } = options;
+
+  const protocols =
+    token === undefined || token.length === 0 ? [] : [`tuffcode.bearer.${token}`];
 
   const eventListeners = new Set<(event: ServerEvent) => void>();
   const statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -296,7 +301,7 @@ export function createRpcClient(options: RpcClientOptions): RpcClient {
 
     let next: RpcSocket;
     try {
-      next = socketFactory(url, [`tuffcode.bearer.${token}`]);
+      next = socketFactory(url, protocols);
     } catch (error) {
       logger.warn('[rpc] Could not create the WebSocket.', error);
       emitStatus('closed');

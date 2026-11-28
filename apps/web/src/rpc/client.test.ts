@@ -163,6 +163,17 @@ describe('rpc client', () => {
     client.close();
   });
 
+  it('requests no subprotocol when the caller has no bearer token', () => {
+    const client = createRpcClient({
+      url: 'ws://tuff.example.com/ws',
+      socketFactory: (url, protocols) => new FakeSocket(url, protocols),
+      logger: { warn: vi.fn() },
+    });
+
+    expect(lastSocket().protocols).toEqual([]);
+    client.close();
+  });
+
   it('rejects a request that exceeds the timeout', async () => {
     vi.useFakeTimers();
     const client = createClient({ requestTimeoutMs: 500 });
