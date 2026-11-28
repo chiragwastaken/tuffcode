@@ -5,24 +5,9 @@ const LF = String.fromCharCode(10);
 const DONE = String.fromCharCode(91, 68, 79, 78, 69, 93);
 const SEPARATORS = ['\r\n\r\n', '\n\n', '\r\r'] as const;
 
-/** A stream that sends no bytes for this long is treated as dead. */
-export const DEFAULT_SSE_IDLE_TIMEOUT_MS = 120_000;
-
 export interface SseOptions {
   signal?: AbortSignal;
   logger?: AdapterLogger;
-  /** Idle budget between chunks; 120s by default, 0 or less disables it. */
-  idleTimeoutMs?: number;
-}
-
-/** A stalled stream; retryable because the request itself was never answered. */
-export class SseIdleTimeoutError extends Error {
-  readonly retryable = true;
-
-  constructor(timeoutMs: number) {
-    super('stream sent no data for ' + timeoutMs + 'ms');
-    this.name = 'SseIdleTimeoutError';
-  }
 }
 
 type ParsedEvent =
@@ -69,26 +54,9 @@ export async function* streamSse(
   const decoder = new TextDecoder();
   const signal = options.signal;
   const logger = options.logger;
-  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_SSE_IDLE_TIMEOUT_MS;
   let buffer = '';
   let overflow = false;
   let finished = false;
-
-  /** Reads one chunk, rejecting when the provider sends nothing for the idle budget. */
-  const readChunk = async () => {
-    if (idleTimeoutMs <= 0) return reader.read();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const idle = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), idleTimeoutMs);
-    });
-    try {
-      const chunk = await Promise.race([reader.read(), idle]);
-      if (chunk === null) throw new SseIdleTimeoutError(idleTimeoutMs);
-      return chunk;
-    } finally {
-      clearTimeout(timer);
-    }
-  };
 
   const drain = function* (): Generator<unknown> {
     while (!finished) {
@@ -123,7 +91,7 @@ export async function* streamSse(
   try {
     while (!finished) {
       if (signal?.aborted) return;
-      const chunk = await readChunk();
+      const chunk = await reader.read();
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, { stream: true });
 
@@ -158,10 +126,6 @@ export async function* streamSse(
       }
     }
   } catch (error) {
-    if (error instanceof SseIdleTimeoutError) {
-      logger?.warn('openai sse stream idle', { timeoutMs: idleTimeoutMs });
-      throw error;
-    }
     if (signal?.aborted) return;
     throw error;
   } finally {

@@ -13,7 +13,6 @@ import {
   SUBAGENT_TOOL_NAME,
   TOOL_NAMES,
   isSubagentAction,
-  isSubagentDepth,
   isSubagentType,
   type ToolName,
 } from '@tuffcode/prompt';
@@ -148,15 +147,6 @@ const DESTRUCTIVE_COMMANDS: readonly RegExp[] = [
   /\bshutdown\b/i,
 ];
 
-/**
- * Whether a command matches the destructive list: a whole-drive or home removal, a
- * format, diskpart, a forced push, or a shutdown. A worker profile refuses these
- * outright, because no approval arrives to answer them.
- */
-export function isDestructiveCommand(command: string): boolean {
-  return DESTRUCTIVE_COMMANDS.some((pattern) => pattern.test(command));
-}
-
 /** Known actions per extra tool; anything else is refused rather than guessed at. */
 const EXTRA_TOOL_ACTIONS: Record<ExtraToolName, readonly string[]> = {
   mcp: ['list', 'call'],
@@ -191,9 +181,9 @@ export function classifyExtraTool(
   }
   if (name === 'skill') return 'allow';
   if (name === 'web_fetch') {
-    // A fetch reaches the network and leaves the repository, so ask until full-auto.
+    // A fetch reaches the network, so it follows the bash ladder.
     if (mode === 'read-only') return 'deny';
-    return mode === 'ask' || mode === 'accept-edits' ? 'approve' : 'allow';
+    return mode === 'ask' ? 'approve' : 'allow';
   }
   const action = typeof args.action === 'string' ? args.action : '';
   if (ACTIONLESS_EXTRA_TOOLS[name] !== true && !EXTRA_TOOL_ACTIONS[name].includes(action)) {
@@ -207,8 +197,6 @@ export function classifyExtraTool(
     if (name === 'memory') return 'allow';
     return 'approve';
   }
-  // `config` writes provider rows and settings, so even full-auto shows one approval.
-  if (name === 'config') return 'approve';
   return 'allow';
 }
 
@@ -379,17 +367,19 @@ function isReadOnlyRipgrep(tokens: readonly string[]): boolean {
   return true;
 }
 
-function isReadOnlySegment(tokens: readonly string[]): boolean {
+function isReadOnlySegment(segment: string): boolean {
+  const tokens = segment.split(/\s+/).filter((token) => token.length > 0);
   const first = tokens[0];
-  if (first === undefined || first.length === 0) return false;
+  if (first === undefined) return false;
   // FOO=bar cmd runs cmd with a changed environment, which the allowlist cannot see.
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return false;
   for (const token of tokens) {
-    const bare = token.toLowerCase();
+    const bare = token
+      .replace(/^[(&]+/, '')
+      .replace(/[)]+$/, '')
+      .toLowerCase();
     if (FORBIDDEN_WORDS[bare] === true) return false;
     if (POWERSHELL_MUTATION_VERB.test(bare)) return false;
-    // -c sets a config, an encoded command, or a count, none of which is safe to guess at.
-    if (token === '-c' || token === '--%') return false;
   }
   const program = first.toLowerCase();
   // A path is a different binary with a familiar name, so only bare program names count.
@@ -408,265 +398,28 @@ function isReadOnlySegment(tokens: readonly string[]): boolean {
   return false;
 }
 
-type ShellScan = { segments: string[][] } | { failure: 'syntax' | 'redirect' };
-
 /**
- * Reads the target of a redirect: one bare or quoted word. Anything that continues into
- * another operator means the redirect was malformed, which is refused rather than
- * guessed at.
+ * Whether a shell command only reads. Every segment of a chain must be a conservative
+ * allowlisted program, and the whole line is refused before that when it can redirect,
+ * substitute, group, assign an environment, or reach a known writing verb. The allowlist
+ * is the security boundary; the denials only narrow it further.
  */
-function readRedirectTarget(
-  command: string,
-  start: number,
-): { target: string; next: number } | null {
-  let i = start;
-  let target = '';
-  let quote: string | null = null;
-  while (i < command.length) {
-    const ch = command[i] as string;
-    if (quote !== null) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        target += ch;
-      }
-      i += 1;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      i += 1;
-      continue;
-    }
-    if (
-      ch === ' ' ||
-      ch === '\t' ||
-      ch === '\n' ||
-      ch === '\r' ||
-      ch === ';' ||
-      ch === '|' ||
-      ch === '&' ||
-      ch === '<' ||
-      ch === '>'
-    ) {
-      break;
-    }
-    target += ch;
-    i += 1;
-  }
-  if (quote !== null || target.length === 0) return null;
-  return { target, next: i };
-}
-
-/**
- * Splits a command into segments of words, removing quotes so a flag check sees the
- * same text the shell would hand the program. Only `>` to the null device and `2>&1`
- * survive: every other redirect names a file, and command substitution, backticks,
- * grouping and unbalanced quotes are refused outright.
- */
-function scanShell(command: string): ShellScan {
-  const segments: string[][] = [];
-  let tokens: string[] = [];
-  let word = '';
-  let hasWord = false;
-  let single = false;
-  let double = false;
-
-  const flushWord = (): void => {
-    if (!hasWord) return;
-    tokens.push(word);
-    word = '';
-    hasWord = false;
-  };
-  const flushSegment = (): void => {
-    flushWord();
-    segments.push(tokens);
-    tokens = [];
-  };
-
-  let i = 0;
-  while (i < command.length) {
-    const ch = command[i] as string;
-    if (single) {
-      if (ch === "'") single = false;
-      else {
-        word += ch;
-        hasWord = true;
-      }
-      i += 1;
-      continue;
-    }
-    if (double) {
-      if (ch === '"') {
-        double = false;
-        i += 1;
-        continue;
-      }
-      if (ch === '`') return { failure: 'syntax' };
-      if (ch === '$' && command[i + 1] === '(') return { failure: 'syntax' };
-      const next = command[i + 1];
-      if (ch === '\\' && (next === '"' || next === '\\' || next === '$' || next === '`')) {
-        word += next;
-        hasWord = true;
-        i += 2;
-        continue;
-      }
-      word += ch;
-      hasWord = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '\\') {
-      const next = command[i + 1];
-      if (next === undefined) return { failure: 'syntax' };
-      word += next;
-      hasWord = true;
-      i += 2;
-      continue;
-    }
-    if (ch === "'") {
-      single = true;
-      hasWord = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '"') {
-      double = true;
-      hasWord = true;
-      i += 1;
-      continue;
-    }
-    if (ch === '`') return { failure: 'syntax' };
-    if (ch === '$' && command[i + 1] === '(') return { failure: 'syntax' };
-    if (ch === '(' || ch === ')' || ch === '{' || ch === '}') return { failure: 'syntax' };
-    if (ch === ' ' || ch === '\t') {
-      flushWord();
-      i += 1;
-      continue;
-    }
-    if (ch === '\n' || ch === '\r' || ch === ';') {
-      flushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === '&') {
-      if (command[i + 1] === '&') {
-        flushSegment();
-        i += 2;
-        continue;
-      }
-      if (command[i + 1] === '>') return { failure: 'redirect' };
-      flushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === '|') {
-      if (command[i + 1] === '|') {
-        flushSegment();
-        i += 2;
-        continue;
-      }
-      flushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === '>' || ch === '<') {
-      let fd: string | null = null;
-      if (word === '1' || word === '2') {
-        fd = word;
-        word = '';
-        hasWord = false;
-      }
-      if (fd === null && !hasWord) {
-        const last = tokens[tokens.length - 1];
-        if (last === '1' || last === '2') {
-          fd = last;
-          tokens.pop();
-        }
-      }
-      let op = ch;
-      i += 1;
-      if (ch === '>') {
-        if (command[i] === '>') {
-          op = '>>';
-          i += 1;
-        } else if (command[i] === '|') {
-          op = '>|';
-          i += 1;
-        }
-      } else if (command[i] === '<') {
-        op = '<<';
-        i += 1;
-        if (command[i] === '<') {
-          op = '<<<';
-          i += 1;
-        }
-      } else if (command[i] === '>') {
-        op = '<>';
-        i += 1;
-      }
-      while (command[i] === ' ' || command[i] === '\t') i += 1;
-      if (op === '>' && command[i] === '&') {
-        i += 1;
-        let digits = '';
-        while (i < command.length) {
-          const digit = command[i] as string;
-          if (digit < '0' || digit > '9') break;
-          digits += digit;
-          i += 1;
-        }
-        if (fd === '2' && digits === '1') continue;
-        return { failure: 'redirect' };
-      }
-      if (op !== '>') return { failure: 'redirect' };
-      const target = readRedirectTarget(command, i);
-      if (target === null) return { failure: 'redirect' };
-      const isNull =
-        target.target === '/dev/null' || target.target.toLowerCase() === 'nul';
-      const allowed = isNull && (fd === null || fd === '1' || fd === '2');
-      if (!allowed) return { failure: 'redirect' };
-      i = target.next;
-      continue;
-    }
-    word += ch;
-    hasWord = true;
-    i += 1;
-  }
-  if (single || double) return { failure: 'syntax' };
-  flushSegment();
-  return { segments };
-}
-
-const READ_ONLY_PROGRAM_LIST = Object.keys(READ_ONLY_PROGRAMS).join(', ');
-const READ_ONLY_POWERSHELL_LIST = Object.keys(READ_ONLY_POWERSHELL_PROGRAMS).join(', ');
-const READ_ONLY_GIT_LIST = `git ${Object.keys(GIT_READ_SUBCOMMANDS).join('/')}`;
-
-/**
- * Why a read-only turn refused a command, or null when the command only reads. The
- * allowlist is the security boundary; the message names it and the one redirect shape
- * that is still allowed, so a child can correct its command instead of guessing.
- */
-export function readOnlyCommandRefusal(command: string): string | null {
-  const allowed =
-    `bash only runs read-only commands for this agent. Allowed: ${READ_ONLY_PROGRAM_LIST}, ` +
-    `${READ_ONLY_POWERSHELL_LIST}, ${READ_ONLY_GIT_LIST}, rg, find and grep. ` +
-    'Stderr may be discarded or merged (2>/dev/null, 2>&1, 2>NUL) and stdout may go to the null device; every other redirect is refused.';
-  if (typeof command !== 'string') return allowed;
-  const normalized = command.replace(/\r\n?/g, '\n').trim();
-  if (normalized.length === 0) return allowed;
-  if (GIT_GLOBAL_FLAGS.some((flag) => normalized.includes(flag))) return allowed;
-  const scan = scanShell(normalized);
-  if ('failure' in scan) return allowed;
-  if (scan.segments.length === 0) return allowed;
-  const readOnly = scan.segments.every(
-    (segment) => segment.length > 0 && isReadOnlySegment(segment),
-  );
-  return readOnly ? null : allowed;
-}
-
-/** Whether a shell command only reads; see `readOnlyCommandRefusal` for the reason. */
 export function isReadOnlyCommand(command: string): boolean {
-  return readOnlyCommandRefusal(command) === null;
+  if (typeof command !== 'string') return false;
+  const normalized = command.replace(/\r\n?/g, '\n').trim();
+  if (normalized.length === 0) return false;
+  // Redirects, process substitution, grouping and PowerShell script blocks.
+  if (/[<>()`{}]/.test(normalized)) return false;
+  if (normalized.includes('--%')) return false;
+  // -c sets a config, an encoded command, or a count, none of which is safe to guess at.
+  if (/(^|\s)-c(?=\s|$)/.test(normalized)) return false;
+  if (GIT_GLOBAL_FLAGS.some((flag) => normalized.includes(flag))) return false;
+  const segments = normalized.split(/&&|\|\||[;|&\n]/);
+  if (segments.length === 0) return false;
+  return segments.every((segment) => {
+    const trimmed = segment.trim();
+    return trimmed.length > 0 && isReadOnlySegment(trimmed);
+  });
 }
 
 export function classifyTool(
@@ -685,7 +438,8 @@ export function classifyTool(
   if (mode === 'ask') return 'approve';
   if (mode === 'accept-edits') return name === 'bash' ? 'approve' : 'allow';
   if (name === 'bash' && typeof args.command === 'string') {
-    if (isDestructiveCommand(args.command)) return 'approve';
+    const command = args.command;
+    if (DESTRUCTIVE_COMMANDS.some((pattern) => pattern.test(command))) return 'approve';
   }
   return 'allow';
 }
@@ -1311,16 +1065,8 @@ export function classifySubagentTool(
 ): PermissionDecision {
   const action = typeof args.action === 'string' ? args.action : 'spawn';
   if (!isSubagentAction(action)) return 'deny';
-  // Reading status, waiting, reading reports and asking a question change nothing:
-  // ask posts one blocking question to the parent, and read only pages reports.
-  if (
-    action === 'status' ||
-    action === 'wait' ||
-    action === 'inbox' ||
-    action === 'report' ||
-    action === 'ask' ||
-    action === 'read'
-  ) {
+  // Reading status, waiting and reading reports change nothing; a report only posts a note.
+  if (action === 'status' || action === 'wait' || action === 'inbox' || action === 'report') {
     return 'allow';
   }
   if (mode === 'read-only') return 'deny';
@@ -1339,9 +1085,7 @@ async function subagentTool(
 ): Promise<ToolExecResult> {
   const action = typeof args.action === 'string' && args.action.length > 0 ? args.action : 'spawn';
   if (!isSubagentAction(action)) {
-    return fail(
-      'action must be one of spawn, status, wait, message, stop, inbox, report, ask, answer, close, read',
-    );
+    return fail('action must be one of spawn, status, wait, message, stop, inbox, report');
   }
   if (action !== 'spawn') {
     if (deps.subagentControl === undefined) {
@@ -1354,15 +1098,6 @@ async function subagentTool(
       typeof args.timeout_s === 'number' && Number.isFinite(args.timeout_s)
         ? args.timeout_s
         : undefined;
-    const questionId =
-      typeof args.question_id === 'string' && args.question_id.trim().length > 0
-        ? args.question_id.trim()
-        : undefined;
-    const cursor =
-      typeof args.cursor === 'string' && args.cursor.trim().length > 0
-        ? args.cursor.trim()
-        : undefined;
-    const rework = args.rework === true;
     try {
       const output = await deps.subagentControl({
         action,
@@ -1370,10 +1105,7 @@ async function subagentTool(
         ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }),
         ...(id === undefined ? {} : { id }),
         ...(text === undefined ? {} : { text }),
-        ...(rework ? { rework } : {}),
         ...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
-        ...(questionId === undefined ? {} : { questionId }),
-        ...(cursor === undefined ? {} : { cursor }),
         signal: ctx.signal,
       });
       return ok(capOutput(output));
@@ -1390,9 +1122,6 @@ async function subagentTool(
   if (typeof args.task !== 'string' || args.task.trim().length === 0) {
     return fail('task must be a non-empty string');
   }
-  if (args.depth !== undefined && !isSubagentDepth(args.depth)) {
-    return fail('depth must be quick, normal or thorough');
-  }
   const model = typeof args.model === 'string' ? args.model.trim() : '';
   try {
     const spawned = await deps.spawnSubagent({
@@ -1401,7 +1130,6 @@ async function subagentTool(
       type: args.type,
       task: args.task,
       ...(model.length === 0 ? {} : { model }),
-      ...(isSubagentDepth(args.depth) ? { depth: args.depth } : {}),
     });
     return ok(
       `subagent ${spawned.childId} (${args.type}) ${spawned.status}. Call subagent with action wait to collect its summary, status to check progress, or message to steer it.`,

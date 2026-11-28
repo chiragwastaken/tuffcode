@@ -1,18 +1,13 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { AdapterDeps, PermissionMode, TurnContext } from '@tuffcode/contracts';
-import {
-  SUBAGENT_TOOL_NAME,
-  TOOL_NAMES,
-  isSubagentAction,
-  isSubagentType,
-} from '@tuffcode/prompt';
+import { SUBAGENT_TOOL_NAME, isSubagentAction, isSubagentType } from '@tuffcode/prompt';
 import { z } from 'zod';
 import {
   classifyExtraTool,
   classifySubagentTool,
   type PermissionDecision,
 } from '../openai/tools.js';
-import { profileOffers, resolveToolOptions } from '../tool-policy.js';
+import { resolveToolOptions } from '../tool-policy.js';
 
 /**
  * Tuffcode's own tools for Claude sessions. The Claude CLI runs its own tool loop, so
@@ -44,41 +39,6 @@ function failure(error: unknown): ToolText {
 /** Drops undefined fields so the server-side runner sees the same shape the harness sends. */
 function defined(args: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined));
-}
-
-/** Every name a profile can speak about: the harness tools and this server's tools. */
-const PROFILE_TOOL_NAMES = new Set<string>([
-  ...TOOL_NAMES,
-  SUBAGENT_TOOL_NAME,
-  'mcp',
-  'memory',
-  'config',
-  'todo',
-  'skill',
-  'web_fetch',
-]);
-
-/** The built-in Claude tools whose harness counterpart the profile governs. */
-const VENDOR_TOOL_NAMES: Readonly<Record<string, string>> = {
-  Read: 'read',
-  Write: 'write',
-  Edit: 'edit',
-  Bash: 'bash',
-  Glob: 'glob',
-  Grep: 'grep',
-};
-
-/**
- * The harness name behind a Claude tool call, or null when the profile has no say.
- * The built-in file tools and this server's own `mcp__tuffcode__*` tools map; vendor
- * MCP tools and tools Tuffcode does not run keep the approval path.
- */
-export function claudeHarnessToolName(toolName: string): string | null {
-  if (toolName.startsWith(PREFIX)) {
-    const name = toolName.slice(PREFIX.length);
-    return PROFILE_TOOL_NAMES.has(name) ? name : null;
-  }
-  return VENDOR_TOOL_NAMES[toolName] ?? null;
 }
 
 /**
@@ -143,18 +103,15 @@ const MCP_SCHEMA = {
 
 /**
  * The tools this turn offers, in registration order. Gated exactly like the harness:
- * config and memory need `extra`, mcp needs `mcp`, every spec needs a runner, and a
- * child's profile drops what its type may not use.
+ * config and memory need `extra`, mcp needs `mcp`, and every spec needs a runner.
  */
 export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): TuffcodeToolSpec[] {
   const options = resolveToolOptions(ctx, deps);
   const runner = deps.extraTool;
   const scope = { cwd: ctx.cwd, ...(ctx.threadId === undefined ? {} : { threadId: ctx.threadId }) };
   const specs: TuffcodeToolSpec[] = [];
-  const wanted = (name: string): boolean =>
-    ctx.toolProfile === undefined || profileOffers(ctx.toolProfile, name);
 
-  if (options.todo && runner !== undefined && wanted('todo')) {
+  if (options.todo && runner !== undefined) {
     specs.push({
       name: 'todo',
       description:
@@ -178,19 +135,17 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
     });
   }
 
-  if (options.subagent && deps.spawnSubagent !== undefined && wanted(SUBAGENT_TOOL_NAME)) {
+  if (options.subagent && deps.spawnSubagent !== undefined) {
     const spawn = deps.spawnSubagent;
     const control = deps.subagentControl;
     specs.push({
       name: SUBAGENT_TOOL_NAME,
       description:
-        'Run and control Tuffcode subagents. action spawn (default) starts explorer, reviewer, notetaker, worker or planner with a self-contained task and returns its id; status lists children with tool count, tokens and activity; wait blocks until children settle or one asks a question (timeout_s), and returns open questions first; message steers a child; stop cancels one; inbox reads unread reports; ask posts one blocking question to the parent; answer replies to a question id; close stops and archives a child, keeping its transcript; read pages a child reports with cursor.',
+        'Run and control Tuffcode subagents. action spawn (default) starts explorer, reviewer, notetaker, worker or planner with a self-contained task and returns its id; status lists children with tool count, tokens and activity; wait blocks until children settle (timeout_s); message steers a child; stop cancels one; inbox reads unread reports.',
       schema: {
         action: z.string().optional(),
         id: z.string().optional(),
         text: z.string().optional(),
-        question_id: z.string().optional(),
-        cursor: z.string().optional(),
         timeout_s: z.number().int().min(1).max(600).optional(),
         type: z.string().optional(),
         task: z.string().optional(),
@@ -229,8 +184,6 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
               ...scope,
               ...(typeof args.id === 'string' ? { id: args.id } : {}),
               ...(typeof args.text === 'string' ? { text: args.text } : {}),
-              ...(typeof args.question_id === 'string' ? { questionId: args.question_id } : {}),
-              ...(typeof args.cursor === 'string' ? { cursor: args.cursor } : {}),
               ...(typeof args.timeout_s === 'number' ? { timeoutSeconds: args.timeout_s } : {}),
               signal: ctx.signal,
             }),
@@ -242,7 +195,7 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
     });
   }
 
-  if (options.extra && runner !== undefined && wanted('memory')) {
+  if (options.extra && runner !== undefined) {
     specs.push({
       name: 'memory',
       description:
@@ -263,9 +216,7 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
         }
       },
     });
-  }
 
-  if (options.extra && runner !== undefined && wanted('config')) {
     specs.push({
       name: 'config',
       description:
@@ -281,7 +232,7 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
     });
   }
 
-  if (options.mcp && runner !== undefined && wanted('mcp')) {
+  if (options.mcp && runner !== undefined) {
     specs.push({
       name: 'mcp',
       description:
@@ -297,7 +248,7 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
     });
   }
 
-  if (options.skill && runner !== undefined && wanted('skill')) {
+  if (options.skill && runner !== undefined) {
     specs.push({
       name: 'skill',
       description: 'Load the full instructions of one skill listed under Available skills.',
@@ -312,7 +263,7 @@ export function tuffcodeToolSpecs(deps: AdapterDeps, ctx: TurnContext): Tuffcode
     });
   }
 
-  if (options.webFetch && runner !== undefined && wanted('web_fetch')) {
+  if (options.webFetch && runner !== undefined) {
     specs.push({
       name: 'web_fetch',
       description: 'Fetch one public http or https URL and return its readable text.',

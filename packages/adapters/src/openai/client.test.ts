@@ -319,149 +319,25 @@ describe('OpenAIClient', () => {
     expect(delays).toEqual([500, 1000]);
   });
 
-  it('drops stream_options after a 5xx and recovers', async () => {
-    const bodies: Record<string, unknown>[] = [];
+  it('gives up after three retryable failures', async () => {
     let calls = 0;
     const client = new OpenAIClient(
       { baseUrl: 'http://x/v1', headers: {}, secret: null },
       {
-        fetchFn: async (_url, init) => {
-          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        fetchFn: async () => {
           calls += 1;
-          return calls === 1 ? response(502, 'upstream overloaded') : response(200);
+          return response(502);
         },
         sleep: async () => {},
         logger,
       },
     );
 
-    const stream = await client.stream(request, new AbortController().signal);
-
-    expect(stream).toBeDefined();
-    expect(calls).toBe(2);
-    expect(bodies[0]?.['stream_options']).toEqual({ include_usage: true });
-    expect(bodies[1]).not.toHaveProperty('stream_options');
-  });
-
-  it('backs off for a 429 wrapped in a 502 and keeps stream_options', async () => {
-    const bodies: Record<string, unknown>[] = [];
-    const delays: number[] = [];
-    let calls = 0;
-    const client = new OpenAIClient(
-      { baseUrl: 'http://rate-limit/v1', headers: {}, secret: null },
-      {
-        fetchFn: async (_url, init) => {
-          bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-          calls += 1;
-          return calls === 1
-            ? response(502, '{"error":{"message":"Upstream HTTP 429"}}')
-            : response(200);
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-        random: () => 0,
-        logger,
-      },
-    );
-
-    const stream = await client.stream(request, new AbortController().signal);
-
-    expect(stream).toBeDefined();
-    expect(delays).toEqual([5000]);
-    expect(bodies[1]?.['stream_options']).toEqual({ include_usage: true });
-  });
-
-  it('makes a second session wait for the shared 429 cooldown', async () => {
-    const baseUrl = 'http://shared-cooldown/v1';
-    const firstDelays: number[] = [];
-    const first = new OpenAIClient(
-      { baseUrl, headers: {}, secret: null },
-      {
-        fetchFn: async () => response(502, '{"error":{"message":"Upstream HTTP 429"}}'),
-        sleep: async (ms) => {
-          firstDelays.push(ms);
-        },
-        random: () => 0,
-        logger,
-      },
-    );
-    await expect(first.stream(request, new AbortController().signal)).rejects.toThrow(
-      'upstream rate limited',
-    );
-
-    const secondDelays: number[] = [];
-    let secondCalls = 0;
-    const second = new OpenAIClient(
-      { baseUrl, headers: {}, secret: null },
-      {
-        fetchFn: async () => {
-          secondCalls += 1;
-          return response(200);
-        },
-        sleep: async (ms) => {
-          secondDelays.push(ms);
-        },
-        random: () => 0,
-        logger,
-      },
-    );
-    const stream = await second.stream(request, new AbortController().signal);
-
-    expect(stream).toBeDefined();
-    expect(secondCalls).toBe(1);
-    expect(secondDelays[0]).toBeGreaterThan(30000);
-  });
-
-  it('recovers on the fifth attempt after four 502s', async () => {
-    let calls = 0;
-    const delays: number[] = [];
-    const client = new OpenAIClient(
-      { baseUrl: 'http://x/v1', headers: {}, secret: null },
-      {
-        fetchFn: async () => {
-          calls += 1;
-          return calls <= 4 ? response(502) : response(200);
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-        logger,
-      },
-    );
-
-    const stream = await client.stream(request, new AbortController().signal);
-
-    expect(stream).toBeDefined();
-    expect(calls).toBe(5);
-    expect(delays).toEqual([500, 1000, 2000, 4000]);
-  });
-
-  it('gives up after five retryable failures with the full backoff', async () => {
-    let calls = 0;
-    const delays: number[] = [];
-    const client = new OpenAIClient(
-      { baseUrl: 'http://x/v1', headers: {}, secret: null },
-      {
-        fetchFn: async () => {
-          calls += 1;
-          return response(502, '{"error":{"message":"upstream failed"}}');
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-        logger,
-      },
-    );
-
-    const failure = await client
-      .stream(request, new AbortController().signal)
-      .catch((error: unknown) => error);
-    expect(failure).toMatchObject({ status: 502, retryable: true });
-    expect(calls).toBe(5);
-    expect(delays).toEqual([500, 1000, 2000, 4000]);
-    expect((failure as Error).message).toContain('upstream failed');
-    expect((failure as Error).message).toContain('after 5 attempts');
+    await expect(client.stream(request, new AbortController().signal)).rejects.toMatchObject({
+      status: 502,
+      retryable: true,
+    });
+    expect(calls).toBe(3);
   });
 
   it('honors Retry-After over the default backoff', async () => {
@@ -508,81 +384,6 @@ describe('OpenAIClient', () => {
     } catch (error) {
       expect((error as OpenAIRequestError).message).toContain('model does not exist');
     }
-    expect(calls).toBe(1);
-  });
-
-  it('retries a network failure and then streams', async () => {
-    const delays: number[] = [];
-    let calls = 0;
-    const client = new OpenAIClient(
-      { baseUrl: 'http://x/v1', headers: {}, secret: null },
-      {
-        fetchFn: async () => {
-          calls += 1;
-          if (calls === 1) {
-            throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
-          }
-          return response(200);
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-        logger,
-      },
-    );
-
-    const stream = await client.stream(request, new AbortController().signal);
-
-    expect(stream).toBeDefined();
-    expect(calls).toBe(2);
-    expect(delays).toEqual([500]);
-  });
-
-  it('surfaces a retryable network error after the full backoff', async () => {
-    const delays: number[] = [];
-    let calls = 0;
-    const client = new OpenAIClient(
-      { baseUrl: 'http://x/v1', headers: {}, secret: null },
-      {
-        fetchFn: async () => {
-          calls += 1;
-          throw new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } });
-        },
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-        logger,
-      },
-    );
-
-    const failure = await client
-      .stream(request, new AbortController().signal)
-      .catch((error: unknown) => error);
-
-    expect(failure).toBeInstanceOf(OpenAIRequestError);
-    expect(failure).toMatchObject({ status: 0, retryable: true });
-    expect((failure as Error).message).toContain('ENOTFOUND');
-    expect((failure as Error).message).toContain('after 5 attempts');
-    expect(calls).toBe(5);
-    expect(delays).toEqual([500, 1000, 2000, 4000]);
-  });
-
-  it('does not retry an aborted fetch', async () => {
-    let calls = 0;
-    const abort = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
-    const client = new OpenAIClient(
-      { baseUrl: 'http://x/v1', headers: {}, secret: null },
-      {
-        fetchFn: async () => {
-          calls += 1;
-          throw abort;
-        },
-        sleep: async () => {},
-        logger,
-      },
-    );
-
-    await expect(client.stream(request, new AbortController().signal)).rejects.toBe(abort);
     expect(calls).toBe(1);
   });
 });

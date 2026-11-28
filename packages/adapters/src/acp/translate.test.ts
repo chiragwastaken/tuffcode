@@ -279,19 +279,13 @@ describe('stop reasons and prompts', () => {
     ]);
   });
 
-  it('names an inline image the agent cannot take instead of dropping it', () => {
+  it('keeps an inline image out of the prompt when the agent has no image capability', () => {
     const blocks = buildPromptBlocks(
       'look',
       [{ kind: 'image', name: 'shot.png', mimeType: 'image/png', data: 'AAAA' }],
       { imageCapable: false },
     );
 
-    expect(blocks).toEqual([
-      { type: 'text', text: 'look' },
-      {
-        type: 'text',
-        text: '[Image attached: shot.png - this agent cannot receive images]',
-      },
-    ]);
+    expect(blocks).toEqual([{ type: 'text', text: 'look' }]);
   });
 });
