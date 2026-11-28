@@ -230,8 +230,8 @@ function errorFor(status: number, excerpt: string): OpenAIRequestError {
   return new OpenAIRequestError('request failed with status ' + status + detail, status, false);
 }
 
-function retryDelay(response: Response, attempt: number, rateLimited = false): number {
-  const header = response.headers.get('retry-after');
+function retryDelay(response: Response | null, attempt: number, rateLimited = false): number {
+  const header = response?.headers.get('retry-after');
   if (header) {
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0) {
@@ -242,6 +242,28 @@ function retryDelay(response: Response, attempt: number, rateLimited = false): n
     return Math.min(RATE_LIMIT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RATE_LIMIT_DELAY);
   }
   return Math.min(DEFAULT_RETRY_DELAY * 2 ** (attempt - 1), MAX_RETRY_DELAY);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
+}
+
+/**
+ * Node's fetch rejects a network failure with `TypeError: fetch failed`; the reason
+ * (ECONNRESET, ENOTFOUND, ECONNREFUSED) sits one level down in `cause.code`.
+ */
+function networkDetail(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause: unknown = error.cause;
+  const code =
+    typeof cause === 'object' &&
+    cause !== null &&
+    'code' in cause &&
+    typeof cause.code === 'string'
+      ? cause.code
+      : null;
+  const message = error.message.length > 0 ? error.message : 'request failed';
+  return code !== null && !message.includes(code) ? message + ' (' + code + ')' : message;
 }
 
 export class OpenAIClient implements ChatStreamer {
@@ -268,12 +290,39 @@ export class OpenAIClient implements ChatStreamer {
     let field = maxTokensField(request.model, this.config.maxTokensField);
     while (true) {
       await this.waitForCooldown(cooldownUntil);
-      const response = await this.fetchFn(this.config.baseUrl + '/chat/completions', {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify(buildBody(this.config, request, field, includeUsage)),
-        signal,
-      });
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.config.baseUrl + '/chat/completions', {
+          method: 'POST',
+          headers: this.headers(),
+          body: JSON.stringify(buildBody(this.config, request, field, includeUsage)),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) throw error;
+        const failure = new OpenAIRequestError('network error: ' + networkDetail(error), 0, true);
+        this.logger.warn('openai request failed', {
+          status: 0,
+          retryable: true,
+          model: request.model,
+          host: new URL(this.config.baseUrl).host,
+          messages: request.messages.length,
+          tools: toOpenAITools(request.toolAllowlist, request.toolOptions ?? {}, request.toolProfile).length,
+          tokenField: field,
+          reasoningEffort: request.reasoningEffort ?? null,
+          error: failure.message,
+        });
+        if (attempt >= MAX_ATTEMPTS - 1) {
+          throw new OpenAIRequestError(
+            failure.message + ' after ' + (attempt + 1) + ' attempts',
+            0,
+            true,
+          );
+        }
+        attempt += 1;
+        await this.sleep(retryDelay(null, attempt));
+        continue;
+      }
       if (response.ok) {
         if (!response.body) {
           throw new OpenAIRequestError('response has no body', response.status, true);

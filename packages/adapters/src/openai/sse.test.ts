@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { streamSse } from './sse.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SSE_IDLE_TIMEOUT_MS, streamSse } from './sse.js';
 
 const encoder = new TextEncoder();
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function byteStream(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -95,5 +99,57 @@ describe('streamSse', () => {
     const second = await iterator.next();
     expect(second.done).toBe(true);
     expect(cancelled).toBe(true);
+  });
+
+  it('aborts a silent stream after the idle budget', async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start() {},
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const iterator = streamSse(stream, { idleTimeoutMs: 1000 })[Symbol.asyncIterator]();
+    const rejection = expect(iterator.next()).rejects.toMatchObject({
+      name: 'SseIdleTimeoutError',
+      retryable: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(cancelled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(cancelled).toBe(true);
+  });
+
+  it('resets the idle budget whenever a chunk arrives', async () => {
+    vi.useFakeTimers();
+    let inner: { enqueue: (chunk: Uint8Array) => void };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        inner = controller;
+      },
+      cancel() {},
+    });
+    const iterator = streamSse(stream, { idleTimeoutMs: 1000 })[Symbol.asyncIterator]();
+
+    inner.enqueue(encoder.encode('data: {"n":1}' + LF + LF));
+    expect((await iterator.next()).value).toEqual({ n: 1 });
+
+    await vi.advanceTimersByTimeAsync(900);
+    inner.enqueue(encoder.encode('data: {"n":2}' + LF + LF));
+    expect((await iterator.next()).value).toEqual({ n: 2 });
+
+    const rejection = expect(iterator.next()).rejects.toMatchObject({
+      name: 'SseIdleTimeoutError',
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+  });
+
+  it('defaults the idle budget to 120 seconds', () => {
+    expect(DEFAULT_SSE_IDLE_TIMEOUT_MS).toBe(120_000);
   });
 });
